@@ -381,7 +381,6 @@ async def on_message(new_msg):
 
                 if enable_grounding and response_msgs and not use_plain_responses:
                     try:
-
                         grounding_response = await genai_client.aio.models.generate_content(
                             model=model,
                             contents=gemini_messages,
@@ -413,17 +412,43 @@ async def on_message(new_msg):
                                     )
 
                             if hasattr(grounding_meta, 'grounding_chunks') and grounding_meta.grounding_chunks:
-                                sources = []
+
+                                all_sources = []
                                 for i, chunk in enumerate(grounding_meta.grounding_chunks[:10]):  
                                     if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri') and hasattr(chunk.web, 'title'):
-                                        sources.append(f"[{chunk.web.title}]({chunk.web.uri})")
 
-                                if sources:
-                                    grounding_embed.add_field(
-                                        name="Top Sources",
-                                        value="\n".join(sources),
-                                        inline=False
-                                    )
+                                        title = chunk.web.title
+                                        if len(title) > 100:
+                                            title = title[:97] + "..."
+                                        all_sources.append(f"[{title}]({chunk.web.uri})")
+
+                                if all_sources:
+
+                                    sources_batches = []
+                                    current_batch = []
+                                    current_length = 0
+
+                                    for source in all_sources:
+
+                                        if current_length + len(source) + 1 > 1000:  
+                                            if current_batch:  
+                                                sources_batches.append(current_batch)
+                                            current_batch = [source]
+                                            current_length = len(source)
+                                        else:
+                                            current_batch.append(source)
+                                            current_length += len(source) + 1  
+
+                                    if current_batch:  
+                                        sources_batches.append(current_batch)
+
+                                    for i, batch in enumerate(sources_batches):
+                                        field_name = "Top Sources" if i == 0 else f"More Sources ({i+1})"
+                                        grounding_embed.add_field(
+                                            name=field_name,
+                                            value="\n".join(batch),
+                                            inline=False
+                                        )
 
                             if grounding_embed.fields:
                                 await response_msgs[-1].reply(embed=grounding_embed, mention_author = False)
