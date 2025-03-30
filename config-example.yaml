@@ -28,21 +28,42 @@ permissions:
 providers:
   openai:
     base_url: https://api.openai.com/v1
+    # Single API key (traditional method)
     api_key: 
+    # Multiple API keys (for rotation)  
+    api_keys:
+      # - your_key_1
+      # - your_key_2
+      # - your_key_3
   x-ai:
     base_url: https://api.x.ai/v1
     api_key: 
+    # api_keys:
+    #   - key1
+    #   - key2
   mistral:
     base_url: https://api.mistral.ai/v1
     api_key: 
+    # api_keys:
+    #   - key1
+    #   - key2
   groq:
     base_url: https://api.groq.com/openai/v1
     api_key: 
+    # api_keys:
+    #   - key1
+    #   - key2
   openrouter:
     base_url: https://openrouter.ai/api/v1
     api_key: 
+    # api_keys:
+    #   - key1
+    #   - key2
   google:
     api_key:
+    # api_keys:
+    #   - key1
+    #   - key2
     enable_grounding: true  # Enable or disable Google Search grounding
   ollama:
     base_url: http://localhost:11434/v1

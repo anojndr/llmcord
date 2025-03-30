@@ -3,8 +3,9 @@ from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime as dt
 import logging
-from typing import Literal, Optional
+from typing import Literal, Optional, Dict, List
 import base64
+import random
 
 import discord
 import httpx
@@ -32,9 +33,27 @@ EDIT_DELAY_SECONDS = 1
 
 MAX_MESSAGE_NODES = 100
 
+provider_key_indices: Dict[str, int] = {}
+
 def get_config(filename="config.yaml"):
     with open(filename, "r") as file:
         return yaml.safe_load(file)
+
+def get_next_api_key(provider_config, provider_name):
+    """Get the next API key for the provider using round-robin rotation."""
+
+    api_keys = provider_config.get("api_keys", [])
+
+    if not api_keys:
+        return provider_config.get("api_key", "sk-no-key-required")
+
+    curr_index = provider_key_indices.get(provider_name, -1)
+
+    next_index = (curr_index + 1) % len(api_keys)
+
+    provider_key_indices[provider_name] = next_index
+
+    return api_keys[next_index]
 
 cfg = get_config()
 
@@ -103,14 +122,14 @@ async def on_message(new_msg):
 
     if is_gemini:
 
-        api_key = cfg["providers"][provider].get("api_key")
+        api_key = get_next_api_key(cfg["providers"][provider], provider)
         genai_client = genai.Client(api_key=api_key)
 
         enable_grounding = cfg["providers"][provider].get("enable_grounding", False)
     else:
 
         base_url = cfg["providers"][provider]["base_url"]
-        api_key = cfg["providers"][provider].get("api_key", "sk-no-key-required")
+        api_key = get_next_api_key(cfg["providers"][provider], provider)
         openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     accept_images = any(x in model.lower() for x in VISION_MODEL_TAGS)
@@ -343,7 +362,7 @@ async def on_message(new_msg):
 
                                 if start_next_msg:
                                     reply_to_msg = new_msg if response_msgs == [] else response_msgs[-1]
-                                    response_msg = await reply_to_msg.reply(embed=embed, silent=True)
+                                    response_msg = await reply_to_msg.reply(embed=embed, mention_author = False)
                                     response_msgs.append(response_msg)
 
                                     msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
@@ -407,7 +426,7 @@ async def on_message(new_msg):
                                     )
 
                             if grounding_embed.fields:
-                                await response_msgs[-1].reply(embed=grounding_embed, silent=True)
+                                await response_msgs[-1].reply(embed=grounding_embed, mention_author = False)
                                 logging.info("Sent grounding metadata as a separate message")
                     except Exception as e:
                         logging.exception(f"Error sending grounding metadata: {str(e)}")
@@ -448,7 +467,7 @@ async def on_message(new_msg):
 
                             if start_next_msg:
                                 reply_to_msg = new_msg if response_msgs == [] else response_msgs[-1]
-                                response_msg = await reply_to_msg.reply(embed=embed, silent=True)
+                                response_msg = await reply_to_msg.reply(embed=embed, mention_author = False)
                                 response_msgs.append(response_msg)
 
                                 msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
