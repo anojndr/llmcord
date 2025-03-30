@@ -10,6 +10,7 @@ import re
 
 import discord
 import discord.ui
+from discord import app_commands
 import httpx
 from openai import AsyncOpenAI
 import yaml
@@ -38,6 +39,12 @@ MAX_MESSAGE_NODES = 100
 YOUTUBE_URL_REGEX = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})'
 
 provider_key_indices: Dict[str, int] = {}
+
+PROVIDER_MODELS = {
+    "openai": ["o3-mini", "o1", "gpt-4o-2024-11-20"],
+    "google": ["gemini-2.5-pro-exp-03-25", "gemini-2.0-flash"],
+    "anthropic": ["claude-3.7-sonnet-thought", "claude-3.7-sonnet"],
+}
 
 class ShowSourcesButton(discord.ui.View):
     def __init__(self, grounding_embed):
@@ -89,11 +96,109 @@ intents = discord.Intents.default()
 intents.message_content = True
 activity = discord.CustomActivity(name=(cfg["status_message"] or "github.com/jakobdylanc/llmcord")[:128])
 discord_client = discord.Client(intents=intents, activity=activity)
+tree = app_commands.CommandTree(discord_client)
 
 httpx_client = httpx.AsyncClient()
 
 msg_nodes = {}
 last_task_time = 0
+
+@tree.command(name="model", description="Change the model used by the bot")
+@app_commands.describe(
+    provider="The provider of the LLM",
+    model="The model to use"
+)
+async def model_command(interaction: discord.Interaction, provider: str, model: str):
+
+    cfg = get_config()
+
+    is_dm = interaction.channel.type == discord.ChannelType.private
+    role_ids = set(role.id for role in getattr(interaction.user, "roles", ()))
+    channel_ids = set(filter(None, (interaction.channel.id, getattr(interaction.channel, "parent_id", None), getattr(interaction.channel, "category_id", None))))
+
+    permissions = cfg["permissions"]
+    (allowed_user_ids, blocked_user_ids), (allowed_role_ids, blocked_role_ids), (allowed_channel_ids, blocked_channel_ids) = (
+        (perm["allowed_ids"], perm["blocked_ids"]) for perm in (permissions["users"], permissions["roles"], permissions["channels"])
+    )
+
+    allow_all_users = not allowed_user_ids if is_dm else not allowed_user_ids and not allowed_role_ids
+    is_good_user = allow_all_users or interaction.user.id in allowed_user_ids or any(id in allowed_role_ids for id in role_ids)
+    is_bad_user = not is_good_user or interaction.user.id in blocked_user_ids or any(id in blocked_role_ids for id in role_ids)
+
+    allow_all_channels = not allowed_channel_ids
+    is_good_channel = cfg["allow_dms"] if is_dm else allow_all_channels or any(id in allowed_channel_ids for id in channel_ids)
+    is_bad_channel = not is_good_channel or any(id in blocked_channel_ids for id in channel_ids)
+
+    if is_bad_user or is_bad_channel:
+        await interaction.response.send_message("You don't have permission to change the model.", ephemeral=True)
+        return
+
+    if provider not in cfg["providers"]:
+        await interaction.response.send_message(f"Provider '{provider}' not found in config.", ephemeral=True)
+        return
+
+    if provider not in PROVIDER_MODELS:
+        await interaction.response.send_message(f"Provider '{provider}' is not supported for model selection.", ephemeral=True)
+        return
+
+    if model not in PROVIDER_MODELS[provider]:
+        await interaction.response.send_message(f"Model '{model}' is not available for provider '{provider}'.", ephemeral=True)
+        return
+
+    cfg["model"] = f"{provider}/{model}"
+
+    with open("config.yaml", "w") as file:
+        yaml.dump(cfg, file)
+
+    await interaction.response.send_message(f"Model updated to {provider}/{model}", ephemeral=True)
+
+@tree.command()
+@app_commands.describe(provider="The provider to check models for")
+async def models(interaction: discord.Interaction, provider: str):
+    """List available models for a provider"""
+    cfg = get_config()
+
+    if provider not in PROVIDER_MODELS:
+        await interaction.response.send_message(f"No predefined models found for provider '{provider}'.")
+        return
+
+    if provider not in cfg["providers"]:
+        await interaction.response.send_message(f"Provider '{provider}' not found in your config.")
+        return
+
+    models_list = PROVIDER_MODELS[provider]
+    await interaction.response.send_message(f"Available models for {provider}:\n" + "\n".join([f"- {model}" for model in models_list]))
+
+async def provider_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+    cfg = get_config()
+
+    providers = [provider for provider in cfg["providers"].keys() if provider in PROVIDER_MODELS]
+    return [
+        app_commands.Choice(name=provider, value=provider)
+        for provider in providers if current.lower() in provider.lower()
+    ][:25]  
+
+async def model_autocomplete(interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+
+    options = interaction.data.get("options", [])
+    provider = None
+    for option in options:
+        if option["name"] == "provider":
+            provider = option["value"]
+            break
+
+    if not provider or provider not in PROVIDER_MODELS:
+        return []
+
+    models = PROVIDER_MODELS.get(provider, [])
+    return [
+        app_commands.Choice(name=model, value=model)
+        for model in models if current.lower() in model.lower()
+    ][:25]  
+
+model_command.autocomplete("provider")(provider_autocomplete)
+model_command.autocomplete("model")(model_autocomplete)
+models.autocomplete("provider")(provider_autocomplete)
 
 @dataclass
 class MsgNode:
@@ -110,6 +215,11 @@ class MsgNode:
     parent_msg: Optional[discord.Message] = None
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+@discord_client.event
+async def on_ready():
+    await tree.sync()
+    logging.info(f"Logged in as {discord_client.user} (ID: {discord_client.user.id})")
 
 @discord_client.event
 async def on_message(new_msg):
