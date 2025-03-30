@@ -270,9 +270,33 @@ async def on_message(new_msg):
                 temperature = extra_params.pop("temperature", 1.0)
                 max_output_tokens = extra_params.pop("max_tokens", 4096)
 
+                safety_settings = [
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                        threshold=types.HarmBlockThreshold.BLOCK_NONE
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                        threshold=types.HarmBlockThreshold.BLOCK_NONE
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                        threshold=types.HarmBlockThreshold.BLOCK_NONE
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                        threshold=types.HarmBlockThreshold.BLOCK_NONE
+                    ),
+                    types.SafetySetting(
+                        category=types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
+                        threshold=types.HarmBlockThreshold.BLOCK_NONE
+                    )
+                ]
+
                 generate_content_config = types.GenerateContentConfig(
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
+                    safety_settings=safety_settings,
                     **extra_params
                 )
 
