@@ -41,6 +41,9 @@ providers:
   openrouter:
     base_url: https://openrouter.ai/api/v1
     api_key: 
+  google:
+    api_key:
+    enable_grounding: true  # Enable or disable Google Search grounding
   ollama:
     base_url: http://localhost:11434/v1
   lmstudio:

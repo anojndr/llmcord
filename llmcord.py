@@ -4,11 +4,15 @@ from dataclasses import dataclass, field
 from datetime import datetime as dt
 import logging
 from typing import Literal, Optional
+import base64
 
 import discord
 import httpx
 from openai import AsyncOpenAI
 import yaml
+
+from google import genai
+from google.genai import types
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,6 +22,8 @@ logging.basicConfig(
 VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "pixtral", "mistral-small", "llava", "vision", "vl")
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
+GEMINI_PROVIDERS = ("google")
+
 EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
 
@@ -26,11 +32,9 @@ EDIT_DELAY_SECONDS = 1
 
 MAX_MESSAGE_NODES = 100
 
-
 def get_config(filename="config.yaml"):
     with open(filename, "r") as file:
         return yaml.safe_load(file)
-
 
 cfg = get_config()
 
@@ -47,7 +51,6 @@ httpx_client = httpx.AsyncClient()
 msg_nodes = {}
 last_task_time = 0
 
-
 @dataclass
 class MsgNode:
     text: Optional[str] = None
@@ -62,7 +65,6 @@ class MsgNode:
     parent_msg: Optional[discord.Message] = None
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
 
 @discord_client.event
 async def on_message(new_msg):
@@ -97,9 +99,19 @@ async def on_message(new_msg):
         return
 
     provider, model = cfg["model"].split("/", 1)
-    base_url = cfg["providers"][provider]["base_url"]
-    api_key = cfg["providers"][provider].get("api_key", "sk-no-key-required")
-    openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    is_gemini = provider.lower() in GEMINI_PROVIDERS
+
+    if is_gemini:
+
+        api_key = cfg["providers"][provider].get("api_key")
+        genai_client = genai.Client(api_key=api_key)
+
+        enable_grounding = cfg["providers"][provider].get("enable_grounding", False)
+    else:
+
+        base_url = cfg["providers"][provider]["base_url"]
+        api_key = cfg["providers"][provider].get("api_key", "sk-no-key-required")
+        openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
     accept_images = any(x in model.lower() for x in VISION_MODEL_TAGS)
     accept_usernames = any(x in provider.lower() for x in PROVIDERS_SUPPORTING_USERNAMES)
@@ -111,7 +123,6 @@ async def on_message(new_msg):
     use_plain_responses = cfg["use_plain_responses"]
     max_message_length = 2000 if use_plain_responses else (4096 - len(STREAMING_INDICATOR))
 
-    # Build message chain and set user warnings
     messages = []
     user_warnings = set()
     curr_msg = new_msg
@@ -201,7 +212,6 @@ async def on_message(new_msg):
         full_system_prompt = "\n".join([system_prompt] + system_prompt_extras)
         messages.append(dict(role="system", content=full_system_prompt))
 
-    # Generate and send response message(s) (can be multiple if response is long)
     curr_content = finish_reason = edit_task = None
     response_msgs = []
     response_contents = []
@@ -210,52 +220,213 @@ async def on_message(new_msg):
     for warning in sorted(user_warnings):
         embed.add_field(name=warning, value="", inline=False)
 
-    kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
     try:
         async with new_msg.channel.typing():
-            async for curr_chunk in await openai_client.chat.completions.create(**kwargs):
-                if finish_reason != None:
-                    break
+            if is_gemini:
 
-                finish_reason = curr_chunk.choices[0].finish_reason
+                gemini_messages = []
+                system_instruction = None
 
-                prev_content = curr_content or ""
-                curr_content = curr_chunk.choices[0].delta.content or ""
+                for msg in messages[::-1]:
+                    role = msg["role"]
+                    content = msg["content"]
 
-                new_content = prev_content if finish_reason == None else (prev_content + curr_content)
+                    if role == "system":
+                        system_instruction = content
+                        continue
 
-                if response_contents == [] and new_content == "":
-                    continue
+                    gemini_role = "user" if role == "user" else "model"
 
-                if start_next_msg := response_contents == [] or len(response_contents[-1] + new_content) > max_message_length:
-                    response_contents.append("")
+                    if isinstance(content, list):
 
-                response_contents[-1] += new_content
+                        parts = []
+                        for item in content:
+                            if item["type"] == "text":
+                                parts.append(types.Part.from_text(text=item["text"]))
+                            elif item["type"] == "image_url":
 
-                if not use_plain_responses:
-                    ready_to_edit = (edit_task == None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
-                    msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
-                    is_final_edit = finish_reason != None or msg_split_incoming
-                    is_good_finish = finish_reason != None and finish_reason.lower() in ("stop", "end_turn")
+                                image_url = item["image_url"]["url"]
+                                if image_url.startswith("data:"):
 
-                    if start_next_msg or ready_to_edit or is_final_edit:
-                        if edit_task != None:
-                            await edit_task
+                                    mime_type = image_url.split(';')[0].split(':')[1]
+                                    base64_data = image_url.split(',')[1]
 
-                        embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
-                        embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
+                                    image_bytes = base64.b64decode(base64_data)
+                                    parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
 
-                        if start_next_msg:
-                            reply_to_msg = new_msg if response_msgs == [] else response_msgs[-1]
-                            response_msg = await reply_to_msg.reply(embed=embed, silent=True)
-                            response_msgs.append(response_msg)
+                        if parts:
+                            gemini_messages.append(types.Content(role=gemini_role, parts=parts))
+                    else:
 
-                            msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
-                            await msg_nodes[response_msg.id].lock.acquire()
-                        else:
-                            edit_task = asyncio.create_task(response_msgs[-1].edit(embed=embed))
+                        gemini_messages.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=content)]))
 
-                        last_task_time = dt.now().timestamp()
+                extra_params = cfg["extra_api_parameters"].copy()
+                temperature = extra_params.pop("temperature", 1.0)
+                max_output_tokens = extra_params.pop("max_tokens", 4096)
+
+                generate_content_config = types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_output_tokens,
+                    **extra_params
+                )
+
+                if system_instruction:
+                    generate_content_config.system_instruction = system_instruction
+
+                tools = []
+                if enable_grounding:
+                    google_search_tool = types.Tool(google_search=types.GoogleSearch())
+                    tools.append(google_search_tool)
+
+                if tools:
+                    generate_content_config.tools = tools
+
+                async for chunk in await genai_client.aio.models.generate_content_stream(
+                    model=model,
+                    contents=gemini_messages,
+                    config=generate_content_config,
+                ):
+                    new_content = chunk.text
+
+                    if new_content:
+                        prev_content = curr_content or ""
+                        curr_content = new_content
+
+                        if response_contents == [] and new_content == "":
+                            continue
+
+                        if start_next_msg := response_contents == [] or len(response_contents[-1] + new_content) > max_message_length:
+                            response_contents.append("")
+
+                        response_contents[-1] += new_content
+
+                        if not use_plain_responses:
+                            ready_to_edit = (edit_task == None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
+                            msg_split_incoming = len(response_contents[-1] + new_content) > max_message_length
+
+                            if start_next_msg or ready_to_edit or msg_split_incoming:
+                                if edit_task != None:
+                                    await edit_task
+
+                                embed.description = response_contents[-1] + (STREAMING_INDICATOR if not msg_split_incoming else "")
+                                embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming else EMBED_COLOR_INCOMPLETE
+
+                                if start_next_msg:
+                                    reply_to_msg = new_msg if response_msgs == [] else response_msgs[-1]
+                                    response_msg = await reply_to_msg.reply(embed=embed, silent=True)
+                                    response_msgs.append(response_msg)
+
+                                    msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                    await msg_nodes[response_msg.id].lock.acquire()
+                                else:
+                                    edit_task = asyncio.create_task(response_msgs[-1].edit(embed=embed))
+
+                                last_task_time = dt.now().timestamp()
+
+                if not use_plain_responses and response_msgs:
+                    embed.description = response_contents[-1]
+                    embed.color = EMBED_COLOR_COMPLETE
+                    await response_msgs[-1].edit(embed=embed)
+
+                finish_reason = "stop"  
+
+                if enable_grounding and response_msgs and not use_plain_responses:
+                    try:
+
+                        grounding_response = await genai_client.aio.models.generate_content(
+                            model=model,
+                            contents=gemini_messages,
+                            config=generate_content_config,
+                        )
+
+                        if (hasattr(grounding_response.candidates[0], 'grounding_metadata') and 
+                            grounding_response.candidates[0].grounding_metadata):
+
+                            grounding_meta = grounding_response.candidates[0].grounding_metadata
+
+                            grounding_embed = discord.Embed(
+                                title="📚 Sources",
+                                description="This response was enhanced with Google Search results.",
+                                color=discord.Color.blue()
+                            )
+
+                            if hasattr(grounding_meta, 'web_search_queries') and grounding_meta.web_search_queries:
+                                search_queries = []
+                                for query in grounding_meta.web_search_queries:
+                                    search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                                    search_queries.append(f"[{query}]({search_url})")
+
+                                if search_queries:
+                                    grounding_embed.add_field(
+                                        name="Search Queries",
+                                        value="\n".join(search_queries),
+                                        inline=False
+                                    )
+
+                            if hasattr(grounding_meta, 'grounding_chunks') and grounding_meta.grounding_chunks:
+                                sources = []
+                                for i, chunk in enumerate(grounding_meta.grounding_chunks[:10]):  
+                                    if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri') and hasattr(chunk.web, 'title'):
+                                        sources.append(f"[{chunk.web.title}]({chunk.web.uri})")
+
+                                if sources:
+                                    grounding_embed.add_field(
+                                        name="Top Sources",
+                                        value="\n".join(sources),
+                                        inline=False
+                                    )
+
+                            if grounding_embed.fields:
+                                await response_msgs[-1].reply(embed=grounding_embed, silent=True)
+                                logging.info("Sent grounding metadata as a separate message")
+                    except Exception as e:
+                        logging.exception(f"Error sending grounding metadata: {str(e)}")
+            else:
+
+                kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
+                async for curr_chunk in await openai_client.chat.completions.create(**kwargs):
+                    if finish_reason != None:
+                        break
+
+                    finish_reason = curr_chunk.choices[0].finish_reason
+
+                    prev_content = curr_content or ""
+                    curr_content = curr_chunk.choices[0].delta.content or ""
+
+                    new_content = prev_content if finish_reason == None else (prev_content + curr_content)
+
+                    if response_contents == [] and new_content == "":
+                        continue
+
+                    if start_next_msg := response_contents == [] or len(response_contents[-1] + new_content) > max_message_length:
+                        response_contents.append("")
+
+                    response_contents[-1] += new_content
+
+                    if not use_plain_responses:
+                        ready_to_edit = (edit_task == None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
+                        msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
+                        is_final_edit = finish_reason != None or msg_split_incoming
+                        is_good_finish = finish_reason != None and finish_reason.lower() in ("stop", "end_turn")
+
+                        if start_next_msg or ready_to_edit or is_final_edit:
+                            if edit_task != None:
+                                await edit_task
+
+                            embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
+                            embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
+
+                            if start_next_msg:
+                                reply_to_msg = new_msg if response_msgs == [] else response_msgs[-1]
+                                response_msg = await reply_to_msg.reply(embed=embed, silent=True)
+                                response_msgs.append(response_msg)
+
+                                msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                await msg_nodes[response_msg.id].lock.acquire()
+                            else:
+                                edit_task = asyncio.create_task(response_msgs[-1].edit(embed=embed))
+
+                            last_task_time = dt.now().timestamp()
 
             if use_plain_responses:
                 for content in response_contents:
@@ -266,22 +437,29 @@ async def on_message(new_msg):
                     msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
                     await msg_nodes[response_msg.id].lock.acquire()
 
-    except Exception:
-        logging.exception("Error while generating response")
+    except Exception as e:
+        logging.exception(f"Error while generating response: {str(e)}")
+
+        try:
+            error_embed = discord.Embed(
+                title="Error",
+                description=f"An error occurred while generating a response. Please try again or check the logs.",
+                color=discord.Color.red()
+            )
+            await new_msg.reply(embed=error_embed)
+        except:
+            logging.exception("Failed to send error message")
 
     for response_msg in response_msgs:
         msg_nodes[response_msg.id].text = "".join(response_contents)
         msg_nodes[response_msg.id].lock.release()
 
-    # Delete oldest MsgNodes (lowest message IDs) from the cache
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
         for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
             async with msg_nodes.setdefault(msg_id, MsgNode()).lock:
                 msg_nodes.pop(msg_id, None)
 
-
 async def main():
     await discord_client.start(cfg["bot_token"])
-
 
 asyncio.run(main())
