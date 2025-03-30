@@ -6,6 +6,7 @@ import logging
 from typing import Literal, Optional, Dict, List
 import base64
 import random
+import re
 
 import discord
 import discord.ui
@@ -33,6 +34,8 @@ STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1
 
 MAX_MESSAGE_NODES = 100
+
+YOUTUBE_URL_REGEX = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})'
 
 provider_key_indices: Dict[str, int] = {}
 
@@ -65,6 +68,18 @@ def get_next_api_key(provider_config, provider_name):
 
     return api_keys[next_index]
 
+def extract_youtube_links(text):
+    """Extract YouTube video IDs from text."""
+    matches = re.finditer(YOUTUBE_URL_REGEX, text)
+    youtube_links = []
+
+    for match in matches:
+        video_id = match.group(4)
+        full_url = match.group(0)
+        youtube_links.append((video_id, full_url))
+
+    return youtube_links
+
 cfg = get_config()
 
 if client_id := cfg["client_id"]:
@@ -84,6 +99,7 @@ last_task_time = 0
 class MsgNode:
     text: Optional[str] = None
     images: list = field(default_factory=list)
+    youtube_links: list = field(default_factory=list)
 
     role: Literal["user", "assistant"] = "assistant"
     user_id: Optional[int] = None
@@ -131,13 +147,12 @@ async def on_message(new_msg):
     is_gemini = provider.lower() in GEMINI_PROVIDERS
 
     if is_gemini:
-
         api_key = get_next_api_key(cfg["providers"][provider], provider)
         genai_client = genai.Client(api_key=api_key)
 
         enable_grounding = cfg["providers"][provider].get("enable_grounding", False)
+        enable_youtube = cfg["providers"][provider].get("enable_youtube", True)
     else:
-
         base_url = cfg["providers"][provider]["base_url"]
         api_key = get_next_api_key(cfg["providers"][provider], provider)
         openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
@@ -161,7 +176,6 @@ async def on_message(new_msg):
 
         async with curr_node.lock:
             if curr_node.text == None:
-
                 cleaned_content = curr_msg.content
                 if discord_client.user.mention in cleaned_content:
                     cleaned_content = cleaned_content.removeprefix(discord_client.user.mention).lstrip()
@@ -183,6 +197,9 @@ async def on_message(new_msg):
                     for att, resp in zip(good_attachments, attachment_responses)
                     if att.content_type.startswith("image")
                 ]
+
+                youtube_links = extract_youtube_links(curr_node.text)
+                curr_node.youtube_links = [(video_id, full_url) for video_id, full_url in youtube_links]
 
                 curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
 
@@ -214,17 +231,45 @@ async def on_message(new_msg):
                     logging.exception("Error fetching next message in the chain")
                     curr_node.fetch_parent_failed = True
 
-            if curr_node.images[:max_images]:
-                content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
-            else:
-                content = curr_node.text[:max_text]
+            has_youtube = is_gemini and enable_youtube and curr_node.youtube_links and curr_node.role == "user"
 
-            if content != "":
+            if has_youtube and len(curr_node.youtube_links) > 0:
+
+                video_id, full_url = curr_node.youtube_links[0]
+
+                text_without_url = curr_node.text.replace(full_url, "").strip()
+                if not text_without_url:
+                    text_without_url = "Explain this video"
+
+                message = {
+                    "role": curr_node.role,
+                    "youtube_url": full_url,
+                    "youtube_text": text_without_url
+                }
+
+                if accept_usernames and curr_node.user_id is not None:
+                    message["name"] = str(curr_node.user_id)
+
+                messages.append(message)
+                logging.info(f"Added YouTube link {full_url} to the message")
+
+            elif curr_node.images[:max_images]:
+                content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
+
                 message = dict(content=content, role=curr_node.role)
                 if accept_usernames and curr_node.user_id != None:
                     message["name"] = str(curr_node.user_id)
 
                 messages.append(message)
+            else:
+                content = curr_node.text[:max_text]
+
+                if content != "":
+                    message = dict(content=content, role=curr_node.role)
+                    if accept_usernames and curr_node.user_id != None:
+                        message["name"] = str(curr_node.user_id)
+
+                    messages.append(message)
 
             if len(curr_node.text) > max_text:
                 user_warnings.add(f"⚠️ Max {max_text:,} characters per message")
@@ -255,44 +300,58 @@ async def on_message(new_msg):
     for warning in sorted(user_warnings):
         embed.add_field(name=warning, value="", inline=False)
 
+    model_info = f"{provider}/{model}"
+    embed.set_footer(text=model_info)
+
     try:
         async with new_msg.channel.typing():
             if is_gemini:
-
                 gemini_messages = []
                 system_instruction = None
 
                 for msg in messages[::-1]:
                     role = msg["role"]
-                    content = msg["content"]
+
+                    if "youtube_url" in msg:
+                        youtube_url = msg["youtube_url"]
+                        youtube_text = msg["youtube_text"]
+
+                        gemini_role = "user" if role == "user" else "model"
+
+                        parts = [
+                            types.Part.from_uri(
+                                file_uri=youtube_url,
+                                mime_type="video/*",
+                            ),
+                            types.Part.from_text(text=youtube_text),
+                        ]
+
+                        gemini_messages.append(types.Content(role=gemini_role, parts=parts))
+                        continue
 
                     if role == "system":
-                        system_instruction = content
+                        system_instruction = msg["content"]
                         continue
 
                     gemini_role = "user" if role == "user" else "model"
+                    content = msg["content"]
 
                     if isinstance(content, list):
-
                         parts = []
                         for item in content:
                             if item["type"] == "text":
                                 parts.append(types.Part.from_text(text=item["text"]))
                             elif item["type"] == "image_url":
-
                                 image_url = item["image_url"]["url"]
                                 if image_url.startswith("data:"):
-
                                     mime_type = image_url.split(';')[0].split(':')[1]
                                     base64_data = image_url.split(',')[1]
-
                                     image_bytes = base64.b64decode(base64_data)
                                     parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
 
                         if parts:
                             gemini_messages.append(types.Content(role=gemini_role, parts=parts))
                     else:
-
                         gemini_messages.append(types.Content(role=gemini_role, parts=[types.Part.from_text(text=content)]))
 
                 extra_params = cfg["extra_api_parameters"].copy()
