@@ -14,6 +14,7 @@ from discord import app_commands
 import httpx
 from openai import AsyncOpenAI
 import yaml
+from ruamel.yaml import YAML
 
 from google import genai
 from google.genai import types
@@ -145,10 +146,16 @@ async def model_command(interaction: discord.Interaction, provider: str, model: 
         await interaction.response.send_message(f"Model '{model}' is not available for provider '{provider}'.", ephemeral=True)
         return
 
-    cfg["model"] = f"{provider}/{model}"
-
+    ryaml = YAML()
+    ryaml.preserve_quotes = True
+    
+    with open("config.yaml", "r") as file:
+        config = ryaml.load(file)
+    
+    config["model"] = f"{provider}/{model}"
+    
     with open("config.yaml", "w") as file:
-        yaml.dump(cfg, file)
+        ryaml.dump(config, file)
 
     await interaction.response.send_message(f"Model updated to {provider}/{model}", ephemeral=True)
 

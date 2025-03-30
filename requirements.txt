@@ -3,3 +3,4 @@ httpx
 openai
 pyyaml
 google-genai
+ruamel.yaml
