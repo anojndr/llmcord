@@ -8,6 +8,7 @@ import base64
 import random
 
 import discord
+import discord.ui
 import httpx
 from openai import AsyncOpenAI
 import yaml
@@ -34,6 +35,15 @@ EDIT_DELAY_SECONDS = 1
 MAX_MESSAGE_NODES = 100
 
 provider_key_indices: Dict[str, int] = {}
+
+class ShowSourcesButton(discord.ui.View):
+    def __init__(self, grounding_embed):
+        super().__init__()
+        self.grounding_embed = grounding_embed
+
+    @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.primary)
+    async def show_sources(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(embed=self.grounding_embed, ephemeral=False)
 
 def get_config(filename="config.yaml"):
     with open(filename, "r") as file:
@@ -375,86 +385,85 @@ async def on_message(new_msg):
                 if not use_plain_responses and response_msgs:
                     embed.description = response_contents[-1]
                     embed.color = EMBED_COLOR_COMPLETE
-                    await response_msgs[-1].edit(embed=embed)
 
-                finish_reason = "stop"  
-
-                if enable_grounding and response_msgs and not use_plain_responses:
-                    try:
-                        grounding_response = await genai_client.aio.models.generate_content(
-                            model=model,
-                            contents=gemini_messages,
-                            config=generate_content_config,
-                        )
-
-                        if (hasattr(grounding_response.candidates[0], 'grounding_metadata') and 
-                            grounding_response.candidates[0].grounding_metadata):
-
-                            grounding_meta = grounding_response.candidates[0].grounding_metadata
-
-                            grounding_embed = discord.Embed(
-                                title="📚 Sources",
-                                description="This response was enhanced with Google Search results.",
-                                color=discord.Color.blue()
+                    view = None
+                    if enable_grounding:
+                        try:
+                            grounding_response = await genai_client.aio.models.generate_content(
+                                model=model,
+                                contents=gemini_messages,
+                                config=generate_content_config,
                             )
 
-                            if hasattr(grounding_meta, 'web_search_queries') and grounding_meta.web_search_queries:
-                                search_queries = []
-                                for query in grounding_meta.web_search_queries:
-                                    search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
-                                    search_queries.append(f"[{query}]({search_url})")
+                            if (hasattr(grounding_response.candidates[0], 'grounding_metadata') and 
+                                grounding_response.candidates[0].grounding_metadata):
 
-                                if search_queries:
-                                    grounding_embed.add_field(
-                                        name="Search Queries",
-                                        value="\n".join(search_queries),
-                                        inline=False
-                                    )
+                                grounding_meta = grounding_response.candidates[0].grounding_metadata
 
-                            if hasattr(grounding_meta, 'grounding_chunks') and grounding_meta.grounding_chunks:
+                                grounding_embed = discord.Embed(
+                                    title="📚 Sources",
+                                    description="This response was enhanced with Google Search results.",
+                                    color=discord.Color.blue()
+                                )
 
-                                all_sources = []
-                                for i, chunk in enumerate(grounding_meta.grounding_chunks[:10]):  
-                                    if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri') and hasattr(chunk.web, 'title'):
+                                if hasattr(grounding_meta, 'web_search_queries') and grounding_meta.web_search_queries:
+                                    search_queries = []
+                                    for query in grounding_meta.web_search_queries:
+                                        search_url = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                                        search_queries.append(f"[{query}]({search_url})")
 
-                                        title = chunk.web.title
-                                        if len(title) > 100:
-                                            title = title[:97] + "..."
-                                        all_sources.append(f"[{title}]({chunk.web.uri})")
-
-                                if all_sources:
-
-                                    sources_batches = []
-                                    current_batch = []
-                                    current_length = 0
-
-                                    for source in all_sources:
-
-                                        if current_length + len(source) + 1 > 1000:  
-                                            if current_batch:  
-                                                sources_batches.append(current_batch)
-                                            current_batch = [source]
-                                            current_length = len(source)
-                                        else:
-                                            current_batch.append(source)
-                                            current_length += len(source) + 1  
-
-                                    if current_batch:  
-                                        sources_batches.append(current_batch)
-
-                                    for i, batch in enumerate(sources_batches):
-                                        field_name = "Top Sources" if i == 0 else f"More Sources ({i+1})"
+                                    if search_queries:
                                         grounding_embed.add_field(
-                                            name=field_name,
-                                            value="\n".join(batch),
+                                            name="Search Queries",
+                                            value="\n".join(search_queries),
                                             inline=False
                                         )
 
-                            if grounding_embed.fields:
-                                await response_msgs[-1].reply(embed=grounding_embed, mention_author = False)
-                                logging.info("Sent grounding metadata as a separate message")
-                    except Exception as e:
-                        logging.exception(f"Error sending grounding metadata: {str(e)}")
+                                if hasattr(grounding_meta, 'grounding_chunks') and grounding_meta.grounding_chunks:
+                                    all_sources = []
+                                    for i, chunk in enumerate(grounding_meta.grounding_chunks[:10]):  
+                                        if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri') and hasattr(chunk.web, 'title'):
+                                            title = chunk.web.title
+                                            if len(title) > 100:
+                                                title = title[:97] + "..."
+                                            all_sources.append(f"[{title}]({chunk.web.uri})")
+
+                                    if all_sources:
+                                        sources_batches = []
+                                        current_batch = []
+                                        current_length = 0
+
+                                        for source in all_sources:
+                                            if current_length + len(source) + 1 > 1000:  
+                                                if current_batch:  
+                                                    sources_batches.append(current_batch)
+                                                current_batch = [source]
+                                                current_length = len(source)
+                                            else:
+                                                current_batch.append(source)
+                                                current_length += len(source) + 1  
+
+                                        if current_batch:  
+                                            sources_batches.append(current_batch)
+
+                                        for i, batch in enumerate(sources_batches):
+                                            field_name = "Top Sources" if i == 0 else f"More Sources ({i+1})"
+                                            grounding_embed.add_field(
+                                                name=field_name,
+                                                value="\n".join(batch),
+                                                inline=False
+                                            )
+
+                                if grounding_embed.fields:
+                                    view = ShowSourcesButton(grounding_embed)
+                                    logging.info("Adding 'Show Sources' button to final response message")
+                        except Exception as e:
+                            logging.exception(f"Error preparing grounding metadata: {str(e)}")
+
+                    await response_msgs[-1].edit(embed=embed, view=view)
+
+                finish_reason = "stop"  
+
             else:
 
                 kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
