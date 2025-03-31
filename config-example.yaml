@@ -28,6 +28,13 @@ youtube:
   api_key: # YouTube Data API v3 key for processing video content
   enable: true  # Enable or disable YouTube integration globally
 
+# Reddit settings:
+reddit:
+  client_id: # Reddit API client ID for processing Reddit content
+  client_secret: # Reddit API client secret
+  user_agent: llmcord-bot/1.0  # User agent to use when accessing Reddit API
+  enable: true  # Enable or disable Reddit integration globally
+
 
 # LLM settings:
 

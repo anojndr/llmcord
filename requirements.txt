@@ -5,3 +5,4 @@ pyyaml
 google-genai
 ruamel.yaml
 youtube-transcript-api
+asyncpraw
