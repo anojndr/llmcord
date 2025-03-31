@@ -23,6 +23,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors  
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +85,46 @@ def get_next_api_key(provider_config, provider_name):
     provider_key_indices[provider_name] = next_index
 
     return api_keys[next_index]
+
+async def retry_gemini_api_call(api_call, provider_config):
+    """Retry a Gemini API call with exponential backoff for 503 UNAVAILABLE errors.
+
+    Args:
+        api_call: The async coroutine to call (not yet awaited)
+        provider_config: The provider configuration from config.yaml
+
+    Returns:
+        The result of the API call if successful
+
+    Raises:
+        ServerError: If all retries fail or if the error is not retryable
+    """
+
+    max_retries = 3
+    base_delay = 1.0
+    if "retries" in provider_config:
+        max_retries = provider_config["retries"].get("max_count", max_retries)
+        base_delay = provider_config["retries"].get("base_delay", base_delay)
+
+    for attempt in range(max_retries + 1):  
+        try:
+            if attempt > 0:
+
+                delay = base_delay * (2 ** (attempt - 1)) * (0.5 + random.random())
+                logging.info(f"Gemini API overloaded, retrying in {delay:.2f} seconds (attempt {attempt}/{max_retries})")
+                await asyncio.sleep(delay)
+
+            return await api_call
+
+        except genai_errors.ServerError as e:
+
+            if e.status_code != 503 or "overloaded" not in str(e).lower() or attempt >= max_retries:
+
+                raise
+
+            logging.warning(f"Caught 503 UNAVAILABLE error: {str(e)}")
+
+    raise genai_errors.ServerError(503, {'error': {'message': 'All retry attempts failed'}}, None)
 
 def extract_youtube_links(text):
     """Extract YouTube video IDs from text."""
@@ -900,11 +941,16 @@ async def on_message(new_msg):
                 if tools:
                     generate_content_config.tools = tools
 
-                async for chunk in await genai_client.aio.models.generate_content_stream(
-                    model=model,
-                    contents=gemini_messages,
-                    config=generate_content_config,
-                ):
+                stream = await retry_gemini_api_call(
+                    genai_client.aio.models.generate_content_stream(
+                        model=model,
+                        contents=gemini_messages,
+                        config=generate_content_config,
+                    ),
+                    cfg["providers"][provider]
+                )
+
+                async for chunk in stream:
                     new_content = chunk.text
 
                     if new_content:
@@ -949,10 +995,13 @@ async def on_message(new_msg):
                     view = None
                     if enable_grounding:
                         try:
-                            grounding_response = await genai_client.aio.models.generate_content(
-                                model=model,
-                                contents=gemini_messages,
-                                config=generate_content_config,
+                            grounding_response = await retry_gemini_api_call(
+                                genai_client.aio.models.generate_content(
+                                    model=model,
+                                    contents=gemini_messages,
+                                    config=generate_content_config,
+                                ),
+                                cfg["providers"][provider]
                             )
 
                             if (hasattr(grounding_response.candidates[0], 'grounding_metadata') and 

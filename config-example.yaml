@@ -79,6 +79,9 @@ providers:
     #   - key2
     enable_grounding: true  # Enable or disable Google Search grounding
     enable_youtube: true    # Override global YouTube setting for Gemini
+    retries:
+      max_count: 3        # Maximum number of retry attempts
+      base_delay: 1.0     # Base delay in seconds for exponential backoff
   ollama:
     base_url: http://localhost:11434/v1
   lmstudio:
