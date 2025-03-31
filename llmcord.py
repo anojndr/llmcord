@@ -24,6 +24,11 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from google import genai
 from google.genai import types
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s",
+)
+
 VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "pixtral", "mistral-small", "llava", "vision", "vl")
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
@@ -40,6 +45,8 @@ MAX_MESSAGE_NODES = 100
 YOUTUBE_URL_REGEX = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/)([a-zA-Z0-9_-]{11})'
 
 REDDIT_URL_REGEX = r'(https?://)?(www\.)?(reddit\.com/r/[^/\s]+/comments/[^/\s]+/[^/\s]+/?|reddit\.com/r/[^/\s]+/s/[^/\s]+/?)'
+
+GENERAL_URL_REGEX = r'https?://(?!(?:www\.)?(?:youtube\.com|youtu\.be|reddit\.com))[^\s<>"\'()]+(?<![\.,!?;:])'
 
 provider_key_indices: Dict[str, int] = {}
 
@@ -100,6 +107,17 @@ def extract_reddit_links(text):
         reddit_links.append(reddit_url)
 
     return reddit_links
+
+def extract_general_urls(text):
+    """Extract general URLs from text, excluding YouTube and Reddit URLs."""
+    matches = re.finditer(GENERAL_URL_REGEX, text)
+    general_urls = []
+
+    for match in matches:
+        url = match.group(0)
+        general_urls.append(url)
+
+    return general_urls
 
 async def get_youtube_video_metadata(video_id: str, api_key: str, httpx_client) -> Dict[str, Any]:
     """Get the video title, description and channel name using YouTube Data API v3."""
@@ -308,6 +326,61 @@ async def process_all_reddit_urls(reddit_links, client_id, client_secret, user_a
 
     return formatted_content
 
+async def extract_url_content(url, httpx_client):
+    """Extract content from a URL."""
+    try:
+        response = await httpx_client.get(url, follow_redirects=True, timeout=10.0)
+        response.raise_for_status()
+
+        content_type = response.headers.get('Content-Type', '')
+
+        if 'text/html' in content_type:
+
+            html_content = response.text
+
+            html_content = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html_content, flags=re.DOTALL)
+
+            html_content = re.sub(r'<[^>]*>', ' ', html_content)
+
+            html_content = re.sub(r'\s+', ' ', html_content).strip()
+
+            max_length = 10000  
+            if len(html_content) > max_length:
+                html_content = html_content[:max_length] + "... [content truncated]"
+
+            return html_content
+        elif 'text/plain' in content_type:
+            text_content = response.text
+
+            max_length = 10000  
+            if len(text_content) > max_length:
+                text_content = text_content[:max_length] + "... [content truncated]"
+            return text_content
+        else:
+            return f"Unable to extract content: unsupported content type {content_type}"
+    except Exception as e:
+        logging.error(f"Error extracting content from URL {url}: {str(e)}")
+        return f"Failed to extract content: {str(e)}"
+
+async def process_all_general_urls(general_urls, httpx_client):
+    """Process multiple general URLs concurrently."""
+    if not general_urls:
+        return ""
+
+    tasks = [
+        extract_url_content(url, httpx_client) 
+        for url in general_urls
+    ]
+
+    results = await asyncio.gather(*tasks)
+
+    formatted_content = ""
+    for i, (url, content) in enumerate(zip(general_urls, results), 1):
+        formatted_content += f"url {i}: {url}\n"
+        formatted_content += f"url {i} content: {content}\n\n"
+
+    return formatted_content
+
 cfg = get_config()
 
 if client_id := cfg["client_id"]:
@@ -323,6 +396,27 @@ httpx_client = httpx.AsyncClient()
 
 msg_nodes = {}
 last_task_time = 0
+
+@dataclass
+class MsgNode:
+    text: Optional[str] = None
+    images: list = field(default_factory=list)
+    youtube_links: list = field(default_factory=list)
+    youtube_content: Optional[str] = None
+    reddit_links: list = field(default_factory=list)  
+    reddit_content: Optional[str] = None
+    general_urls: list = field(default_factory=list)  
+    url_content: Optional[str] = None  
+
+    role: Literal["user", "assistant"] = "assistant"
+    user_id: Optional[int] = None
+
+    has_bad_attachments: bool = False
+    fetch_parent_failed: bool = False
+
+    parent_msg: Optional[discord.Message] = None
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 @tree.command(name="model", description="Change the model used by the bot")
 @app_commands.describe(
@@ -426,25 +520,6 @@ async def model_autocomplete(interaction: discord.Interaction, current: str) -> 
 model_command.autocomplete("provider")(provider_autocomplete)
 model_command.autocomplete("model")(model_autocomplete)
 models.autocomplete("provider")(provider_autocomplete)
-
-@dataclass
-class MsgNode:
-    text: Optional[str] = None
-    images: list = field(default_factory=list)
-    youtube_links: list = field(default_factory=list)
-    youtube_content: Optional[str] = None
-    reddit_links: list = field(default_factory=list)  
-    reddit_content: Optional[str] = None  
-
-    role: Literal["user", "assistant"] = "assistant"
-    user_id: Optional[int] = None
-
-    has_bad_attachments: bool = False
-    fetch_parent_failed: bool = False
-
-    parent_msg: Optional[discord.Message] = None
-
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 @discord_client.event
 async def on_ready():
@@ -557,6 +632,9 @@ async def on_message(new_msg):
                 reddit_links = extract_reddit_links(curr_node.text)
                 curr_node.reddit_links = reddit_links
 
+                general_urls = extract_general_urls(curr_node.text)
+                curr_node.general_urls = general_urls
+
                 if curr_msg.author != discord_client.user and enable_youtube and youtube_api_key and curr_node.youtube_links:
                     try:
                         curr_node.youtube_content = await process_all_youtube_urls(
@@ -582,6 +660,17 @@ async def on_message(new_msg):
                     except Exception as e:
                         logging.error(f"Error processing Reddit content: {str(e)}")
                         curr_node.reddit_content = ""
+
+                if curr_msg.author != discord_client.user and curr_node.general_urls:
+                    try:
+                        curr_node.url_content = await process_all_general_urls(
+                            curr_node.general_urls, 
+                            httpx_client
+                        )
+                        logging.info(f"Processed {len(curr_node.general_urls)} general URLs for message {curr_msg.id}")
+                    except Exception as e:
+                        logging.error(f"Error processing general URL content: {str(e)}")
+                        curr_node.url_content = ""
 
                 curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
 
@@ -616,6 +705,7 @@ async def on_message(new_msg):
             has_youtube_gemini = is_gemini and enable_youtube and curr_node.youtube_links and curr_node.role == "user"
             has_youtube_content = not is_gemini and curr_node.youtube_content and curr_node.role == "user"
             has_reddit_content = curr_node.reddit_content and curr_node.role == "user"
+            has_url_content = curr_node.url_content and curr_node.role == "user"  
 
             if has_youtube_gemini and len(curr_node.youtube_links) > 0:
                 video_id, full_url = curr_node.youtube_links[0]
@@ -636,7 +726,7 @@ async def on_message(new_msg):
                 messages.append(message)
                 logging.info(f"Added YouTube link {full_url} to the message (Gemini handling)")
 
-            elif has_youtube_content or has_reddit_content:
+            elif has_youtube_content or has_reddit_content or has_url_content:
                 content = curr_node.text[:max_text]
 
                 if has_youtube_content:
@@ -644,6 +734,9 @@ async def on_message(new_msg):
 
                 if has_reddit_content:
                     content = f"{content}\n\n{curr_node.reddit_content}"
+
+                if has_url_content:
+                    content = f"{content}\n\n{curr_node.url_content}"
 
                 if content != "":
                     message = dict(content=content, role=curr_node.role)
@@ -657,6 +750,9 @@ async def on_message(new_msg):
 
                     if has_reddit_content:
                         logging.info(f"Added message with Reddit content")
+
+                    if has_url_content:
+                        logging.info(f"Added message with general URL content")
 
             elif curr_node.images[:max_images]:
                 content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
