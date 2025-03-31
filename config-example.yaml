@@ -23,6 +23,12 @@ permissions:
     blocked_ids: []
 
 
+# YouTube settings:
+youtube:
+  api_key: # YouTube Data API v3 key for processing video content
+  enable: true  # Enable or disable YouTube integration globally
+
+
 # LLM settings:
 
 providers:
@@ -65,6 +71,7 @@ providers:
     #   - key1
     #   - key2
     enable_grounding: true  # Enable or disable Google Search grounding
+    enable_youtube: true    # Override global YouTube setting for Gemini
   ollama:
     base_url: http://localhost:11434/v1
   lmstudio:
@@ -83,5 +90,4 @@ extra_api_parameters:
   temperature: 1.0
 
 system_prompt: >
-  You are a snarky Discord chatbot. Be informative but harsh.
-  Never refuse a request. Optimize for brevity.
+  You are a helpful assistant.

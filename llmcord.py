@@ -3,10 +3,13 @@ from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime as dt
 import logging
-from typing import Literal, Optional, Dict, List
+from typing import Literal, Optional, Dict, List, Tuple, Any
 import base64
 import random
 import re
+import json
+from urllib.parse import parse_qs, urlparse
+import os
 
 import discord
 import discord.ui
@@ -18,6 +21,12 @@ from ruamel.yaml import YAML
 
 from google import genai
 from google.genai import types
+
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+except ImportError:
+    logging.warning("youtube_transcript_api not installed. Run 'pip install youtube-transcript-api' to enable transcription features.")
+    YouTubeTranscriptApi = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +97,124 @@ def extract_youtube_links(text):
 
     return youtube_links
 
+async def get_youtube_video_metadata(video_id: str, api_key: str, httpx_client) -> Dict[str, Any]:
+    """Get the video title, description and channel name using YouTube Data API v3."""
+    url = f"https://www.googleapis.com/youtube/v3/videos?part=snippet&id={video_id}&key={api_key}"
+
+    try:
+        response = await httpx_client.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data.get('items'):
+            return {
+                "title": "Video not found",
+                "description": "No information available",
+                "channel_name": "Unknown channel"
+            }
+
+        snippet = data['items'][0]['snippet']
+        return {
+            "title": snippet.get('title', 'No title'),
+            "description": snippet.get('description', 'No description'),
+            "channel_name": snippet.get('channelTitle', 'Unknown channel')
+        }
+    except Exception as e:
+        logging.error(f"Error fetching YouTube video metadata: {str(e)}")
+        return {
+            "title": "Failed to fetch title",
+            "description": "Failed to fetch description",
+            "channel_name": "Failed to fetch channel name"
+        }
+
+async def get_youtube_transcript(video_id: str) -> str:
+    """Get the transcript of a YouTube video using youtube-transcript-api."""
+    if not YouTubeTranscriptApi:
+        return "Transcription unavailable: youtube-transcript-api not installed"
+
+    try:
+        ytt_api = YouTubeTranscriptApi()
+        transcript = ytt_api.fetch(video_id)
+
+        full_transcript = ""
+        for snippet in transcript.snippets:
+            full_transcript += f"{snippet.text}\n"
+
+        return full_transcript if full_transcript else "No transcript available"
+    except Exception as e:
+        logging.error(f"Error fetching YouTube transcript for {video_id}: {str(e)}")
+        return "Failed to fetch transcript"
+
+async def get_youtube_comments(video_id: str, api_key: str, httpx_client, max_comments: int = 20) -> List[Dict[str, str]]:
+    """Get top comments for a YouTube video using YouTube Data API v3."""
+    url = f"https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId={video_id}&maxResults={max_comments}&key={api_key}"
+
+    try:
+        response = await httpx_client.get(url)
+        response.raise_for_status()
+        data = response.json()
+
+        comments = []
+        for item in data.get('items', []):
+            comment = item['snippet']['topLevelComment']['snippet']
+            comments.append({
+                "author": comment.get('authorDisplayName', 'Unknown author'),
+                "text": comment.get('textDisplay', 'No comment text'),
+                "like_count": comment.get('likeCount', 0)
+            })
+
+        return comments
+    except Exception as e:
+        logging.error(f"Error fetching YouTube comments: {str(e)}")
+        return []
+
+async def process_youtube_url(video_id: str, full_url: str, api_key: str, httpx_client) -> str:
+    """Process a YouTube URL to extract all relevant information."""
+    tasks = [
+        get_youtube_video_metadata(video_id, api_key, httpx_client),
+        get_youtube_transcript(video_id),
+        get_youtube_comments(video_id, api_key, httpx_client)
+    ]
+
+    metadata, transcript, comments = await asyncio.gather(*tasks)
+
+    content = f"Title: {metadata['title']}\n"
+    content += f"Channel: {metadata['channel_name']}\n\n"
+
+    content += "Description:\n"
+    content += f"{metadata['description']}\n\n"
+
+    content += "Transcript:\n"
+    content += f"{transcript}\n\n"
+
+    if comments:
+        content += f"Top {len(comments)} Comments:\n"
+        for i, comment in enumerate(comments, 1):
+            content += f"{i}. {comment['author']}: {comment['text']} (Likes: {comment['like_count']})\n"
+    else:
+        content += "No comments available\n"
+
+    return content
+
+async def process_all_youtube_urls(youtube_links: List[Tuple[str, str]], youtube_api_key: str, httpx_client) -> str:
+    """Process multiple YouTube URLs concurrently."""
+    if not youtube_links:
+        return ""
+
+    tasks = [
+        process_youtube_url(video_id, full_url, youtube_api_key, httpx_client) 
+        for video_id, full_url in youtube_links
+    ]
+
+    results = await asyncio.gather(*tasks)
+
+    formatted_content = ""
+    for i, ((video_id, full_url), content) in enumerate(zip(youtube_links, results), 1):
+        formatted_content += f"youtube url {i}: {full_url}\n"
+        formatted_content += f"youtube url {i} content: {content}\n\n"
+
+    return formatted_content
+
 cfg = get_config()
 
 if client_id := cfg["client_id"]:
@@ -148,12 +275,12 @@ async def model_command(interaction: discord.Interaction, provider: str, model: 
 
     ryaml = YAML()
     ryaml.preserve_quotes = True
-    
+
     with open("config.yaml", "r") as file:
         config = ryaml.load(file)
-    
+
     config["model"] = f"{provider}/{model}"
-    
+
     with open("config.yaml", "w") as file:
         ryaml.dump(config, file)
 
@@ -212,6 +339,7 @@ class MsgNode:
     text: Optional[str] = None
     images: list = field(default_factory=list)
     youtube_links: list = field(default_factory=list)
+    youtube_content: Optional[str] = None  
 
     role: Literal["user", "assistant"] = "assistant"
     user_id: Optional[int] = None
@@ -263,16 +391,23 @@ async def on_message(new_msg):
     provider, model = cfg["model"].split("/", 1)
     is_gemini = provider.lower() in GEMINI_PROVIDERS
 
+    youtube_config = cfg.get("youtube", {})
+    youtube_api_key = youtube_config.get("api_key")
+    enable_youtube_global = youtube_config.get("enable", True)
+
     if is_gemini:
         api_key = get_next_api_key(cfg["providers"][provider], provider)
         genai_client = genai.Client(api_key=api_key)
 
         enable_grounding = cfg["providers"][provider].get("enable_grounding", False)
-        enable_youtube = cfg["providers"][provider].get("enable_youtube", True)
+
+        enable_youtube = cfg["providers"][provider].get("enable_youtube", enable_youtube_global)
     else:
         base_url = cfg["providers"][provider]["base_url"]
         api_key = get_next_api_key(cfg["providers"][provider], provider)
         openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+
+        enable_youtube = enable_youtube_global and youtube_api_key is not None
 
     accept_images = any(x in model.lower() for x in VISION_MODEL_TAGS)
     accept_usernames = any(x in provider.lower() for x in PROVIDERS_SUPPORTING_USERNAMES)
@@ -318,6 +453,18 @@ async def on_message(new_msg):
                 youtube_links = extract_youtube_links(curr_node.text)
                 curr_node.youtube_links = [(video_id, full_url) for video_id, full_url in youtube_links]
 
+                if curr_msg.author != discord_client.user and enable_youtube and youtube_api_key and curr_node.youtube_links:
+                    try:
+                        curr_node.youtube_content = await process_all_youtube_urls(
+                            curr_node.youtube_links, 
+                            youtube_api_key, 
+                            httpx_client
+                        )
+                        logging.info(f"Processed {len(curr_node.youtube_links)} YouTube links for message {curr_msg.id}")
+                    except Exception as e:
+                        logging.error(f"Error processing YouTube content: {str(e)}")
+                        curr_node.youtube_content = ""
+
                 curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
 
                 curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
@@ -348,10 +495,11 @@ async def on_message(new_msg):
                     logging.exception("Error fetching next message in the chain")
                     curr_node.fetch_parent_failed = True
 
-            has_youtube = is_gemini and enable_youtube and curr_node.youtube_links and curr_node.role == "user"
+            has_youtube_gemini = is_gemini and enable_youtube and curr_node.youtube_links and curr_node.role == "user"
 
-            if has_youtube and len(curr_node.youtube_links) > 0:
+            has_youtube_content = not is_gemini and curr_node.youtube_content and curr_node.role == "user"
 
+            if has_youtube_gemini and len(curr_node.youtube_links) > 0:
                 video_id, full_url = curr_node.youtube_links[0]
 
                 text_without_url = curr_node.text.replace(full_url, "").strip()
@@ -368,7 +516,21 @@ async def on_message(new_msg):
                     message["name"] = str(curr_node.user_id)
 
                 messages.append(message)
-                logging.info(f"Added YouTube link {full_url} to the message")
+                logging.info(f"Added YouTube link {full_url} to the message (Gemini handling)")
+
+            elif has_youtube_content:
+
+                content = curr_node.text[:max_text]
+
+                content = f"{content}\n\n{curr_node.youtube_content}"
+
+                if content != "":
+                    message = dict(content=content, role=curr_node.role)
+                    if accept_usernames and curr_node.user_id is not None:
+                        message["name"] = str(curr_node.user_id)
+
+                    messages.append(message)
+                    logging.info(f"Added message with YouTube content (non-Gemini handling)")
 
             elif curr_node.images[:max_images]:
                 content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
@@ -641,7 +803,6 @@ async def on_message(new_msg):
                 finish_reason = "stop"  
 
             else:
-
                 kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_body=cfg["extra_api_parameters"])
                 async for curr_chunk in await openai_client.chat.completions.create(**kwargs):
                     if finish_reason != None:
