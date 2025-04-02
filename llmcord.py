@@ -1,7 +1,7 @@
 import asyncio
 from base64 import b64encode
 from dataclasses import dataclass, field
-from datetime import datetime as dt
+from datetime import datetime as dt, timedelta
 import logging
 from typing import Literal, Optional, Dict, List, Tuple, Any
 import base64
@@ -10,6 +10,8 @@ import re
 import json
 from urllib.parse import parse_qs, urlparse
 import os
+import sqlite3
+import time
 
 import discord
 import discord.ui
@@ -56,6 +58,155 @@ PROVIDER_MODELS = {
     "anthropic": ["claude-3.7-sonnet-thought", "claude-3.7-sonnet"],
 }
 
+API_KEY_COOLDOWN_HOURS = 24
+DB_PATH = "api_key_cooldown.db"
+
+class KeyCooldownDB:
+    """
+    Database for tracking failed API keys and their cooldown periods.
+    """
+    def __init__(self, db_path=DB_PATH):
+        self.db_path = db_path
+        self._init_db()
+        self._clean_expired_cooldowns()
+
+    def _init_db(self):
+        """Initialize the database with required tables."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS key_cooldowns (
+                provider TEXT NOT NULL,
+                key_index INTEGER NOT NULL,
+                error_code TEXT,
+                error_message TEXT,
+                cooldown_until INTEGER NOT NULL,
+                PRIMARY KEY (provider, key_index)
+            )
+        ''')
+        conn.commit()
+        conn.close()
+
+    def add_key_cooldown(self, provider, key_index, error_code="", error_message=""):
+        """
+        Add a key to cooldown for 24 hours.
+
+        Args:
+            provider: The provider name
+            key_index: The index of the key
+            error_code: The error code (optional)
+            error_message: The error message (optional)
+        """
+        cooldown_until = int(time.time() + (API_KEY_COOLDOWN_HOURS * 3600))
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO key_cooldowns VALUES (?, ?, ?, ?, ?)",
+            (provider, key_index, str(error_code), str(error_message), cooldown_until)
+        )
+        conn.commit()
+        conn.close()
+
+        logging.info(f"Added key {key_index} for provider {provider} to cooldown until {dt.fromtimestamp(cooldown_until)}")
+
+    def is_key_in_cooldown(self, provider, key_index):
+        """
+        Check if a key is currently in cooldown.
+
+        Args:
+            provider: The provider name
+            key_index: The index of the key
+
+        Returns:
+            bool: True if the key is in cooldown, False otherwise
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT cooldown_until FROM key_cooldowns WHERE provider = ? AND key_index = ?",
+            (provider, key_index)
+        )
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            cooldown_until = result[0]
+            current_time = int(time.time())
+            return cooldown_until > current_time
+
+        return False
+
+    def get_time_remaining(self, provider, key_index):
+        """
+        Get the time remaining for a key's cooldown in seconds.
+
+        Args:
+            provider: The provider name
+            key_index: The index of the key
+
+        Returns:
+            int: Time remaining in seconds, or 0 if not in cooldown
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT cooldown_until FROM key_cooldowns WHERE provider = ? AND key_index = ?",
+            (provider, key_index)
+        )
+        result = cursor.fetchone()
+        conn.close()
+
+        if result:
+            cooldown_until = result[0]
+            current_time = int(time.time())
+            remaining = max(0, cooldown_until - current_time)
+            return remaining
+
+        return 0
+
+    def _clean_expired_cooldowns(self):
+        """
+        Remove keys that have passed their cooldown period.
+        """
+        current_time = int(time.time())
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM key_cooldowns WHERE cooldown_until <= ?",
+            (current_time,)
+        )
+        deleted_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if deleted_count > 0:
+            logging.info(f"Cleaned up {deleted_count} expired key cooldowns")
+
+    def get_all_cooldowns(self):
+        """
+        Get all keys currently in cooldown.
+
+        Returns:
+            list: List of (provider, key_index, cooldown_until) tuples
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT provider, key_index, cooldown_until FROM key_cooldowns")
+        results = cursor.fetchall()
+        conn.close()
+
+        return [(r[0], r[1], dt.fromtimestamp(r[2])) for r in results]
+
+key_cooldown_db = KeyCooldownDB()
+
+async def clean_cooldowns_task():
+    """Background task to periodically clean up expired cooldowns."""
+    while True:
+        await asyncio.sleep(3600)  
+        key_cooldown_db._clean_expired_cooldowns()
+
 class ShowSourcesButton(discord.ui.View):
     def __init__(self, grounding_embed):
         super().__init__()
@@ -85,6 +236,22 @@ def get_next_api_key(provider_config, provider_name):
 
     return api_keys[next_index]
 
+def is_rate_limit_error(error):
+    """Check if an error is a rate limit error (HTTP 429)."""
+    if hasattr(error, 'code') and error.code == 429:
+        return True
+    if hasattr(error, 'status_code') and error.status_code == 429:
+        return True
+    if isinstance(error, dict) and error.get('code') == 429:
+        return True
+    if isinstance(error, str) and '429' in error:
+        return True
+
+    error_str = str(error).lower()
+    if '429' in error_str or 'rate limit' in error_str or 'quota' in error_str:
+        return True
+    return False
+
 async def safe_gemini_grounding_retrieval(provider, provider_config, model, gemini_messages, generate_content_config):
     """
     Safely retrieve grounding metadata with API key rotation.
@@ -98,9 +265,20 @@ async def safe_gemini_grounding_retrieval(provider, provider_config, model, gemi
 
     start_index = provider_key_indices.get(provider, 0)
 
-    key_indices = [(start_index + i) % len(api_keys) for i in range(len(api_keys))]
+    available_indices = []
+    for i in range(len(api_keys)):
+        idx = (start_index + i) % len(api_keys)
+        if not key_cooldown_db.is_key_in_cooldown(provider, idx):
+            available_indices.append(idx)
+        else:
+            remaining_time = key_cooldown_db.get_time_remaining(provider, idx)
+            logging.info(f"Skipping key {idx} for provider {provider} - in cooldown for {remaining_time//3600}h {(remaining_time%3600)//60}m")
 
-    for idx in key_indices:
+    if not available_indices:
+        logging.warning(f"All keys for provider {provider} are in cooldown for grounding retrieval")
+        return None
+
+    for idx in available_indices:
         api_key = api_keys[idx]
 
         logging.info(f"Trying Gemini grounding retrieval with key index {idx} for provider {provider}")
@@ -123,7 +301,17 @@ async def safe_gemini_grounding_retrieval(provider, provider_config, model, gemi
             else:
                 logging.warning(f"No grounding metadata available with key index {idx}")
         except Exception as e:
-            logging.warning(f"Grounding metadata retrieval failed with key index {idx}: {str(e)}")
+            error_str = str(e)
+            logging.warning(f"Grounding metadata retrieval failed with key index {idx}: {error_str}")
+
+            if is_rate_limit_error(e):
+                key_cooldown_db.add_key_cooldown(
+                    provider=provider,
+                    key_index=idx,
+                    error_code=getattr(e, 'code', '429'),
+                    error_message=error_str
+                )
+                logging.info(f"Added key {idx} to cooldown due to rate limiting")
 
     logging.warning("All keys failed for grounding metadata retrieval")
     return None
@@ -131,6 +319,7 @@ async def safe_gemini_grounding_retrieval(provider, provider_config, model, gemi
 async def safe_gemini_stream_processor(new_msg, provider, provider_config, model, gemini_messages, generate_content_config, embed, response_msgs, response_contents, edit_task, use_plain_responses, max_message_length, enable_grounding):
     """
     Safely process Gemini API calls with automatic retries using different keys.
+    Skips keys that are in cooldown due to rate limits.
     """
     api_keys = provider_config.get("api_keys", [])
 
@@ -140,14 +329,31 @@ async def safe_gemini_stream_processor(new_msg, provider, provider_config, model
 
     start_index = provider_key_indices.get(provider, 0)
 
-    key_indices = [(start_index + i) % len(api_keys) for i in range(len(api_keys))]
+    available_indices = []
+    for i in range(len(api_keys)):
+        idx = (start_index + i) % len(api_keys)
+        if not key_cooldown_db.is_key_in_cooldown(provider, idx):
+            available_indices.append(idx)
+        else:
+            remaining_time = key_cooldown_db.get_time_remaining(provider, idx)
+            logging.info(f"Skipping key {idx} for provider {provider} - in cooldown for {remaining_time//3600}h {(remaining_time%3600)//60}m")
+
+    if not available_indices:
+        logging.error(f"All keys for provider {provider} are in cooldown")
+        error_embed = discord.Embed(
+            title="Error",
+            description="All API keys are currently rate limited. Please try again later.",
+            color=discord.Color.red()
+        )
+        await new_msg.reply(embed=error_embed)
+        return False
 
     last_exception = None
     success = False
     curr_content = None
     last_task_time = 0
 
-    for idx in key_indices:
+    for idx in available_indices:
         api_key = api_keys[idx]
         provider_key_indices[provider] = idx
 
@@ -233,13 +439,35 @@ async def safe_gemini_stream_processor(new_msg, provider, provider_config, model
 
             except Exception as stream_error:
 
-                logging.warning(f"Stream processing failed with key index {idx}: {str(stream_error)}")
+                error_str = str(stream_error)
+                logging.warning(f"Stream processing failed with key index {idx}: {error_str}")
+
+                if is_rate_limit_error(stream_error):
+                    key_cooldown_db.add_key_cooldown(
+                        provider=provider,
+                        key_index=idx,
+                        error_code=getattr(stream_error, 'code', '429'),
+                        error_message=error_str
+                    )
+                    logging.info(f"Added key {idx} to cooldown due to rate limiting")
+
                 last_exception = stream_error
                 continue
 
         except Exception as init_error:
 
-            logging.warning(f"Initial API connection failed with key index {idx}: {str(init_error)}")
+            error_str = str(init_error)
+            logging.warning(f"Initial API connection failed with key index {idx}: {error_str}")
+
+            if is_rate_limit_error(init_error):
+                key_cooldown_db.add_key_cooldown(
+                    provider=provider,
+                    key_index=idx,
+                    error_code=getattr(init_error, 'code', '429'),
+                    error_message=error_str
+                )
+                logging.info(f"Added key {idx} to cooldown due to rate limiting")
+
             last_exception = init_error
             continue
 
@@ -316,6 +544,7 @@ def create_grounding_view(grounding_metadata):
 async def safe_openai_stream_processor(new_msg, provider, provider_config, base_url, model, messages, extra_params, embed, response_msgs, response_contents, edit_task, use_plain_responses, max_message_length):
     """
     Safely process OpenAI API calls with automatic retries using different keys.
+    Skips keys that are in cooldown due to rate limits.
     """
     api_keys = provider_config.get("api_keys", [])
 
@@ -325,7 +554,24 @@ async def safe_openai_stream_processor(new_msg, provider, provider_config, base_
 
     start_index = provider_key_indices.get(provider, 0)
 
-    key_indices = [(start_index + i) % len(api_keys) for i in range(len(api_keys))]
+    available_indices = []
+    for i in range(len(api_keys)):
+        idx = (start_index + i) % len(api_keys)
+        if not key_cooldown_db.is_key_in_cooldown(provider, idx):
+            available_indices.append(idx)
+        else:
+            remaining_time = key_cooldown_db.get_time_remaining(provider, idx)
+            logging.info(f"Skipping key {idx} for provider {provider} - in cooldown for {remaining_time//3600}h {(remaining_time%3600)//60}m")
+
+    if not available_indices:
+        logging.error(f"All keys for provider {provider} are in cooldown")
+        error_embed = discord.Embed(
+            title="Error",
+            description="All API keys are currently rate limited. Please try again later.",
+            color=discord.Color.red()
+        )
+        await new_msg.reply(embed=error_embed)
+        return False
 
     last_exception = None
     success = False
@@ -333,7 +579,7 @@ async def safe_openai_stream_processor(new_msg, provider, provider_config, base_
     finish_reason = None
     last_task_time = 0
 
-    for idx in key_indices:
+    for idx in available_indices:
         api_key = api_keys[idx]
         provider_key_indices[provider] = idx
 
@@ -402,13 +648,35 @@ async def safe_openai_stream_processor(new_msg, provider, provider_config, base_
 
             except Exception as stream_error:
 
-                logging.warning(f"Stream processing failed with key index {idx}: {str(stream_error)}")
+                error_str = str(stream_error)
+                logging.warning(f"Stream processing failed with key index {idx}: {error_str}")
+
+                if is_rate_limit_error(stream_error):
+                    key_cooldown_db.add_key_cooldown(
+                        provider=provider,
+                        key_index=idx,
+                        error_code=getattr(stream_error, 'status_code', '429'),
+                        error_message=error_str
+                    )
+                    logging.info(f"Added key {idx} to cooldown due to rate limiting")
+
                 last_exception = stream_error
                 continue
 
         except Exception as init_error:
 
-            logging.warning(f"Initial API connection failed with key index {idx}: {str(init_error)}")
+            error_str = str(init_error)
+            logging.warning(f"Initial API connection failed with key index {idx}: {error_str}")
+
+            if is_rate_limit_error(init_error):
+                key_cooldown_db.add_key_cooldown(
+                    provider=provider,
+                    key_index=idx,
+                    error_code=getattr(init_error, 'status_code', '429'),
+                    error_message=error_str
+                )
+                logging.info(f"Added key {idx} to cooldown due to rate limiting")
+
             last_exception = init_error
             continue
 
@@ -862,6 +1130,8 @@ models.autocomplete("provider")(provider_autocomplete)
 async def on_ready():
     await tree.sync()
     logging.info(f"Logged in as {discord_client.user} (ID: {discord_client.user.id})")
+
+    discord_client.loop.create_task(clean_cooldowns_task())
 
 @discord_client.event
 async def on_message(new_msg):
