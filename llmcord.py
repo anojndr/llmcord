@@ -1050,19 +1050,19 @@ async def model_command(interaction: discord.Interaction, provider: str, model: 
     is_bad_channel = not is_good_channel or any(id in blocked_channel_ids for id in channel_ids)
 
     if is_bad_user or is_bad_channel:
-        await interaction.response.send_message("You don't have permission to change the model.", ephemeral=True)
+        await interaction.response.send_message("You don't have permission to change the model.", ephemeral=False)
         return
 
     if provider not in cfg["providers"]:
-        await interaction.response.send_message(f"Provider '{provider}' not found in config.", ephemeral=True)
+        await interaction.response.send_message(f"Provider '{provider}' not found in config.", ephemeral=False)
         return
 
     if provider not in PROVIDER_MODELS:
-        await interaction.response.send_message(f"Provider '{provider}' is not supported for model selection.", ephemeral=True)
+        await interaction.response.send_message(f"Provider '{provider}' is not supported for model selection.", ephemeral=False)
         return
 
     if model not in PROVIDER_MODELS[provider]:
-        await interaction.response.send_message(f"Model '{model}' is not available for provider '{provider}'.", ephemeral=True)
+        await interaction.response.send_message(f"Model '{model}' is not available for provider '{provider}'.", ephemeral=False)
         return
 
     ryaml = YAML()
@@ -1076,7 +1076,7 @@ async def model_command(interaction: discord.Interaction, provider: str, model: 
     with open("config.yaml", "w") as file:
         ryaml.dump(config, file)
 
-    await interaction.response.send_message(f"Model updated to {provider}/{model}", ephemeral=True)
+    await interaction.response.send_message(f"Model updated to {provider}/{model}", ephemeral=False)
 
 @tree.command()
 @app_commands.describe(provider="The provider to check models for")
@@ -1141,6 +1141,24 @@ async def on_message(new_msg):
 
     if ((not is_dm and discord_client.user not in new_msg.mentions and "at ai" not in new_msg.content.lower()) or new_msg.author.bot):
         return
+
+    cleaned_content = new_msg.content
+    if discord_client.user.mention in cleaned_content:
+        cleaned_content = cleaned_content.removeprefix(discord_client.user.mention).lstrip()
+    elif cleaned_content.lower().startswith("at ai"):
+        cleaned_content = cleaned_content[5:].lstrip()
+
+    if not cleaned_content:
+
+        has_reference = bool(new_msg.reference)
+
+        is_thread = new_msg.channel.type in (discord.ChannelType.public_thread, discord.ChannelType.private_thread)
+
+        has_attachments = bool(new_msg.attachments)
+
+        if not has_reference and not is_thread and not has_attachments:
+            await new_msg.reply("your query is empty. please reply to a message to reference it or don't send an empty query")
+            return
 
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
     channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
