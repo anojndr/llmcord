@@ -56,6 +56,7 @@ PROVIDER_MODELS = {
     "openai": ["o3-mini", "o1", "gpt-4o-2024-11-20"],
     "google": ["gemini-2.5-pro-exp-03-25", "gemini-2.0-flash"],
     "anthropic": ["claude-3.7-sonnet-thought", "claude-3.7-sonnet"],
+    "x-ai": ["grok-3"],
 }
 
 API_KEY_COOLDOWN_HOURS = 24
@@ -1199,9 +1200,12 @@ async def on_message(new_msg):
     if is_gemini:
         provider_config = cfg["providers"][provider]
         enable_grounding = provider_config.get("enable_grounding", False)
+
+        use_native_youtube = provider_config.get("use_native_youtube", True)
         enable_youtube = provider_config.get("enable_youtube", enable_youtube_global)
     else:
         enable_youtube = enable_youtube_global and youtube_api_key is not None
+        use_native_youtube = False  
 
     accept_images = any(x in model.lower() for x in VISION_MODEL_TAGS)
     accept_usernames = any(x in provider.lower() for x in PROVIDERS_SUPPORTING_USERNAMES)
@@ -1253,7 +1257,10 @@ async def on_message(new_msg):
                 general_urls = extract_general_urls(curr_node.text)
                 curr_node.general_urls = general_urls
 
-                if curr_msg.author != discord_client.user and enable_youtube and youtube_api_key and curr_node.youtube_links:
+                should_process_youtube = curr_msg.author != discord_client.user and enable_youtube and youtube_api_key and curr_node.youtube_links
+                use_external_youtube_api = not is_gemini or (is_gemini and not use_native_youtube)
+
+                if should_process_youtube and use_external_youtube_api:
                     try:
                         curr_node.youtube_content = await process_all_youtube_urls(
                             curr_node.youtube_links, 
@@ -1320,8 +1327,9 @@ async def on_message(new_msg):
                     logging.exception("Error fetching next message in the chain")
                     curr_node.fetch_parent_failed = True
 
-            has_youtube_gemini = is_gemini and enable_youtube and curr_node.youtube_links and curr_node.role == "user"
-            has_youtube_content = not is_gemini and curr_node.youtube_content and curr_node.role == "user"
+            has_youtube_gemini = is_gemini and enable_youtube and use_native_youtube and curr_node.youtube_links and curr_node.role == "user"
+
+            has_youtube_content = curr_node.youtube_content and curr_node.role == "user"
             has_reddit_content = curr_node.reddit_content and curr_node.role == "user"
             has_url_content = curr_node.url_content and curr_node.role == "user"  
 
@@ -1342,7 +1350,7 @@ async def on_message(new_msg):
                     message["name"] = str(curr_node.user_id)
 
                 messages.append(message)
-                logging.info(f"Added YouTube link {full_url} to the message (Gemini handling)")
+                logging.info(f"Added YouTube link {full_url} to the message (Gemini native handling)")
 
             elif has_youtube_content or has_reddit_content or has_url_content:
                 content = curr_node.text[:max_text]
@@ -1364,7 +1372,10 @@ async def on_message(new_msg):
                     messages.append(message)
 
                     if has_youtube_content:
-                        logging.info(f"Added message with YouTube content (non-Gemini handling)")
+                        if is_gemini:
+                            logging.info(f"Added message with YouTube content (Gemini with external API handling)")
+                        else:
+                            logging.info(f"Added message with YouTube content (non-Gemini handling)")
 
                     if has_reddit_content:
                         logging.info(f"Added message with Reddit content")
@@ -1475,7 +1486,7 @@ async def on_message(new_msg):
 
                 extra_params = cfg["extra_api_parameters"].copy()
                 temperature = extra_params.pop("temperature", 1.0)
-                max_output_tokens = extra_params.pop("max_tokens", 4096)
+                max_output_tokens = extra_params.pop("max_tokens", None)
 
                 safety_settings = [
                     types.SafetySetting(
