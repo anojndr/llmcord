@@ -54,7 +54,7 @@ provider_key_indices: Dict[str, int] = {}
 
 PROVIDER_MODELS = {
     "openai": ["o3-mini", "o1", "gpt-4o-2024-11-20"],
-    "google": ["gemini-2.5-pro-exp-03-25", "gemini-2.0-flash"],
+    "google": ["gemini-2.5-pro-preview-03-25", "gemini-2.5-pro-exp-03-25", "gemini-2.0-flash"],
     "anthropic": ["claude-3.7-sonnet-thought", "claude-3.7-sonnet"],
     "x-ai": ["grok-3"],
 }
