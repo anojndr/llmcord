@@ -22,6 +22,7 @@ import yaml
 from ruamel.yaml import YAML
 import asyncpraw
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import WebshareProxyConfig
 
 from google import genai
 from google.genai import types
@@ -761,7 +762,22 @@ async def get_youtube_transcript(video_id: str) -> str:
         return "Transcription unavailable: youtube-transcript-api not installed"
 
     try:
-        ytt_api = YouTubeTranscriptApi()
+        cfg = get_config()
+        youtube_config = cfg.get("youtube", {})
+        webshare_config = youtube_config.get("webshare", {})
+
+        if webshare_config.get("enable") and webshare_config.get("proxy_username") and webshare_config.get("proxy_password"):
+
+            proxy_config = WebshareProxyConfig(
+                proxy_username=webshare_config["proxy_username"],
+                proxy_password=webshare_config["proxy_password"],
+            )
+            ytt_api = YouTubeTranscriptApi(proxy_config=proxy_config)
+            logging.info(f"Using Webshare proxy for YouTube transcript of video {video_id}")
+        else:
+
+            ytt_api = YouTubeTranscriptApi()
+
         transcript = ytt_api.fetch(video_id)
 
         full_transcript = ""
@@ -771,7 +787,7 @@ async def get_youtube_transcript(video_id: str) -> str:
         return full_transcript if full_transcript else "No transcript available"
     except Exception as e:
         logging.error(f"Error fetching YouTube transcript for {video_id}: {str(e)}")
-        return "Failed to fetch transcript"
+        return f"Failed to fetch transcript: {str(e)}"
 
 async def get_youtube_comments(video_id: str, api_key: str, httpx_client, max_comments: int = 20) -> List[Dict[str, str]]:
     """Get top comments for a YouTube video using YouTube Data API v3."""

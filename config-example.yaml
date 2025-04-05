@@ -27,6 +27,11 @@ permissions:
 youtube:
   api_key: # YouTube Data API v3 key for processing video content
   enable: true  # Enable or disable YouTube integration globally
+  webshare:
+    proxy_username: # Your Webshare proxy username
+    proxy_password: # Your Webshare proxy password
+    enable: false  # Set to true to enable Webshare proxies for YouTube transcripts
+
 
 # Reddit settings:
 reddit:
@@ -79,10 +84,11 @@ providers:
     #   - key2
     enable_grounding: true  # Enable or disable Google Search grounding
     enable_youtube: true    # Override global YouTube setting for Gemini
+    use_native_youtube: false # Use native YouTube API for Gemini
   ollama:
     base_url: http://localhost:11434/v1
   lmstudio:
-    base_url: http://localhost:1234/v1
+    base_url: http://localhost:1234/v1  
   vllm:
     base_url: http://localhost:8000/v1
   oobabooga:
