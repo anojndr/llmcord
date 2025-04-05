@@ -1156,14 +1156,14 @@ async def on_message(new_msg):
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
 
-    if ((not is_dm and discord_client.user not in new_msg.mentions and "at ai" not in new_msg.content.lower()) or new_msg.author.bot):
+    if ((not is_dm and discord_client.user not in new_msg.mentions and not re.search(r'\bat ai\b', new_msg.content.lower())) or new_msg.author.bot):
         return
 
     cleaned_content = new_msg.content
     if discord_client.user.mention in cleaned_content:
         cleaned_content = cleaned_content.removeprefix(discord_client.user.mention).lstrip()
-    elif cleaned_content.lower().startswith("at ai"):
-        cleaned_content = cleaned_content[5:].lstrip()
+    elif re.match(r'^\s*at ai\b', cleaned_content.lower()):
+        cleaned_content = re.sub(r'^\s*at ai\b', '', cleaned_content, flags=re.IGNORECASE).lstrip()
 
     if not cleaned_content:
 
@@ -1245,8 +1245,8 @@ async def on_message(new_msg):
                 cleaned_content = curr_msg.content
                 if discord_client.user.mention in cleaned_content:
                     cleaned_content = cleaned_content.removeprefix(discord_client.user.mention).lstrip()
-                elif cleaned_content.lower().startswith("at ai"):
-                    cleaned_content = cleaned_content[5:].lstrip()  
+                elif re.match(r'^\s*at ai\b', cleaned_content.lower()):
+                    cleaned_content = re.sub(r'^\s*at ai\b', '', cleaned_content, flags=re.IGNORECASE).lstrip()
 
                 good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(type) for type in ("text", "image"))]
 
@@ -1323,7 +1323,7 @@ async def on_message(new_msg):
                     if (
                         curr_msg.reference == None
                         and discord_client.user.mention not in curr_msg.content
-                        and "at ai" not in curr_msg.content.lower()
+                        and not re.search(r'\bat ai\b', curr_msg.content.lower())
                         and (prev_msg_in_channel := ([m async for m in curr_msg.channel.history(before=curr_msg, limit=1)] or [None])[0])
                         and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply)
                         and prev_msg_in_channel.author == (discord_client.user if curr_msg.channel.type == discord.ChannelType.private else curr_msg.author)
