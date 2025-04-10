@@ -1,3 +1,4 @@
+# config-example.yaml
 # Discord settings:
 
 bot_token: 
@@ -39,6 +40,18 @@ reddit:
   client_secret: # Reddit API client secret
   user_agent: llmcord-bot/1.0  # User agent to use when accessing Reddit API
   enable: true  # Enable or disable Reddit integration globally
+
+
+# SerpAPI settings:
+serpapi:
+  # Single API key (traditional method)
+  api_key: # Your SerpAPI key for Google Lens image analysis
+  # Multiple API keys (for rotation)
+  api_keys:
+    # - your_serpapi_key_1
+    # - your_serpapi_key_2
+    # - your_serpapi_key_3
+  enable: true  # Enable or disable SerpAPI Google Lens integration globally
 
 
 # LLM settings:

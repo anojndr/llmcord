@@ -8,7 +8,7 @@ import base64
 import random
 import re
 import json
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, quote
 import os
 import sqlite3
 import time
@@ -62,6 +62,102 @@ PROVIDER_MODELS = {
 
 API_KEY_COOLDOWN_HOURS = 24
 DB_PATH = "api_key_cooldown.db"
+
+async def safe_serpapi_processor(image_url, serpapi_config, httpx_client):
+    """
+    Safely process SerpAPI Google Lens API calls with automatic retries using different keys.
+    Skips keys that are in cooldown due to rate limits.
+    """
+
+    api_keys = [key for key in serpapi_config.get("api_keys", []) if key and key.strip()]
+
+    if not api_keys:
+        single_key = serpapi_config.get("api_key")
+        if single_key and single_key.strip():
+            api_keys = [single_key]
+
+    if not api_keys:
+        logging.error("No valid SerpAPI keys provided")
+        return {"error": "No SerpAPI key configured"}
+
+    start_index = provider_key_indices.get("serpapi", 0)
+
+    available_indices = []
+    for i in range(len(api_keys)):
+        idx = (start_index + i) % len(api_keys)
+        if not key_cooldown_db.is_key_in_cooldown("serpapi", idx):
+            available_indices.append(idx)
+        else:
+            remaining_time = key_cooldown_db.get_time_remaining("serpapi", idx)
+            logging.info(f"Skipping SerpAPI key {idx} - in cooldown for {remaining_time//3600}h {(remaining_time%3600)//60}m")
+
+    if not available_indices:
+        logging.error("All SerpAPI keys are in cooldown")
+        return {"error": "All SerpAPI keys are currently rate limited. Please try again later."}
+
+    last_exception = None
+
+    for idx in available_indices:
+        api_key = api_keys[idx]
+        provider_key_indices["serpapi"] = idx
+
+        logging.info(f"Trying SerpAPI with key index {idx}")
+
+        try:
+            encoded_url = quote(image_url)
+            url = f"https://serpapi.com/search?engine=google_lens&url={encoded_url}&api_key={api_key}"
+
+            response = await httpx_client.get(url, timeout=30.0)
+            response.raise_for_status()
+
+            result = response.json()
+
+            provider_key_indices["serpapi"] = (idx + 1) % len(api_keys)
+
+            return result
+
+        except Exception as e:
+            error_str = str(e)
+            logging.warning(f"SerpAPI call failed with key index {idx}: {error_str}")
+
+            if is_rate_limit_error(e):
+                key_cooldown_db.add_key_cooldown(
+                    provider="serpapi",
+                    key_index=idx,
+                    error_code=getattr(e, 'status_code', '429'),
+                    error_message=error_str
+                )
+                logging.info(f"Added SerpAPI key {idx} to cooldown due to rate limiting")
+
+            last_exception = e
+            continue
+
+    logging.error(f"All SerpAPI keys failed. Last error: {str(last_exception)}")
+    return {"error": f"All SerpAPI keys failed: {str(last_exception)}"}
+
+def format_serpapi_results(results):
+    """Format SerpAPI Google Lens results for readability."""
+    if "error" in results:
+        return f"SerpAPI's Google Lens API results:\n\nError: {results['error']}"
+
+    formatted_content = "SerpAPI's Google Lens API results:\n\n"
+
+    if "visual_matches" in results and results["visual_matches"]:
+        formatted_content += "Visual Matches:\n"
+        for i, match in enumerate(results["visual_matches"][:5], 1):  
+            formatted_content += f"{i}. {match.get('title', 'No title')}\n"
+            formatted_content += f"   Source: {match.get('source', 'Unknown')}\n"
+            if "price" in match and match["price"]:
+                formatted_content += f"   Price: {match['price'].get('value', 'N/A')}\n"
+            formatted_content += f"   Link: {match.get('link', 'No link')}\n\n"
+
+    if "related_content" in results and results["related_content"]:
+        formatted_content += "Related Content:\n"
+        for i, content in enumerate(results["related_content"][:3], 1):
+            formatted_content += f"{i}. {content.get('query', 'No query')}\n"
+        formatted_content += "\n"
+
+    return formatted_content
 
 class KeyCooldownDB:
     """
@@ -1028,7 +1124,8 @@ class MsgNode:
     reddit_links: list = field(default_factory=list)  
     reddit_content: Optional[str] = None
     general_urls: list = field(default_factory=list)  
-    url_content: Optional[str] = None  
+    url_content: Optional[str] = None
+    serpapi_lens_results: Optional[str] = None  
 
     role: Literal["user", "assistant"] = "assistant"
     user_id: Optional[int] = None
@@ -1165,6 +1262,11 @@ async def on_message(new_msg):
     elif re.match(r'^\s*at ai\b', cleaned_content.lower()):
         cleaned_content = re.sub(r'^\s*at ai\b', '', cleaned_content, flags=re.IGNORECASE).lstrip()
 
+    is_lens_query = bool(re.match(r'^\s*lens\b', cleaned_content, re.IGNORECASE))
+    if is_lens_query:
+
+        cleaned_content = re.sub(r'^\s*lens\b', '', cleaned_content, flags=re.IGNORECASE).lstrip()
+
     if not cleaned_content:
 
         has_reference = bool(new_msg.reference)
@@ -1213,6 +1315,9 @@ async def on_message(new_msg):
     reddit_user_agent = reddit_config.get("user_agent", "llmcord-bot/1.0")
     enable_reddit = reddit_config.get("enable", True) and asyncpraw and reddit_client_id and reddit_client_secret
 
+    serpapi_config = cfg.get("serpapi", {})
+    enable_serpapi = serpapi_config.get("enable", True)
+
     if is_gemini:
         provider_config = cfg["providers"][provider]
         enable_grounding = provider_config.get("enable_grounding", False)
@@ -1248,6 +1353,11 @@ async def on_message(new_msg):
                 elif re.match(r'^\s*at ai\b', cleaned_content.lower()):
                     cleaned_content = re.sub(r'^\s*at ai\b', '', cleaned_content, flags=re.IGNORECASE).lstrip()
 
+                is_lens_query = bool(re.match(r'^\s*lens\b', cleaned_content, re.IGNORECASE))
+                if is_lens_query:
+
+                    cleaned_content = re.sub(r'^\s*lens\b', '', cleaned_content, flags=re.IGNORECASE).lstrip()
+
                 good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(type) for type in ("text", "image"))]
 
                 attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
@@ -1263,6 +1373,22 @@ async def on_message(new_msg):
                     for att, resp in zip(good_attachments, attachment_responses)
                     if att.content_type.startswith("image")
                 ]
+
+                if is_lens_query and enable_serpapi and curr_node.images and curr_msg.author != discord_client.user:
+                    try:
+
+                        image_attachments = [att for att in good_attachments if att.content_type.startswith("image")]
+                        if image_attachments:
+                            serpapi_results = await safe_serpapi_processor(
+                                image_url=image_attachments[0].url,
+                                serpapi_config=serpapi_config,
+                                httpx_client=httpx_client
+                            )
+                            curr_node.serpapi_lens_results = format_serpapi_results(serpapi_results)
+                            logging.info(f"Processed image with SerpAPI Google Lens for message {curr_msg.id}")
+                    except Exception as e:
+                        logging.error(f"Error processing image with SerpAPI Google Lens: {str(e)}")
+                        curr_node.serpapi_lens_results = f"SerpAPI's Google Lens API results:\n\nError: {str(e)}"
 
                 youtube_links = extract_youtube_links(curr_node.text)
                 curr_node.youtube_links = [(video_id, full_url) for video_id, full_url in youtube_links]
@@ -1347,7 +1473,8 @@ async def on_message(new_msg):
 
             has_youtube_content = curr_node.youtube_content and curr_node.role == "user"
             has_reddit_content = curr_node.reddit_content and curr_node.role == "user"
-            has_url_content = curr_node.url_content and curr_node.role == "user"  
+            has_url_content = curr_node.url_content and curr_node.role == "user"
+            has_serpapi_content = curr_node.serpapi_lens_results and curr_node.role == "user"
 
             if has_youtube_gemini and len(curr_node.youtube_links) > 0:
                 video_id, full_url = curr_node.youtube_links[0]
@@ -1368,7 +1495,7 @@ async def on_message(new_msg):
                 messages.append(message)
                 logging.info(f"Added YouTube link {full_url} to the message (Gemini native handling)")
 
-            elif has_youtube_content or has_reddit_content or has_url_content:
+            elif has_youtube_content or has_reddit_content or has_url_content or has_serpapi_content:
                 content = curr_node.text[:max_text]
 
                 if has_youtube_content:
@@ -1379,6 +1506,9 @@ async def on_message(new_msg):
 
                 if has_url_content:
                     content = f"{content}\n\n{curr_node.url_content}"
+
+                if has_serpapi_content:
+                    content = f"{content}\n\n{curr_node.serpapi_lens_results}"
 
                 if content != "":
                     message = dict(content=content, role=curr_node.role)
@@ -1398,6 +1528,9 @@ async def on_message(new_msg):
 
                     if has_url_content:
                         logging.info(f"Added message with general URL content")
+
+                    if has_serpapi_content:
+                        logging.info(f"Added message with SerpAPI Google Lens results")
 
             elif curr_node.images[:max_images]:
                 content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
