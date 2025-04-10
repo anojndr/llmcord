@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse, quote
 import os
 import sqlite3
 import time
+import io  
 
 import discord
 import discord.ui
@@ -62,6 +63,49 @@ PROVIDER_MODELS = {
 
 API_KEY_COOLDOWN_HOURS = 24
 DB_PATH = "api_key_cooldown.db"
+
+class GetOutputAsTextFileButton(discord.ui.View):
+    def __init__(self, response_content, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.response_content = response_content
+
+    @discord.ui.button(label="Get output as a text file", style=discord.ButtonStyle.secondary)
+    async def get_output_as_text_file(self, interaction: discord.Interaction, button: discord.ui.Button):
+
+        file = discord.File(fp=io.BytesIO(self.response_content.encode('utf-8')), filename="response.txt")
+
+        await interaction.response.send_message(file=file, ephemeral=False)
+
+class CombinedButtonView(discord.ui.View):
+    def __init__(self, grounding_embed=None, response_content=None):
+        super().__init__()
+        self.grounding_embed = grounding_embed
+        self.response_content = response_content
+
+        if grounding_embed:
+            self.add_item(self.ShowSourcesButton(grounding_embed))
+
+        if response_content:
+            self.add_item(self.GetTextFileButton(response_content))
+
+    class ShowSourcesButton(discord.ui.Button):
+        def __init__(self, grounding_embed):
+            super().__init__(label="Show Sources", style=discord.ButtonStyle.primary)
+            self.grounding_embed = grounding_embed
+
+        async def callback(self, interaction: discord.Interaction):
+            await interaction.response.send_message(embed=self.grounding_embed, ephemeral=False)
+
+    class GetTextFileButton(discord.ui.Button):
+        def __init__(self, response_content):
+            super().__init__(label="Get output as a text file", style=discord.ButtonStyle.secondary)
+            self.response_content = response_content
+
+        async def callback(self, interaction: discord.Interaction):
+
+            file = discord.File(fp=io.BytesIO(self.response_content.encode('utf-8')), filename="response.txt")
+
+            await interaction.response.send_message(file=file, ephemeral=False)
 
 async def safe_serpapi_processor(image_url, serpapi_config, httpx_client):
     """
@@ -514,9 +558,10 @@ async def safe_gemini_stream_processor(new_msg, provider, provider_config, model
                     embed.color = EMBED_COLOR_COMPLETE
 
                     view = None
+                    grounding_embed = None
+
                     if enable_grounding:
                         try:
-
                             grounding_metadata = await safe_gemini_grounding_retrieval(
                                 provider=provider,
                                 provider_config=provider_config,
@@ -526,10 +571,14 @@ async def safe_gemini_stream_processor(new_msg, provider, provider_config, model
                             )
 
                             if grounding_metadata:
-                                view = create_grounding_view(grounding_metadata)
-
+                                grounding_embed = create_grounding_embed(grounding_metadata)
                         except Exception as e:
                             logging.exception(f"Error preparing grounding metadata: {str(e)}")
+
+                    view = CombinedButtonView(
+                        grounding_embed=grounding_embed if grounding_embed else None,
+                        response_content=''.join(response_contents)
+                    )
 
                     await response_msgs[-1].edit(embed=embed, view=view)
 
@@ -579,7 +628,7 @@ async def safe_gemini_stream_processor(new_msg, provider, provider_config, model
         await new_msg.reply(embed=error_embed)
         return False
 
-def create_grounding_view(grounding_metadata):
+def create_grounding_embed(grounding_metadata):
     """Create a view with grounding metadata information."""
     grounding_embed = discord.Embed(
         title="📚 Sources",
@@ -677,9 +726,7 @@ def create_grounding_view(grounding_metadata):
             field = grounding_embed.fields.pop()
             total_size -= len(field.name) + len(field.value)
 
-    if grounding_embed.fields:
-        return ShowSourcesButton(grounding_embed)
-    return None
+    return grounding_embed if grounding_embed.fields else None
 
 async def safe_openai_stream_processor(new_msg, provider, provider_config, base_url, model, messages, extra_params, embed, response_msgs, response_contents, edit_task, use_plain_responses, max_message_length):
     """
@@ -783,6 +830,13 @@ async def safe_openai_stream_processor(new_msg, provider, provider_config, base_
                 success = True
 
                 provider_key_indices[provider] = (idx + 1) % len(api_keys)
+
+                if not use_plain_responses and response_msgs:
+                    embed.description = response_contents[-1]
+                    embed.color = EMBED_COLOR_COMPLETE
+
+                    view = GetOutputAsTextFileButton(response_content=''.join(response_contents))
+                    await response_msgs[-1].edit(embed=embed, view=view)
 
                 return True  
 
