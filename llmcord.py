@@ -32,7 +32,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
-VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "pixtral", "mistral-small", "llava", "vision", "vl")
+VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "pixtral", "mistral-small", "llava", "vision")
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
 GEMINI_PROVIDERS = ("google")
@@ -1160,6 +1160,7 @@ last_task_time = 0
 @dataclass
 class MsgNode:
     text: Optional[str] = None
+    file_text: Optional[str] = None  
     images: list = field(default_factory=list)
     youtube_links: list = field(default_factory=list)
     youtube_content: Optional[str] = None
@@ -1407,7 +1408,10 @@ async def on_message(new_msg):
                 curr_node.text = "\n".join(
                     ([cleaned_content] if cleaned_content else [])
                     + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
-                    + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
+                )
+
+                curr_node.file_text = "\n".join(
+                    [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
                 )
 
                 curr_node.images = [
@@ -1517,6 +1521,7 @@ async def on_message(new_msg):
             has_reddit_content = curr_node.reddit_content and curr_node.role == "user"
             has_url_content = curr_node.url_content and curr_node.role == "user"
             has_serpapi_content = curr_node.serpapi_lens_results and curr_node.role == "user"
+            has_file_content = curr_node.file_text and curr_node.role == "user"
 
             if has_youtube_gemini and len(curr_node.youtube_links) > 0:
                 video_id, full_url = curr_node.youtube_links[0]
@@ -1537,8 +1542,12 @@ async def on_message(new_msg):
                 messages.append(message)
                 logging.info(f"Added YouTube link {full_url} to the message (Gemini native handling)")
 
-            elif has_youtube_content or has_reddit_content or has_url_content or has_serpapi_content:
+            elif has_youtube_content or has_reddit_content or has_url_content or has_serpapi_content or has_file_content:
+
                 content = curr_node.text[:max_text]
+
+                if has_file_content:
+                    content = f"{content}\n\n{curr_node.file_text}"
 
                 if has_youtube_content:
                     content = f"{content}\n\n{curr_node.youtube_content}"
@@ -1574,8 +1583,13 @@ async def on_message(new_msg):
                     if has_serpapi_content:
                         logging.info(f"Added message with SerpAPI Google Lens results")
 
+                    if has_file_content:
+                        logging.info(f"Added message with text file content")
+
             elif curr_node.images[:max_images]:
-                content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
+
+                combined_text = curr_node.text + ("\n\n" + curr_node.file_text if curr_node.file_text else "")
+                content = ([dict(type="text", text=combined_text[:max_text])] if combined_text[:max_text] else []) + curr_node.images[:max_images]
 
                 message = dict(content=content, role=curr_node.role)
                 if accept_usernames and curr_node.user_id != None:
@@ -1583,7 +1597,9 @@ async def on_message(new_msg):
 
                 messages.append(message)
             else:
-                content = curr_node.text[:max_text]
+
+                combined_text = curr_node.text + ("\n\n" + curr_node.file_text if curr_node.file_text else "")
+                content = combined_text[:max_text]
 
                 if content != "":
                     message = dict(content=content, role=curr_node.role)
@@ -1592,7 +1608,7 @@ async def on_message(new_msg):
 
                     messages.append(message)
 
-            if len(curr_node.text) > max_text:
+            if len(curr_node.text) + (len(curr_node.file_text) if curr_node.file_text else 0) > max_text:
                 user_warnings.add(f"⚠️ Max {max_text:,} characters per message")
             if len(curr_node.images) > max_images:
                 user_warnings.add(f"⚠️ Max {max_images} image{'' if max_images == 1 else 's'} per message" if max_images > 0 else "⚠️ Can't see images")
