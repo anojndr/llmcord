@@ -587,6 +587,28 @@ def create_grounding_view(grounding_metadata):
         color=discord.Color.blue()
     )
 
+    def batch_items(items, max_length=900):
+        """Helper function to batch items to fit within Discord's field limits"""
+        batches = []
+        current_batch = []
+        current_length = 0
+
+        for item in items:
+
+            if current_length + len(item) + 1 > max_length:  
+                if current_batch:  
+                    batches.append(current_batch)
+                current_batch = [item]
+                current_length = len(item)
+            else:
+                current_batch.append(item)
+                current_length += len(item) + 1  
+
+        if current_batch:  
+            batches.append(current_batch)
+
+        return batches
+
     if hasattr(grounding_metadata, 'web_search_queries') and grounding_metadata.web_search_queries:
         search_queries = []
         for query in grounding_metadata.web_search_queries:
@@ -594,46 +616,66 @@ def create_grounding_view(grounding_metadata):
             search_queries.append(f"[{query}]({search_url})")
 
         if search_queries:
-            grounding_embed.add_field(
-                name="Search Queries",
-                value="\n".join(search_queries),
-                inline=False
-            )
+
+            query_batches = batch_items(search_queries)
+
+            for i, batch in enumerate(query_batches):
+                field_name = "Search Queries" if i == 0 else f"More Queries ({i+1})"
+                field_value = "\n".join(batch)
+
+                if len(field_value) > 1024:
+                    logging.warning(f"Query field value too long ({len(field_value)} chars), truncating")
+                    field_value = field_value[:1020] + "..."
+
+                grounding_embed.add_field(
+                    name=field_name,
+                    value=field_value,
+                    inline=False
+                )
 
     if hasattr(grounding_metadata, 'grounding_chunks') and grounding_metadata.grounding_chunks:
         all_sources = []
-        for i, chunk in enumerate(grounding_metadata.grounding_chunks[:10]):  
+        for i, chunk in enumerate(grounding_metadata.grounding_chunks[:10]):
             if hasattr(chunk, 'web') and hasattr(chunk.web, 'uri') and hasattr(chunk.web, 'title'):
                 title = chunk.web.title
-                if len(title) > 100:
-                    title = title[:97] + "..."
-                all_sources.append(f"[{title}]({chunk.web.uri})")
+
+                if len(title) > 80:
+                    title = title[:77] + "..."
+                source_link = f"[{title}]({chunk.web.uri})"
+
+                if len(source_link) > 900:
+                    logging.warning(f"Source link too long ({len(source_link)} chars), truncating")
+                    source_link = source_link[:897] + "..."
+                all_sources.append(source_link)
 
         if all_sources:
-            sources_batches = []
-            current_batch = []
-            current_length = 0
 
-            for source in all_sources:
-                if current_length + len(source) + 1 > 1000:  
-                    if current_batch:  
-                        sources_batches.append(current_batch)
-                    current_batch = [source]
-                    current_length = len(source)
-                else:
-                    current_batch.append(source)
-                    current_length += len(source) + 1  
+            source_batches = batch_items(all_sources)
 
-            if current_batch:  
-                sources_batches.append(current_batch)
-
-            for i, batch in enumerate(sources_batches):
+            for i, batch in enumerate(source_batches):
                 field_name = "Top Sources" if i == 0 else f"More Sources ({i+1})"
+                field_value = "\n".join(batch)
+
+                if len(field_value) > 1024:
+                    logging.warning(f"Source field value too long ({len(field_value)} chars), truncating")
+                    field_value = field_value[:1020] + "..."
+
                 grounding_embed.add_field(
                     name=field_name,
-                    value="\n".join(batch),
+                    value=field_value,
                     inline=False
                 )
+
+    total_size = len(grounding_embed.title) + len(grounding_embed.description)
+    for field in grounding_embed.fields:
+        total_size += len(field.name) + len(field.value)
+
+    if total_size > 5900:  
+        logging.warning(f"Total embed size too large ({total_size} chars), removing some fields")
+
+        while total_size > 5900 and grounding_embed.fields:
+            field = grounding_embed.fields.pop()
+            total_size -= len(field.name) + len(field.value)
 
     if grounding_embed.fields:
         return ShowSourcesButton(grounding_embed)
