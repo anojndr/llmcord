@@ -1,9 +1,8 @@
-# config-example.yaml
 # Discord settings:
 
-bot_token: 
-client_id: 
-status_message: 
+bot_token: YOUR_DISCORD_BOT_TOKEN
+client_id: YOUR_DISCORD_CLIENT_ID
+status_message: "Chatting with LLMs | github.com/jakobdylanc/llmcord"
 
 max_text: 100000
 max_images: 5
@@ -14,44 +13,14 @@ allow_dms: true
 
 permissions:
   users:
-    allowed_ids: []
+    allowed_ids: [] # Empty = allow all users
     blocked_ids: []
   roles:
-    allowed_ids: []
+    allowed_ids: [] # Empty = allow all roles (in guilds)
     blocked_ids: []
   channels:
-    allowed_ids: []
+    allowed_ids: [] # Empty = allow all channels (in guilds)
     blocked_ids: []
-
-
-# YouTube settings:
-youtube:
-  api_key: # YouTube Data API v3 key for processing video content
-  enable: true  # Enable or disable YouTube integration globally
-  webshare:
-    proxy_username: # Your Webshare proxy username
-    proxy_password: # Your Webshare proxy password
-    enable: false  # Set to true to enable Webshare proxies for YouTube transcripts
-
-
-# Reddit settings:
-reddit:
-  client_id: # Reddit API client ID for processing Reddit content
-  client_secret: # Reddit API client secret
-  user_agent: llmcord-bot/1.0  # User agent to use when accessing Reddit API
-  enable: true  # Enable or disable Reddit integration globally
-
-
-# SerpAPI settings:
-serpapi:
-  # Single API key (traditional method)
-  api_key: # Your SerpAPI key for Google Lens image analysis
-  # Multiple API keys (for rotation)
-  api_keys:
-    # - your_serpapi_key_1
-    # - your_serpapi_key_2
-    # - your_serpapi_key_3
-  enable: true  # Enable or disable SerpAPI Google Lens integration globally
 
 
 # LLM settings:
@@ -59,61 +28,79 @@ serpapi:
 providers:
   openai:
     base_url: https://api.openai.com/v1
-    # Single API key (traditional method)
-    api_key: 
-    # Multiple API keys (for rotation)  
-    api_keys:
-      # - your_key_1
-      # - your_key_2
-      # - your_key_3
+    api_keys: # Use 'api_keys' (plural) which is a list
+      - YOUR_OPENAI_KEY_1
+      # - YOUR_OPENAI_KEY_2
+      # - ... add more keys as needed
   x-ai:
     base_url: https://api.x.ai/v1
-    api_key: 
-    # api_keys:
-    #   - key1
-    #   - key2
+    api_keys:
+      - YOUR_XAI_KEY_1
   mistral:
     base_url: https://api.mistral.ai/v1
-    api_key: 
-    # api_keys:
-    #   - key1
-    #   - key2
+    api_keys:
+      - YOUR_MISTRAL_KEY_1
   groq:
     base_url: https://api.groq.com/openai/v1
-    api_key: 
-    # api_keys:
-    #   - key1
-    #   - key2
+    api_keys:
+      - YOUR_GROQ_KEY_1
   openrouter:
     base_url: https://openrouter.ai/api/v1
-    api_key: 
-    # api_keys:
-    #   - key1
-    #   - key2
-  google:
-    api_key:
-    # api_keys:
-    #   - key1
-    #   - key2
-    enable_grounding: true  # Enable or disable Google Search grounding
-    enable_youtube: true    # Override global YouTube setting for Gemini
-    use_native_youtube: false # Use native YouTube API for Gemini
+    api_keys:
+      - YOUR_OPENROUTER_KEY_1
+  # --- Local / No Key Providers ---
   ollama:
     base_url: http://localhost:11434/v1
+    api_keys: [] # Keep empty list if no key needed
   lmstudio:
-    base_url: http://localhost:1234/v1  
+    base_url: http://localhost:1234/v1
+    api_keys: []
   vllm:
     base_url: http://localhost:8000/v1
+    api_keys: []
   oobabooga:
     base_url: http://localhost:5000/v1
+    api_keys: []
   jan:
     base_url: http://localhost:1337/v1
+    api_keys: []
+  # --- Google Gemini ---
+  google:
+    # No base_url needed for google-genai
+    api_keys: # Use 'api_keys' (plural) which is a list
+      - YOUR_GEMINI_KEY_1
+      # - YOUR_GEMINI_KEY_2
+      # - ... add more keys as needed
 
-model: openai/gpt-4o
+# Select the model using 'provider_name/model_name'
+# Examples: openai/gpt-4.1, google/gemini-2.0-flash, ollama/llama3.1
+model: openai/gpt-4.1
 
 extra_api_parameters:
   max_tokens: 4096
   temperature: 1.0
+  # Add other provider-specific parameters here if needed
+  # e.g., top_p: 0.9
 
 system_prompt: >
-  You are a helpful assistant.
+  You are a helpful assistant integrated into Discord. Be concise unless asked otherwise.
+
+# YouTube Data API settings:
+# Required for fetching video details (title, description, comments)
+# NOTE: This uses a *single* key. Key rotation is NOT implemented for YouTube Data API.
+youtube_api_key: YOUR_YOUTUBE_DATA_API_KEY
+
+# Reddit API settings:
+# Required for fetching content from Reddit URLs
+# NOTE: This uses a *single* set of credentials. Key rotation is NOT implemented for Reddit.
+reddit:
+  client_id: YOUR_REDDIT_CLIENT_ID
+  client_secret: YOUR_REDDIT_CLIENT_SECRET
+  user_agent: "discord:your-bot-name:v1.0 (by /u/your-reddit-username)" # Replace with your info
+
+# SerpApi settings:
+# Required for Google Lens image search (using the "lens" keyword)
+serpapi_api_keys: # Use 'serpapi_api_keys' (plural) which is a list
+  - YOUR_SERPAPI_KEY_1
+  # - YOUR_SERPAPI_KEY_2
+  # - ... add more keys as needed
