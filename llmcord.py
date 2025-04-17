@@ -37,7 +37,7 @@ from googleapiclient.discovery import build as build_google_api_client
 from googleapiclient.errors import HttpError as GoogleApiHttpError
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG, # Set to DEBUG to capture detailed logs
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
@@ -1469,6 +1469,15 @@ async def on_message(new_msg): # new_msg is the initial message from the user
                 for warning in sorted(user_warnings):
                     base_embed.add_field(name=warning, value="", inline=False)
 
+                # --- START DEBUG LOGGING ---
+                logging.debug(f"--- Sending API Request (Key Index: {key_index}) ---")
+                logging.debug(f"Provider: {provider}, Model: {model_name}")
+                # Use repr for potentially large history to avoid overly long logs
+                logging.debug(f"API History (repr): {repr(api_history)}")
+                logging.debug(f"Extra Body: {cfg.get('extra_api_parameters', {})}")
+                logging.debug(f"-------------------------------------------------")
+                # --- END DEBUG LOGGING ---
+
                 try:
                     # --- Initialize Client with Current Key ---
                     genai_client = None
@@ -1744,8 +1753,8 @@ async def on_message(new_msg): # new_msg is the initial message from the user
                      # Decide if retryable. For safety blocks or bad args, maybe not.
                      # For now, let's retry with the next key unless it's clearly a permanent issue with the prompt itself.
                      error_str = str(e).lower()
-                     if "safety filter" in error_str or "prompt" in error_str or "invalid" in error_str:
-                          logging.warning("Error seems related to prompt/safety/invalid arg, stopping retries for this request.")
+                     if "safety filter" in error_str or "prompt" in error_str or "invalid" in error_str or "match is not a function" in error_str: # Added the specific error message check
+                          logging.warning("Error seems related to prompt/safety/invalid arg/server bug, stopping retries for this request.")
                           break # Stop trying keys
                      # Continue to next key otherwise
                 except Exception as e:
@@ -1756,7 +1765,7 @@ async def on_message(new_msg): # new_msg is the initial message from the user
 
             # --- After Key Rotation Loop ---
             if not llm_call_succeeded:
-                error_message = f"⚠️ All {provider} API keys failed or were rate-limited."
+                error_message = f"⚠️ LLM call failed after trying all available keys for provider {provider}." # Simplified initial message
                 if final_error:
                     error_message += f" Last error: {type(final_error).__name__}"
                     # Provide more specific feedback for common errors
@@ -1766,8 +1775,18 @@ async def on_message(new_msg): # new_msg is the initial message from the user
                          error_message += " (Rate limit or quota exceeded)"
                     elif "safety filter" in str(final_error).lower():
                          error_message += " (Content blocked by safety filters)"
-                    elif "invalid" in str(final_error).lower():
-                         error_message += " (Invalid request/argument)"
+                    elif "invalid" in str(final_error).lower() or "match is not a function" in str(final_error).lower(): # Added check here too
+                         error_message += " (Invalid request/argument or server error)"
+                    # Add the raw error message if it's an APIError for more context
+                    # FIX: Check for OpenAIAPIError and google_api_core_exceptions.GoogleAPICallError
+                    if isinstance(final_error, (OpenAIAPIError, google_api_core_exceptions.GoogleAPICallError)):
+                         try:
+                             # Attempt to get the message from the error object
+                             detail_message = getattr(final_error, 'message', str(final_error))
+                             if detail_message and len(detail_message) < 100: # Keep it concise
+                                 error_message += f" - {detail_message}"
+                         except Exception:
+                             pass # Ignore if message extraction fails
 
 
                 logging.error(f"LLM call failed after trying all available keys for provider {provider}. Last error: {final_error}")
