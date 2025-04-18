@@ -1,1893 +1,1724 @@
 import asyncio
-from base64 import b64encode
-from collections import defaultdict
+from base64 import b64encode, b64decode
 from dataclasses import dataclass, field
-from datetime import datetime as dt, timedelta, timezone
+from datetime import datetime as dt
+import functools
+import io
 import logging
-import random
 import re
-from typing import Literal, Optional, List, Tuple, Dict, Any, Set
 import os
-import io # Import io for file handling
-import sqlite3
-import time
-from urllib.parse import urlparse, parse_qs
-import math # Import math for ceiling division
+from typing import Literal, Optional, List, Dict, Any, Tuple, Set
+import textwrap
+import sqlite3 # Import for specific exceptions if needed later
 
-import discord # type: ignore
-from discord import app_commands
-import discord.ui
-import httpx
-import yaml
+import discord
 from bs4 import BeautifulSoup
-import asyncpraw
-from serpapi import GoogleSearch as SerpApiSearch
-
-# Conditional imports based on provider
-from openai import AsyncOpenAI, RateLimitError as OpenAIRateLimitError, APIError as OpenAIAPIError, APIConnectionError as OpenAIConnectionError, AuthenticationError as OpenAIAuthenticationError
-from google import genai as google_genai
-from google.genai import types as google_genai_types
-from google.genai import errors as google_genai_errors
-from google.api_core import exceptions as google_api_core_exceptions
-from asyncprawcore import exceptions as asyncprawcore_exceptions
-
-# YouTube specific imports
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
-from googleapiclient.discovery import build as build_google_api_client
+from discord import ui, Interaction
+from googleapiclient.discovery import build as build_google_api
 from googleapiclient.errors import HttpError as GoogleApiHttpError
+import httpx
+# Import specific OpenAI errors
+from openai import (
+    AsyncOpenAI, APIError, RateLimitError as OpenAIRateLimitError,
+    APIConnectionError, APITimeoutError, BadRequestError as OpenAIBadRequestError,
+    AuthenticationError as OpenAIAuthenticationError, PermissionDeniedError as OpenAIPermissionDeniedError
+)
+import asyncpraw
+import asyncprawcore
+import yaml
+from google import genai
+from google.genai import types as genai_types
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+
+# Import errors from the correct module
+from google.genai import errors as genai_errors
+# Import google-api-core exceptions for specific error handling like rate limits
+from google.api_core import exceptions as core_exceptions
+
+
+# Import custom managers
+from api_key_manager import ApiKeyManager
+from rate_limit_manager import COOLDOWN_PERIOD_HOURS # Import the constant
 
 logging.basicConfig(
-    level=logging.DEBUG, # Set to DEBUG to capture detailed logs
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
-# --- Constants ---
-VISION_MODEL_TAGS = ("gpt-4", "claude-3", "gemini", "gemma", "llama", "pixtral", "mistral-small", "vision", "vl", "flash", "pro")
-PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
+VISION_MODEL_TAGS = ("gpt-4", "o3", "o4", "claude-3", "gemini", "gemma", "llama", "pixtral", "mistral-small", "vision", "vl")
+PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai") # Gemini does not support the 'name' field
+BOT_MENTION_KEYWORD = "at ai" # Case-insensitive keyword to trigger the bot
 
 EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()
+EMBED_COLOR_ERROR = discord.Color.red()
 
 STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1.3 # Slightly increased delay
+MAX_FINAL_EDIT_RETRIES = 3 # Number of retries for the final message edit
+FINAL_EDIT_RETRY_DELAY = 1.5 # Seconds between final edit retries
 
-# URL Regex patterns
-YOUTUBE_URL_PATTERN = re.compile(
-    r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|embed\/|v\/|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
-)
-REDDIT_URL_PATTERN = re.compile(
-    r'(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/comments/[a-zA-Z0-9_]+(?:/[^/ ]*)?)|(https?://(?:www\.)?reddit\.com/r/[a-zA-Z0-9_]+/s/[a-zA-Z0-9_]+)'
-)
-GENERAL_URL_PATTERN = re.compile(r'https?://\S+')
+# General URL processing settings
+GENERAL_URL_TIMEOUT = 10 # seconds
+MAX_REDDIT_COMMENTS = 100 # Keep a limit on fetched comments for performance/API usage
 
-# Cache and DB settings
-MAX_MESSAGE_NODES = 250 # Increased cache size slightly
-RATE_LIMIT_DB_DIR = "ratelimit_db"
-RATE_LIMIT_COOLDOWN_SECONDS = 24 * 60 * 60 # 24 hours
-DB_CLEANUP_INTERVAL_SECONDS = 60 * 60 # Check every hour
+MAX_MESSAGE_NODES = 1000 # Increased cache size
+MAX_FULL_RESPONSE_CACHE = 500 # Limit cache size for full responses
 
 # --- Configuration Loading ---
+_config_cache = None
+_config_lock = asyncio.Lock()
 
-# User-specific model selections (in-memory for now)
-# Stores {user_id: "provider/model_name"}
-user_model_preferences: Dict[int, str] = {}
+async def get_config(filename="config.yaml"):
+    """Loads config with basic caching and async lock."""
+    global _config_cache
+    async with _config_lock:
+        # For simplicity in this example, we'll just reload every time.
+        # A more robust solution might check file modification time.
+        try:
+            with open(filename, "r") as file:
+                _config_cache = yaml.safe_load(file)
+                # --- API Key List Handling ---
+                # Ensure api_key is always a list
+                providers = _config_cache.get("providers", {})
+                for provider_name, provider_config in providers.items():
+                    api_key_value = provider_config.get("api_key")
+                    if api_key_value and not isinstance(api_key_value, list):
+                        # Convert single key string to list
+                        provider_config["api_key"] = [api_key_value]
+                    elif not api_key_value:
+                         # Ensure it's an empty list if missing or None/empty string
+                         provider_config["api_key"] = []
+                # --- End API Key List Handling ---
+                return _config_cache
+        except FileNotFoundError:
+            logging.error(f"CRITICAL: {filename} not found. Please create it based on config-example.yaml.")
+            exit()
+        except yaml.YAMLError as e:
+            logging.error(f"CRITICAL: Error parsing {filename}: {e}")
+            exit()
+        except Exception as e:
+            logging.error(f"CRITICAL: Unexpected error loading config {filename}: {e}")
+            exit()
 
-# Define allowed models per provider for the slash command
-ALLOWED_MODELS = {
-    "google": ["gemini-2.0-flash", "gemini-2.5-pro-exp-03-25"],
-    "openai": ["gpt-4.1", "o3-mini"],
-}
+# --- Global Variables & Clients ---
+cfg = asyncio.run(get_config()) # Initial load
 
-def get_config(filename="config.yaml"):
-    try:
-        with open(filename, "r", encoding='utf-8') as file:
-            config = yaml.safe_load(file)
-            # --- Validate and Structure API Keys ---
-            if 'providers' in config:
-                for provider_name, provider_cfg in config['providers'].items():
-                    if 'api_key' in provider_cfg and isinstance(provider_cfg['api_key'], str):
-                        # Convert single key to list for consistency
-                        provider_cfg['api_keys'] = [provider_cfg['api_key']]
-                        del provider_cfg['api_key'] # Remove old single key field
-                    elif 'api_keys' not in provider_cfg or not isinstance(provider_cfg['api_keys'], list):
-                         # Ensure api_keys list exists, even if empty (for providers like ollama)
-                         if provider_name != 'google': # Google requires keys
-                             provider_cfg['api_keys'] = []
-                         elif 'api_keys' not in provider_cfg:
-                              logging.warning(f"Provider '{provider_name}' requires 'api_keys' list in config.yaml.")
-                              provider_cfg['api_keys'] = [] # Initialize empty to prevent errors, but log warning
-
-            # Handle SerpAPI keys
-            if 'serpapi_api_key' in config and isinstance(config['serpapi_api_key'], str):
-                config['serpapi_api_keys'] = [config['serpapi_api_key']]
-                del config['serpapi_api_key']
-            elif 'serpapi_api_keys' not in config or not isinstance(config['serpapi_api_keys'], list):
-                config['serpapi_api_keys'] = []
-
-            return config
-    except FileNotFoundError:
-        logging.error(f"CRITICAL: {filename} not found. Please copy config-example.yaml to {filename} and configure it.")
-        exit(1)
-    except yaml.YAMLError as e:
-        logging.error(f"CRITICAL: Error parsing {filename}: {e}")
-        exit(1)
-    except Exception as e:
-        logging.error(f"CRITICAL: Unexpected error loading config: {e}")
-        exit(1)
-
-cfg = get_config()
-
-# --- Rate Limit Database Manager ---
-os.makedirs(RATE_LIMIT_DB_DIR, exist_ok=True)
-
-class RateLimitManager:
-    def __init__(self, service_name: str):
-        self.db_path = os.path.join(RATE_LIMIT_DB_DIR, f"{service_name}_ratelimit.db")
-        self._lock = asyncio.Lock()
-        self._conn = None
-        self._cursor = None
-        # Store the full list of keys for this service
-        self.all_keys = self._get_keys_from_config(service_name)
-        # Shuffle keys once at initialization for random rotation order
-        random.shuffle(self.all_keys)
-        logging.info(f"Initialized RateLimitManager for {service_name} with {len(self.all_keys)} keys.")
-
-    def _get_keys_from_config(self, service_name: str) -> List[str]:
-        """Helper to get the list of keys for a service from the global config."""
-        if service_name == "serpapi":
-            return cfg.get("serpapi_api_keys", [])
-        elif service_name in cfg.get("providers", {}):
-            return cfg["providers"][service_name].get("api_keys", [])
-        else:
-            return []
-
-    async def _connect(self):
-        """Establish SQLite connection."""
-        if self._conn is None:
-            self._conn = await asyncio.to_thread(sqlite3.connect, self.db_path, check_same_thread=False)
-            self._cursor = self._conn.cursor()
-            await asyncio.to_thread(self._cursor.execute, '''
-                CREATE TABLE IF NOT EXISTS rate_limited_keys (
-                    key TEXT PRIMARY KEY,
-                    timestamp REAL
-                )
-            ''')
-            await asyncio.to_thread(self._conn.commit)
-
-    async def close(self):
-        """Close the database connection."""
-        async with self._lock:
-            if self._conn:
-                await asyncio.to_thread(self._conn.close)
-                self._conn = None
-                self._cursor = None
-
-    async def add_key(self, key: str):
-        """Mark a key as rate-limited with the current timestamp."""
-        async with self._lock:
-            await self._connect()
-            current_time = time.time()
-            try:
-                await asyncio.to_thread(
-                    self._cursor.execute,
-                    "INSERT OR REPLACE INTO rate_limited_keys (key, timestamp) VALUES (?, ?)",
-                    (key, current_time)
-                )
-                await asyncio.to_thread(self._conn.commit)
-                logging.warning(f"Key starting with '{key[:4]}...' for service {os.path.basename(self.db_path).split('_')[0]} marked as rate-limited.")
-            except sqlite3.Error as e:
-                logging.error(f"SQLite error adding key {key[:4]}...: {e}")
-
-    async def is_rate_limited(self, key: str) -> bool:
-        """Check if a key is currently rate-limited (within the cooldown period)."""
-        async with self._lock:
-            await self._connect()
-            try:
-                await asyncio.to_thread(
-                    self._cursor.execute,
-                    "SELECT timestamp FROM rate_limited_keys WHERE key = ?",
-                    (key,)
-                )
-                result = await asyncio.to_thread(self._cursor.fetchone)
-                if result:
-                    timestamp = result[0]
-                    if time.time() - timestamp < RATE_LIMIT_COOLDOWN_SECONDS:
-                        return True
-                    else:
-                        # Cooldown expired, remove the key from the DB
-                        await asyncio.to_thread(
-                            self._cursor.execute,
-                            "DELETE FROM rate_limited_keys WHERE key = ?",
-                            (key,)
-                        )
-                        await asyncio.to_thread(self._conn.commit)
-                        logging.info(f"Rate limit cooldown expired for key starting with '{key[:4]}...'. Removed from DB.")
-                        return False
-                return False
-            except sqlite3.Error as e:
-                logging.error(f"SQLite error checking key {key[:4]}...: {e}")
-                return False # Assume not rate-limited if DB error occurs
-
-    async def get_available_keys(self) -> List[str]:
-        """Get a list of keys that are not currently rate-limited, maintaining shuffled order."""
-        available_keys = []
-        for key in self.all_keys: # Iterate through the pre-shuffled list
-            if not await self.is_rate_limited(key):
-                available_keys.append(key)
-        return available_keys
-
-    async def get_all_limited_keys_in_db(self) -> Set[str]:
-        """Returns a set of all keys currently present in the rate-limit DB."""
-        async with self._lock:
-            await self._connect()
-            try:
-                await asyncio.to_thread(
-                    self._cursor.execute,
-                    "SELECT key FROM rate_limited_keys"
-                )
-                results = await asyncio.to_thread(self._cursor.fetchall)
-                return {row[0] for row in results}
-            except sqlite3.Error as e:
-                logging.error(f"SQLite error getting all limited keys: {e}")
-                return set()
-
-    async def reset_if_all_limited(self) -> bool:
-        """Checks if all keys are rate-limited and resets the DB if true."""
-        if not self.all_keys: # No keys configured
-            return False
-
-        limited_keys_in_db = await self.get_all_limited_keys_in_db()
-        all_keys_set = set(self.all_keys)
-
-        # Check if the set of keys in the DB is exactly the same as all configured keys
-        if limited_keys_in_db == all_keys_set:
-            logging.warning(f"All {len(self.all_keys)} keys for service {os.path.basename(self.db_path).split('_')[0]} are rate-limited. Resetting database.")
-            await self.reset_db()
-            return True
-        return False
-
-    async def reset_db(self):
-        """Delete all entries from the rate-limited keys table."""
-        async with self._lock:
-            await self._connect()
-            try:
-                await asyncio.to_thread(
-                    self._cursor.execute,
-                    "DELETE FROM rate_limited_keys"
-                )
-                await asyncio.to_thread(self._conn.commit)
-                logging.info(f"Rate limit database reset for {os.path.basename(self.db_path).split('_')[0]}.")
-            except sqlite3.Error as e:
-                logging.error(f"SQLite error resetting database: {e}")
-
-    async def cleanup_expired_keys(self):
-        """Remove keys whose cooldown period has expired."""
-        async with self._lock:
-            await self._connect()
-            cutoff_time = time.time() - RATE_LIMIT_COOLDOWN_SECONDS
-            try:
-                await asyncio.to_thread(
-                    self._cursor.execute,
-                    "DELETE FROM rate_limited_keys WHERE timestamp < ?",
-                    (cutoff_time,)
-                )
-                deleted_count = self._cursor.rowcount
-                await asyncio.to_thread(self._conn.commit)
-                if deleted_count > 0:
-                    logging.info(f"Cleaned up {deleted_count} expired rate-limited keys for {os.path.basename(self.db_path).split('_')[0]}.")
-            except sqlite3.Error as e:
-                logging.error(f"SQLite error during cleanup: {e}")
-
-# --- Initialize Rate Limit Managers ---
-rate_limit_managers: Dict[str, RateLimitManager] = {}
-# Initialize for LLM providers listed in config
-for provider_name in cfg.get("providers", {}):
-    rate_limit_managers[provider_name] = RateLimitManager(provider_name)
-# Initialize for SerpAPI
-rate_limit_managers["serpapi"] = RateLimitManager("serpapi")
-
-# --- Background Cleanup Task ---
-async def cleanup_task():
-    while True:
-        await asyncio.sleep(DB_CLEANUP_INTERVAL_SECONDS)
-        logging.debug("Running periodic rate limit cleanup...")
-        for manager in rate_limit_managers.values():
-            await manager.cleanup_expired_keys()
-
-# --- Discord Client Setup ---
-if client_id := cfg.get("client_id"): # Use .get for safety
+if client_id := cfg.get("client_id"):
     logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/api/oauth2/authorize?client_id={client_id}&permissions=412317273088&scope=bot\n")
 
 intents = discord.Intents.default()
 intents.message_content = True
 activity = discord.CustomActivity(name=(cfg.get("status_message") or "github.com/jakobdylanc/llmcord")[:128])
 discord_client = discord.Client(intents=intents, activity=activity)
-tree = app_commands.CommandTree(discord_client)
 
-# --- Global Clients and State ---
-httpx_client = httpx.AsyncClient()
+HTTPX_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+httpx_client = httpx.AsyncClient(headers=HTTPX_HEADERS, follow_redirects=True, timeout=GENERAL_URL_TIMEOUT)
+
 msg_nodes: Dict[int, 'MsgNode'] = {}
-active_tasks: Dict[int, asyncio.Lock] = {} # Store active generation tasks
-youtube_transcript_api_client = YouTubeTranscriptApi() # Initialize transcript client once
-youtube_data_service = None # Initialize later if key exists
-youtube_api_key = cfg.get("youtube_api_key") # Store key for potential re-init
-reddit_client = None # Initialize later if config exists
+last_task_time = 0
+gemini_grounding_metadata: Dict[int, Any] = {}
+full_response_texts: Dict[int, str] = {}
+reddit_client: Optional[asyncpraw.Reddit] = None
+api_key_managers: Dict[str, ApiKeyManager] = {} # Cache for ApiKeyManager instances
+api_key_managers_lock = asyncio.Lock() # Lock for accessing/creating managers
 
-# --- Data Classes ---
-@dataclass
-class MsgNode:
-    # Content fields
-    text: Optional[str] = None
-    images: list = field(default_factory=list) # Stores tuples of (mime_type, bytes)
-    youtube_content: Optional[str] = None
-    reddit_content: Optional[str] = None
-    generic_url_content: Optional[str] = None
-    google_lens_content: Optional[str] = None
-
-    # Role/User info
-    role: Literal["user", "assistant"] = "assistant"
-    user_id: Optional[int] = None
-
-    # Metadata fields
-    has_bad_attachments: bool = False
-    fetch_parent_failed: bool = False
-    grounding_metadata: Optional[google_genai_types.GroundingMetadata] = None
-
-    # Structure fields
-    parent_msg: Optional[discord.Message] = None
-    next_segment_msg_id: Optional[int] = None # Added field to link split messages
-
-    # Concurrency control
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-class ResponseActionsView(discord.ui.View):
-    """A View to show buttons for interacting with the bot's response."""
-    def __init__(self, message_id: int, grounding_metadata: Optional[google_genai_types.GroundingMetadata], timeout=None):
-        super().__init__(timeout=timeout)
-        # IMPORTANT: message_id MUST be updated if the view is attached to a new message
-        # This is handled in update_response_messages
-        self.message_id = message_id
-        self.grounding_metadata = grounding_metadata
-
-        # Conditionally add the "Show Sources" button if grounding metadata exists
-        # Check for actual content in grounding metadata
-        has_queries = bool(getattr(self.grounding_metadata, 'web_search_queries', []))
-        # Ensure grounding_chunks is iterable before checking its contents
-        grounding_chunks = getattr(self.grounding_metadata, 'grounding_chunks', None) or [] # FIX: Ensure iterable
-        has_web_chunks = any(hasattr(chunk, 'web') for chunk in grounding_chunks)
-
-        if self.grounding_metadata and (has_queries or has_web_chunks):
-            # Create and add the ShowSourcesButton instance
-            self.add_item(self.ShowSourcesButton(parent_view=self)) # Pass reference to parent view
-
-        # Always add the "Get Output File" button
-        self.add_item(self.GetOutputFileButton(parent_view=self)) # Pass reference to parent view
-
-    # --- Button Definitions as Inner Classes ---
-    class ShowSourcesButton(discord.ui.Button):
-        def __init__(self, parent_view: 'ResponseActionsView'):
-            # Use a simpler, unique ID based on the parent view's initial message_id
-            # The actual message_id used in the callback comes from parent_view.message_id
-            super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary, custom_id=f"show_sources_{parent_view.message_id}")
-            self.parent_view = parent_view
-
-        async def callback(self, interaction: discord.Interaction):
-            await interaction.response.defer(thinking=True)
-            # Use the potentially updated message_id from the parent view
-            message_id = self.parent_view.message_id
-            node = msg_nodes.get(message_id)
-
-            # Use grounding_metadata stored in the parent view
-            metadata = self.parent_view.grounding_metadata
-
-            if not node or not metadata:
-                # Check the node directly as well, in case the view's metadata is stale (less likely but possible)
-                if node and node.grounding_metadata:
-                    metadata = node.grounding_metadata
-                else:
-                    await interaction.followup.send("Sorry, I couldn't find the grounding sources for this message.")
-                    return
-
-            embed = discord.Embed(title="Grounding Information", color=discord.Color.blue())
-
-            # Display Search Queries
-            if queries := getattr(metadata, 'web_search_queries', []):
-                query_text = "\n".join(f"- `{q}`" for q in queries)
-                if len(query_text) > 1024:
-                    query_text = query_text[:1021] + "..."
-                embed.add_field(name="Search Queries Used", value=query_text, inline=False)
-
-            # Display Grounding Sources (URIs and Titles)
-            sources_text = []
-            # Ensure grounding_chunks is iterable before checking its contents
-            chunks = getattr(metadata, 'grounding_chunks', None) or [] # FIX: Ensure iterable
-            if chunks:
-                for i, chunk in enumerate(chunks):
-                    if web_info := getattr(chunk, 'web', None):
-                        title = getattr(web_info, 'title', 'Unknown Title')
-                        uri = getattr(web_info, 'uri', None)
-                        if uri:
-                            title_display = title[:100] + ('...' if len(title) > 100 else '')
-                            sources_text.append(f"{i+1}. [{title_display}]({uri})")
-
-            if sources_text:
-                source_value = "\n".join(sources_text)
-                if len(source_value) > 1024:
-                    source_value = source_value[:1021] + "..."
-                embed.add_field(name="Sources Found", value=source_value, inline=False)
-
-            if not embed.fields:
-                embed.description = "No grounding information (queries or sources) available."
-
-            await interaction.followup.send(embed=embed)
-
-    class GetOutputFileButton(discord.ui.Button):
-        def __init__(self, parent_view: 'ResponseActionsView'):
-            # Use a simpler, unique ID based on the parent view's initial message_id
-            super().__init__(label="Get Output as a Text File", style=discord.ButtonStyle.secondary, custom_id=f"get_output_file_{parent_view.message_id}")
-            self.parent_view = parent_view
-
-        async def callback(self, interaction: discord.Interaction):
-            """Sends the full response text as a text file."""
-            await interaction.response.defer(thinking=True)
-
-            # Use the potentially updated message_id from the parent view
-            message_id = self.parent_view.message_id
-            last_segment_node = msg_nodes.get(message_id)
-
-            if not last_segment_node or not last_segment_node.parent_msg:
-                await interaction.followup.send("Sorry, couldn't link this response to its origin.")
-                return
-
-            original_user_msg_id = last_segment_node.parent_msg.id
-
-            # --- Find the first segment node ---
-            response_segment_nodes = {} # Store node_id: node
-            next_segment_ids = set()
-            for node_id, node in msg_nodes.items():
-                # Check if it's an assistant response to the correct user message
-                if node.role == "assistant" and node.parent_msg and node.parent_msg.id == original_user_msg_id:
-                    response_segment_nodes[node_id] = node
-                    if node.next_segment_msg_id:
-                        next_segment_ids.add(node.next_segment_msg_id)
-
-            first_segment_node = None
-            # Find the node whose ID is not pointed to by any other node in this chain
-            for node_id, node in response_segment_nodes.items():
-                if node_id not in next_segment_ids:
-                    first_segment_node = node
-                    break # Found the head
-
-            if not first_segment_node:
-                # Fallback: If only one segment exists, it must be the one the button is on
-                if message_id in response_segment_nodes:
-                    first_segment_node = response_segment_nodes[message_id]
-                else:
-                    await interaction.followup.send("Sorry, couldn't determine the start of the response chain.")
-                    return
-            # --- End Find the first segment node ---
-
-
-            # --- Traverse forward from the first segment node ---
-            full_response_text_parts = []
-            curr_node = first_segment_node
-            processed_segment_ids_traversal = set()
-
-            while curr_node is not None:
-                # Find the message ID associated with the current node object
-                current_node_id = None
-                for msg_id, node_obj in response_segment_nodes.items():
-                    if node_obj == curr_node:
-                        current_node_id = msg_id
-                        break
-
-                # Safety check for loops or missing nodes during traversal
-                if current_node_id is None or current_node_id in processed_segment_ids_traversal:
-                    logging.warning(f"Traversal loop detected or node ID not found for response chain starting from user msg {original_user_msg_id}")
-                    break
-
-                processed_segment_ids_traversal.add(current_node_id)
-
-                node_text = curr_node.text
-                if node_text:
-                    full_response_text_parts.append(node_text)
-
-                next_segment_id = curr_node.next_segment_msg_id
-                # Ensure the next node exists in the global cache before proceeding
-                if next_segment_id and next_segment_id in msg_nodes:
-                    curr_node = msg_nodes.get(next_segment_id)
-                else:
-                    break # End of chain
-            # --- End Traverse forward ---
-
-            if not full_response_text_parts:
-                 await interaction.followup.send("The response content appears to be empty after processing.")
-                 return
-
-            # Join the collected parts WITHOUT extra newlines
-            full_response_text = "".join(full_response_text_parts) # FIX: Use empty string join
-
-            # Create a text file in memory
-            file_content = io.BytesIO(full_response_text.encode('utf-8'))
-            discord_file = discord.File(fp=file_content, filename="llm_response.txt")
-
-            await interaction.followup.send("Here is the full response:", file=discord_file)
-
-
-# --- Helper Functions ---
-
-def extract_video_id(url: str) -> Optional[str]:
-    """Extracts the YouTube video ID from a URL."""
-    match = YOUTUBE_URL_PATTERN.search(url)
-    return match.group(1) if match else None
-
-async def fetch_youtube_transcript(video_id: str) -> tuple[Optional[str], Optional[str]]:
-    """Fetches transcript asynchronously. Returns (transcript_text, error_message)."""
+# --- YouTube Data Fetching ---
+@functools.lru_cache(maxsize=2)
+def get_youtube_service(api_key):
+    """Builds and returns a YouTube Data API service object, caching the result."""
+    if not api_key:
+        logging.warning("YouTube Data API key is missing. Metadata/comments won't be fetched.")
+        return None
     try:
-        transcript_list = await asyncio.to_thread(youtube_transcript_api_client.list_transcripts, video_id)
-        fetched_transcript_obj = None
-        try:
-            transcript = transcript_list.find_manually_created_transcript(['en'])
-            fetched_transcript_obj = await asyncio.to_thread(transcript.fetch)
+        # Disable cache discovery file for potentially faster startup in some environments
+        return build_google_api('youtube', 'v3', developerKey=api_key, cache_discovery=False)
+    except Exception as e:
+        logging.error(f"Failed to build YouTube API client: {e}")
+        return None
+
+def fetch_youtube_transcript_sync(video_id):
+    """Synchronously fetches and formats the transcript for a given video ID."""
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        # Prioritize manual, then generated, in English first, then any language
+        transcript = None
+        try: transcript = transcript_list.find_manually_created_transcript(['en'])
         except NoTranscriptFound:
-            try:
-                transcript = transcript_list.find_generated_transcript(['en'])
-                fetched_transcript_obj = await asyncio.to_thread(transcript.fetch)
+            try: transcript = transcript_list.find_generated_transcript(['en'])
             except NoTranscriptFound:
-                found_transcripts = list(transcript_list)
-                if found_transcripts:
-                    original_transcript = found_transcripts[0]
-                    if original_transcript.is_translatable:
-                        try:
-                            translated_transcript_obj = await asyncio.to_thread(original_transcript.translate, 'en')
-                            fetched_transcript_obj = await asyncio.to_thread(translated_transcript_obj.fetch)
-                        except Exception as translate_e:
-                            logging.warning(f"Failed to translate transcript for {video_id} from {original_transcript.language}: {translate_e}")
-                            fetched_transcript_obj = await asyncio.to_thread(original_transcript.fetch)
-                    else:
-                         fetched_transcript_obj = await asyncio.to_thread(original_transcript.fetch)
+                 available_langs = [t.language_code for t in transcript_list]
+                 if available_langs:
+                     try: transcript = transcript_list.find_manually_created_transcript(available_langs)
+                     except NoTranscriptFound:
+                         try: transcript = transcript_list.find_generated_transcript(available_langs)
+                         except NoTranscriptFound: pass # No transcript found at all
 
-        if fetched_transcript_obj:
-            # youtube-transcript-api returns a list of dicts
-            full_transcript = " ".join([snippet['text'] for snippet in fetched_transcript_obj])
-            return full_transcript, None
+        if transcript:
+            fetched_transcript = transcript.fetch()
+            # Ensure snippet is a dict-like object before accessing 'text'
+            return "\n".join([entry['text'] for entry in fetched_transcript if isinstance(entry, dict) and 'text' in entry])
         else:
-            return None, "No suitable transcript found."
-
+            logging.info(f"No suitable transcript found for video ID: {video_id}")
+            return "[Transcript not found or unavailable]"
     except TranscriptsDisabled:
-        return None, "Transcripts are disabled for this video."
-    except VideoUnavailable:
-         return None, "Video is unavailable (possibly private or deleted)."
+        logging.info(f"Transcripts disabled for video ID: {video_id}")
+        return "[Transcripts disabled]"
     except Exception as e:
-        if "VideoUnavailable" in str(e): # Heuristic check
-             return None, "Video is unavailable (possibly private or deleted)."
-        logging.error(f"Error fetching transcript for {video_id}: {e}")
-        return None, f"An error occurred fetching transcript: {type(e).__name__}"
+        # Log the actual exception type and message
+        logging.error(f"Error fetching transcript for {video_id}: {type(e).__name__} - {e}")
+        return "[Error fetching transcript]"
 
-async def fetch_youtube_details_and_comments(video_id: str) -> tuple[Optional[dict], Optional[str]]:
-    """Fetches video details and comments using YouTube Data API. Returns (details_dict, error_message)."""
-    if not youtube_data_service:
-        return None, "YouTube Data API service not initialized (missing API key?)."
+def fetch_youtube_metadata_and_comments_sync(video_id, api_key):
+    """Synchronously fetches metadata and comments using YouTube Data API."""
+    youtube = get_youtube_service(api_key)
+    if not youtube: return None
+
+    metadata = {'title': None, 'description': None, 'channel_name': None, 'comments_text': None, 'transcript_text': None} # Add transcript_text here
     try:
-        video_response = await asyncio.to_thread(
-            youtube_data_service.videos().list(part='snippet,statistics', id=video_id).execute
-        )
-        if not video_response.get('items'):
-            return None, "Video not found via YouTube Data API."
+        # Get video details (snippet)
+        video_response = youtube.videos().list(part="snippet", id=video_id).execute()
+        if not video_response.get("items"):
+            logging.warning(f"Video not found or unavailable via YouTube Data API: {video_id}")
+            return None
+        video_snippet = video_response["items"][0]["snippet"]
+        metadata['title'] = video_snippet.get("title")
+        metadata['description'] = video_snippet.get("description")
+        channel_id = video_snippet.get("channelId")
 
-        comment_response = await asyncio.to_thread(
-            youtube_data_service.commentThreads().list(part='snippet', videoId=video_id, order='relevance', maxResults=50, textFormat='plainText').execute
-        )
-        return {'video': video_response, 'comments': comment_response}, None
-    except GoogleApiHttpError as e:
-        error_content = e.content.decode('utf-8') if e.content else str(e)
-        logging.error(f"YouTube Data API error for {video_id}: {error_content}")
-        if 'commentsDisabled' in error_content:
+        # Get channel details (snippet)
+        if channel_id:
             try:
-                video_response_only = await asyncio.to_thread(
-                    youtube_data_service.videos().list(part='snippet,statistics', id=video_id).execute
-                )
-                if not video_response_only.get('items'):
-                     return None, "Video not found via YouTube Data API (checked after comment error)."
-                return {'video': video_response_only, 'comments': None}, "Comments are disabled for this video."
-            except Exception as e_vid:
-                 logging.error(f"YouTube Data API error fetching video details after comment error for {video_id}: {e_vid}")
-                 if isinstance(e_vid, GoogleApiHttpError):
-                     return None, f"YouTube Data API error (fetching details): {e_vid.resp.status} {e_vid._get_reason()}"
-                 else:
-                     return None, f"Unexpected error fetching video details after comment error: {type(e_vid).__name__}"
-        elif e.resp.status == 403:
-             reason = "Unknown Forbidden"
-             try:
-                 # Attempt to parse error details if available
-                 error_details = e.error_details
-                 if error_details and isinstance(error_details, list) and len(error_details) > 0:
-                     reason = error_details[0].get('reason', reason)
-             except AttributeError: # Handle cases where error_details might not exist
-                 pass
-             except Exception as parse_e:
-                 logging.warning(f"Could not parse YouTube API error details: {parse_e}")
+                channel_response = youtube.channels().list(part="snippet", id=channel_id).execute()
+                if channel_response.get("items"):
+                    metadata['channel_name'] = channel_response["items"][0]["snippet"].get("title")
+            except GoogleApiHttpError as e:
+                 logging.error(f"YouTube Data API error fetching channel {channel_id} for video {video_id}: {e}")
+            except Exception as e:
+                 logging.error(f"Unexpected error fetching channel {channel_id} for video {video_id}: {e}")
 
-             if reason == 'quotaExceeded':
-                 return None, "YouTube Data API quota exceeded."
-             else:
-                 return None, f"YouTube Data API request forbidden ({reason}). Check API key permissions."
-        elif e.resp.status == 404:
-             # This might indicate the video ID itself is wrong, even if the API call is valid
-             return None, "Video not found via YouTube Data API."
-        else:
-            return None, f"YouTube Data API error: {e.resp.status} {e._get_reason()}"
+        # Get comments (snippet)
+        try:
+            comment_response = youtube.commentThreads().list(
+                part="snippet", videoId=video_id, order="relevance", maxResults=50, textFormat="plainText"
+            ).execute()
+            comments = []
+            for item in comment_response.get("items", []):
+                comment = item["snippet"]["topLevelComment"]["snippet"]
+                author = comment.get("authorDisplayName", "Unknown Author")
+                text = comment.get("textDisplay", "")
+                comments.append(f"{author}: {text}")
+            metadata['comments_text'] = "\n".join(comments) if comments else "[No comments found or retrieved]"
+        except GoogleApiHttpError as e:
+            # Check if comments are disabled (specific error reason)
+            if hasattr(e, 'resp') and e.resp.status == 403: # Comments likely disabled or region restricted
+                 logging.info(f"Comments disabled or forbidden for video ID: {video_id}")
+                 metadata['comments_text'] = "[Comments are disabled or unavailable]"
+            else:
+                 logging.error(f"YouTube Data API error fetching comments for {video_id}: {e}")
+                 metadata['comments_text'] = "[Error fetching comments]"
+        except Exception as e:
+             logging.error(f"Unexpected error fetching comments for {video_id}: {e}")
+             metadata['comments_text'] = "[Error fetching comments]"
+
+    except GoogleApiHttpError as e:
+        logging.error(f"YouTube Data API error for video {video_id}: {e}")
+        return None # Indicate API error
     except Exception as e:
-        logging.error(f"Unexpected error fetching YouTube details for {video_id}: {e}")
-        return None, f"An unexpected error occurred fetching video details: {type(e).__name__}"
+        logging.error(f"Unexpected error fetching metadata for {video_id}: {e}")
+        return None
 
-async def fetch_reddit_content(url: str) -> tuple[Optional[str], Optional[str]]:
-    """Fetches content from a Reddit URL asynchronously. Returns (formatted_content, error_message)."""
+    return metadata
+
+async def process_youtube_url(video_id, youtube_api_key, original_url):
+    """Asynchronously fetches and formats transcript, metadata, and comments for a YouTube video."""
+    # Fetch metadata and comments first (if API key exists)
+    metadata = None
+    if youtube_api_key:
+        metadata_task = asyncio.to_thread(fetch_youtube_metadata_and_comments_sync, video_id, youtube_api_key)
+        try:
+            metadata = await metadata_task
+        except Exception as e:
+            logging.error(f"Exception in metadata fetch thread for {video_id}: {e}")
+            metadata = None # Treat as if metadata fetch failed
+
+    # Fetch transcript regardless of API key
+    transcript_task = asyncio.to_thread(fetch_youtube_transcript_sync, video_id)
+    try:
+        transcript_text = await transcript_task
+    except Exception as e:
+        logging.error(f"Exception in transcript fetch thread for {video_id}: {e}")
+        transcript_text = "[Error fetching transcript]" # Assign error string
+
+    # Combine results
+    if metadata:
+        metadata['transcript_text'] = transcript_text # Add transcript to metadata dict
+        return metadata
+    elif transcript_text not in ("[Error fetching transcript]", "[Transcript not found or unavailable]", "[Transcripts disabled]"):
+        # Return only transcript if metadata failed but transcript succeeded
+        return {'transcript_text': transcript_text, 'title': None, 'description': None, 'channel_name': None, 'comments_text': None}
+    else:
+        # If both failed significantly or only transcript failed significantly
+        logging.warning(f"Could not retrieve significant data for YouTube URL: {original_url}")
+        return None # Nothing useful to append
+
+# --- Reddit Data Fetching ---
+async def get_reddit_client():
+    """Initializes and returns the asyncpraw Reddit client instance."""
     global reddit_client
-    if not reddit_client:
-        return None, "Reddit client not initialized (missing config?)."
+    if reddit_client:
+        return reddit_client
+
+    cfg = await get_config() # Reload config in case it changed
+    client_id = cfg.get("reddit_client_id")
+    client_secret = cfg.get("reddit_client_secret")
+    user_agent = cfg.get("reddit_user_agent")
+
+    if not all([client_id, client_secret, user_agent]):
+        logging.warning("Reddit credentials (client_id, client_secret, user_agent) not found in config. Skipping Reddit client initialization.")
+        return None
 
     try:
-        # Use url=url for asyncpraw to handle redirects (including share links)
-        submission = await reddit_client.submission(url=url)
-        # Eagerly load basic attributes
-        await submission.load()
+        reddit_client = asyncpraw.Reddit(
+            client_id=client_id,
+            client_secret=client_secret,
+            user_agent=user_agent,
+            # No username/password needed for read-only
+        )
+        # Quick check (optional but good) - fetch a known public subreddit
+        # This check seems to cause issues sometimes (like the 404), let's make it less critical
+        try:
+            # Use fetch=True to ensure data is loaded, helps catch auth issues early
+            await reddit_client.subreddit("all", fetch=True)
+            logging.info("Async PRAW Reddit client initialized and validated successfully.")
+        except asyncprawcore.exceptions.NotFound:
+             logging.warning("Could not validate Reddit client by fetching /r/all (404 Not Found). Client might still work for specific subreddits.")
+        # Catch other potential validation errors but don't stop initialization
+        except asyncprawcore.exceptions.RequestException as validate_err:
+             logging.warning(f"Validation check for Reddit client failed: {validate_err}. Client might still work.")
 
-        # Check if submission is valid (not removed, deleted, etc.)
-        if not submission or getattr(submission, 'removed_by_category', None) or not hasattr(submission, 'title'):
-             # Check if it's just a redirect to a subreddit (sometimes happens with invalid comment links)
-             if isinstance(submission, asyncpraw.models.Subreddit):
-                 return None, "Link points to a subreddit, not a specific submission."
-             return None, "Submission not found or removed."
+        return reddit_client
+    except asyncprawcore.exceptions.ResponseException as e:
+         status_code = getattr(e.response, 'status', 'Unknown') # Use getattr for safety
+         response_text = "[No response text available]"
+         if e.response:
+             try:
+                 # Need to await text() for aiohttp responses used by asyncprawcore
+                 response_text = await e.response.text()
+             except Exception as text_err:
+                 logging.warning(f"Could not read response text during Reddit client init error: {text_err}")
+         logging.error(f"Failed to initialize asyncpraw Reddit client (Response Error): {status_code} - {response_text}", exc_info=False) # Don't log full traceback for auth errors
+         reddit_client = None
+         return None
+    except Exception as e:
+        logging.error(f"Failed to initialize asyncpraw Reddit client: {e}", exc_info=True)
+        reddit_client = None # Ensure client is None if init fails
+        return None
+
+async def fetch_reddit_content(reddit, submission_id):
+    """Asynchronously fetches and formats content from a Reddit submission."""
+    if not reddit: return "[Reddit client not available]"
+    try:
+        submission = await reddit.submission(id=submission_id)
+        await submission.load() # Ensure submission data is loaded
 
         content_parts = []
         content_parts.append(f"Title: {submission.title}")
+        author_name = getattr(submission.author, 'name', '[deleted]')
+        content_parts.append(f"Author: u/{author_name}")
+        content_parts.append(f"Score: {submission.score}")
         if submission.selftext:
-            # Truncate selftext if long
-            content_parts.append(f"Body: {(submission.selftext[:1500] + '...') if len(submission.selftext) > 1500 else submission.selftext}")
+            content_parts.append(f"Body:\n{submission.selftext}") # No truncation
+        elif submission.url and not submission.is_self: # Only show URL for link posts
+            content_parts.append(f"URL: {submission.url}")
 
-        # Fetch top comments (limit to e.g., 5 top-level comments)
-        content_parts.append("Top Comments:")
-        comment_count = 0
-        # Ensure comments are loaded before iterating
-        await submission.comments.replace_more(limit=0) # Replace top-level MoreComments objects
-        async for top_level_comment in submission.comments:
-            if isinstance(top_level_comment, asyncpraw.models.MoreComments):
-                continue # Skip MoreComments objects if any remain
-            if top_level_comment.stickied: # Skip stickied comments
-                continue
-            if comment_count >= 5:
-                break
-            # Truncate comment
-            comment_text = top_level_comment.body
-            truncated_comment = (comment_text[:250] + '...') if len(comment_text) > 250 else comment_text
-            content_parts.append(f"- {truncated_comment}")
-            comment_count += 1
+        # Load top-level comments only, replace_more ensures we get Comment objects
+        await submission.comments.replace_more(limit=0)
+        comments_text = []
+        comment_list = await submission.comments() # Get the CommentForest
 
-        return "\n".join(content_parts), None
+        # Iterate through the top-level items in the CommentForest
+        for i, top_level_comment in enumerate(comment_list):
+             if i >= MAX_REDDIT_COMMENTS: break
+             # Skip MoreComments objects if any remain (shouldn't with limit=0 but safety first)
+             if isinstance(top_level_comment, asyncpraw.models.MoreComments): continue
 
-    except asyncprawcore_exceptions.Redirect:
-        return None, "Could not follow Reddit redirect (possibly invalid share link)."
-    except (asyncprawcore_exceptions.NotFound, asyncprawcore_exceptions.Forbidden) as e: # Handle 404 Not Found and 403 Forbidden (private subreddit)
-        return None, f"Could not access Reddit content ({type(e).__name__}). It might be private, quarantined, or deleted."
-    except Exception as e:
-        logging.error(f"Error fetching Reddit content for {url}: {e}")
-        return None, f"An unexpected error occurred fetching Reddit content: {type(e).__name__}"
+             # Access attributes safely
+             comment_author = getattr(top_level_comment.author, 'name', '[deleted]')
+             comment_body = getattr(top_level_comment, 'body', '') # No truncation
+             comments_text.append(f"u/{comment_author}: {comment_body}")
 
-async def fetch_generic_url_content(url: str) -> tuple[Optional[str], Optional[str]]:
-    """Fetches and extracts text content from a generic URL asynchronously. Returns (text_content, error_message)."""
-    MAX_CONTENT_LENGTH = 3000 # Limit extracted text length per URL
-    try:
-        # Use a reasonable timeout
-        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
-            response = await client.get(url)
-            response.raise_for_status() # Raise exception for non-2xx status codes
 
-        # Check content type
-        content_type = response.headers.get('content-type', '').lower()
-        if 'html' not in content_type:
-            return None, f"Skipped: Content type is '{content_type}', not HTML."
-
-        # Parse HTML using BeautifulSoup
-        soup = BeautifulSoup(response.text, 'html.parser')
-
-        # Extract text from main content areas or paragraphs, clean it up
-        main_content = soup.find('main') or soup.find('article') or soup.find('body')
-        if main_content:
-            # Remove script and style elements
-            for script_or_style in main_content(['script', 'style']):
-                script_or_style.decompose()
-            text_content = main_content.get_text(separator=' ', strip=True)
+        if comments_text:
+            content_parts.append(f"\nTop {len(comments_text)} Comments:\n" + "\n".join(comments_text))
         else:
-            text_content = soup.get_text(separator=' ', strip=True) # Fallback
+            content_parts.append("\n[No comments found or retrieved or comments disabled]") # Clarify reason
 
-        return text_content[:MAX_CONTENT_LENGTH] + ('...' if len(text_content) > MAX_CONTENT_LENGTH else ''), None
+        return "\n".join(content_parts)
 
-    except httpx.RequestError as e:
-        logging.warning(f"HTTP error fetching generic URL {url}: {e}")
-        return None, f"Network error accessing URL: {type(e).__name__}"
+    except asyncprawcore.exceptions.NotFound:
+        logging.warning(f"Reddit submission not found: {submission_id}")
+        return "[Reddit submission not found]"
+    except asyncprawcore.exceptions.Forbidden:
+         logging.warning(f"Access forbidden for Reddit submission: {submission_id} (possibly private or quarantined)")
+         return "[Reddit submission access forbidden]"
     except Exception as e:
-        logging.error(f"Error processing generic URL {url}: {e}")
-        return None, f"Failed to process URL content: {type(e).__name__}"
+        logging.error(f"Error fetching Reddit content for submission {submission_id}: {type(e).__name__} - {e}", exc_info=True)
+        return f"[Error fetching Reddit content: {type(e).__name__}]"
 
-async def fetch_google_lens_results(image_url: str, api_key: str) -> tuple[Optional[str], Optional[str]]:
-    """Fetches Google Lens results for an image URL using SerpApi. Returns (formatted_results, error_message)."""
-    params = {
-        "engine": "google_lens",
-        "url": image_url,
-        "api_key": api_key,
-        "safe": "off", # Optional: Adjust safety filter if needed
-    }
-
+# --- General URL Content Extraction ---
+async def fetch_and_extract_content(url):
+    """Asynchronously fetches URL content and extracts text using Beautiful Soup."""
     try:
-        # SerpApi library is synchronous, run it in a thread
-        search = SerpApiSearch(params)
-        results = await asyncio.to_thread(search.get_dict)
+        # Use a context manager for the client to ensure proper cleanup
+        async with httpx.AsyncClient(headers=HTTPX_HEADERS, follow_redirects=True, timeout=GENERAL_URL_TIMEOUT) as client:
+            response = await client.get(url)
+            response.raise_for_status() # Raise exception for bad status codes (4xx or 5xx)
 
-        if error := results.get("error"):
-            # Check for specific rate limit / quota errors from SerpApi response
-            if "Your account has run out of searches" in error or "exceeds the hourly throughput limit" in error:
-                raise httpx.HTTPStatusError(error, request=None, response=httpx.Response(429)) # Simulate a 429 error
-            logging.warning(f"SerpApi Google Lens error for {image_url}: {error}")
-            return None, f"SerpApi Error: {error}"
+            content_type = response.headers.get('content-type', '').lower()
+            if 'text/html' not in content_type:
+                logging.info(f"Skipping non-HTML content type '{content_type}' for URL: {url}")
+                return "[Unsupported content type]"
 
-        if results.get("search_metadata", {}).get("status") != "Success":
-            status = results.get("search_metadata", {}).get("status", "Unknown Status")
-            logging.warning(f"SerpApi Google Lens search failed for {image_url}. Status: {status}")
-            # Treat certain statuses as potentially retryable or indicative of issues
-            if status == "Error": # Generic error might warrant retry with different key
-                 raise httpx.HTTPStatusError(f"SerpApi Search Failed (Status: {status})", request=None, response=httpx.Response(503)) # Simulate 503
-            return None, f"SerpApi Search Failed (Status: {status})"
+            # Use await response.aread() for async reading, then decode
+            html_content = await response.aread()
+            # Attempt to decode using detected encoding or fallback to utf-8
+            decoded_content = None
+            try:
+                # Use response.encoding which httpx tries to determine
+                if response.encoding:
+                    decoded_content = html_content.decode(response.encoding, errors='replace')
+                else:
+                    # Fallback if encoding detection failed
+                    decoded_content = html_content.decode('utf-8', errors='replace')
+            except (LookupError, TypeError, UnicodeDecodeError) as decode_error:
+                 logging.warning(f"Decoding error for {url} (encoding: {response.encoding}): {decode_error}. Falling back to utf-8.")
+                 # Force decode with utf-8 replacement on error
+                 decoded_content = html_content.decode('utf-8', errors='replace')
 
-        visual_matches = results.get("visual_matches", [])
-        formatted_results = "\n".join([f"- {match.get('title', 'N/A')} ({match.get('source', 'N/A')}) Link: <{match.get('link', '#')}>" for match in visual_matches[:5]]) # Limit to top 5 matches
-        return formatted_results if formatted_results else "No visual matches found.", None
+            if decoded_content is None: # Should not happen, but safety check
+                logging.error(f"Failed to decode content for URL {url}")
+                return "[Error decoding content]"
 
-    except httpx.HTTPStatusError as e: # Catch simulated rate limit error
-        raise e # Re-raise to be caught by the main retry loop
+            soup = BeautifulSoup(decoded_content, 'lxml') # Use lxml parser
+
+            # Remove script and style elements
+            for script_or_style in soup(["script", "style", "nav", "footer", "aside"]): # Remove common non-content tags
+                script_or_style.decompose()
+
+            # Attempt to find main content areas, otherwise use body
+            main_content = soup.find('main') or soup.find('article') or soup.body
+            text = main_content.get_text(separator='\n', strip=True) if main_content else soup.get_text(separator='\n', strip=True)
+
+            # Clean up excessive whitespace more aggressively
+            text = re.sub(r'\s*\n\s*', '\n', text).strip() # Replace multiple newlines/spaces around newline with single newline
+            text = re.sub(r'[ \t]{2,}', ' ', text) # Replace multiple spaces/tabs with single space
+
+            if not text:
+                logging.info(f"Extracted empty text content from URL: {url}")
+                return "[No text content found]"
+
+            return text # Return full text
+
+    except (httpx.RequestError, httpx.HTTPStatusError) as e:
+        logging.warning(f"HTTP error fetching URL {url}: {type(e).__name__} - {e}")
+        return f"[Error fetching URL: {type(e).__name__}]"
     except Exception as e:
-        logging.error(f"Exception during SerpApi Google Lens call for {image_url}: {e}")
-        # Treat unexpected errors as potentially retryable server issues
-        raise httpx.HTTPStatusError(f"Unexpected SerpApi Error: {type(e).__name__}", request=None, response=httpx.Response(500)) # Simulate 500
+        logging.error(f"Error extracting content from URL {url}: {type(e).__name__} - {e}", exc_info=True)
+        return "[Error extracting content]"
 
-def format_youtube_data(video_id: str, transcript: Optional[str], details: Optional[dict], errors: list[str]) -> str:
-    """Formats extracted YouTube data into a string for the LLM."""
-    lines = []
-    video_info = details.get('video', {}).get('items', [{}])[0] if details and details.get('video') else {}
-    snippet = video_info.get('snippet', {})
-    comments_info = details.get('comments', {}) if details else {}
-    # Ensure comments_info is not None before accessing 'items'
-    comment_items = comments_info.get('items', []) if comments_info else []
+# --- Data Classes and Views ---
+@dataclass
+class MsgNode:
+    """Represents a message node in the conversation history cache."""
+    text: Optional[str] = None
+    images: list = field(default_factory=list) # Stores image data URLs or references
+    role: Literal["user", "assistant"] = "assistant"
+    user_id: Optional[int] = None # Discord User ID for 'user' role
+    has_bad_attachments: bool = False # Flag if unsupported attachments were present
+    fetch_parent_failed: bool = False # Flag if fetching the parent message failed
+    parent_msg: Optional[discord.Message] = None # Reference to the parent discord.Message object
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock) # Lock for async access to node data
 
-    # Title
-    title = snippet.get('title', 'N/A')
-    lines.append(f"Title: {title}")
+class ResponseActionsView(ui.View):
+    """A persistent view containing buttons for response actions like showing sources or getting the text file."""
+    def __init__(self, *, show_sources_button: bool):
+        super().__init__(timeout=None) # Persistent view
 
-    # Channel Name
-    channel_title = snippet.get('channelTitle', 'N/A')
-    lines.append(f"Channel: {channel_title}")
+        # Conditionally add the "Show Sources" button
+        if show_sources_button:
+            sources_button = ui.Button(label="Show Sources", style=discord.ButtonStyle.secondary, custom_id="show_sources_button")
+            sources_button.callback = self.show_sources_callback # Assign callback dynamically
+            self.add_item(sources_button)
 
-    # Description (truncate if long)
-    description = snippet.get('description', 'N/A')
-    if description and description != 'N/A':
-        lines.append(f"Description: {(description[:500] + '...') if len(description) > 500 else description}")
-    else:
-        lines.append("Description: N/A")
+        # Always add the "Get Response File" button
+        file_button = ui.Button(label="Get Response File", style=discord.ButtonStyle.secondary, custom_id="get_response_as_file_button") # Renamed label
+        file_button.callback = self.get_response_file_callback
+        self.add_item(file_button)
 
-    # Transcript (truncate if long)
-    if transcript:
-        lines.append(f"Transcript: {(transcript[:2000] + '...') if len(transcript) > 2000 else transcript}")
-    else:
-        # Add transcript error if transcript is None and not already in errors
-        if not any("Transcript:" in e for e in errors):
-             errors.append("- Transcript: Could not be retrieved.")
+    async def show_sources_callback(self, interaction: Interaction):
+        """Callback for the 'Show Sources' button."""
+        # Ensure interaction message exists
+        if not interaction.message:
+            await interaction.response.send_message("Error: Could not find the original message.")
+            return
 
+        metadata = gemini_grounding_metadata.get(interaction.message.id)
 
-    # Comments
-    if comment_items:
-        lines.append("Top Comments:")
-        for i, item in enumerate(comment_items):
-            # Safely navigate the comment structure
-            top_level_comment = item.get('snippet', {}).get('topLevelComment', {})
-            comment_snippet = top_level_comment.get('snippet', {})
-            comment_text = comment_snippet.get('textDisplay', 'N/A') # Use textDisplay for formatted text
-            if comment_text == 'N/A':
-                 comment_text = comment_snippet.get('textOriginal', 'N/A') # Fallback to original
+        if not metadata:
+            await interaction.response.send_message("Sorry, I couldn't find the sources for this message.")
+            # Optionally disable the button if metadata is missing
+            # button = discord.utils.get(self.children, custom_id="show_sources_button")
+            # if button:
+            #     button.disabled = True
+            #     await interaction.message.edit(view=self)
+            return
 
-            # Truncate comment
-            truncated_comment = (comment_text[:200] + '...') if len(comment_text) > 200 else comment_text
-            lines.append(f"- {truncated_comment}")
-    elif details and 'comments' in details and details['comments'] is None and not any("Comments are disabled" in e for e in errors):
-         # Explicitly state if comments are disabled and not already in errors
-         errors.append("- Comments: Comments are disabled for this video.")
-    elif not any("Comments:" in e for e in errors): # Add generic comment error if no items and no specific error
-         errors.append("- Comments: Could not retrieve comments.")
+        # --- Build the response string/parts ---
+        response_parts = []
+        # Safely access attributes using getattr
+        if queries := getattr(metadata, 'web_search_queries', None):
+            response_parts.append("**Search Queries:**")
+            response_parts.extend([f"- `{q}`" for q in queries])
+            response_parts.append("") # Add spacing
 
+        source_lines = []
+        if chunks := getattr(metadata, 'grounding_chunks', None):
+            for chunk in chunks:
+                # Check if chunk has 'web' attribute and it's not None
+                if web_info := getattr(chunk, 'web', None):
+                    title = getattr(web_info, 'title', 'Unknown Title')
+                    uri = getattr(web_info, 'uri', None)
+                    # Ensure URI is valid before creating markdown link
+                    if uri and isinstance(uri, str) and uri.startswith('http'):
+                        # Escape any markdown characters in the title
+                        escaped_title = discord.utils.escape_markdown(title)
+                        source_lines.append(f"- [{escaped_title}](<{uri}>)")
+                    else:
+                        source_lines.append(f"- {discord.utils.escape_markdown(title)}")
 
-    if errors:
-        lines.append("\nExtraction Errors/Notes:")
-        lines.extend(errors)
+        if source_lines:
+            response_parts.append("**Sources Used:**")
+            response_parts.extend(source_lines)
 
-    return "\n".join(lines)
+        full_response_text = "\n".join(response_parts) or "No grounding information found."
 
-async def update_response_messages(
-    initial_user_msg: discord.Message, # Renamed parameter for clarity
-    response_msgs: list[discord.Message],
-    full_response_text: str,
-    base_embed: discord.Embed, # Pass the base embed with warnings
-    is_final_chunk: bool,
-    msg_nodes: dict,
-    max_length: int,
-    model_name_display: str, # Added model name for footer
-    final_view: Optional[discord.ui.View] = None
-):
-    """Handles sending/editing multiple messages for a potentially long response."""
-    # Handle empty response case explicitly
-    if not full_response_text and is_final_chunk:
-        num_messages_needed = 1
-        full_response_text = "(empty response)" # Display placeholder
-    else:
-        num_messages_needed = max(1, math.ceil(len(full_response_text) / max_length))
+        # --- Send potentially split response ---
+        max_len = 2000 # Discord message limit
+        messages_to_send = []
+        current_message = ""
 
-
-    for i in range(num_messages_needed):
-        segment_start = i * max_length
-        segment_end = (i + 1) * max_length
-        text_segment = full_response_text[segment_start:segment_end]
-
-        is_last_segment_for_this_update = (i == num_messages_needed - 1)
-        is_absolute_final_segment = is_final_chunk and is_last_segment_for_this_update
-
-        # Create a new embed for this segment
-        segment_embed = base_embed.copy() # Start with the base embed (contains warnings)
-        segment_embed.description = text_segment + ("" if is_absolute_final_segment else STREAMING_INDICATOR)
-        segment_embed.color = EMBED_COLOR_COMPLETE if is_absolute_final_segment else EMBED_COLOR_INCOMPLETE
-        segment_embed.set_footer(text=f"Model: {model_name_display}")
-
-        # Determine the view (only for the absolute final segment)
-        current_segment_view = None
-        if is_absolute_final_segment and isinstance(final_view, ResponseActionsView):
-            # If the intended final view is ResponseActionsView, ensure its message_id is set correctly
-            # If we are editing, use the existing message's ID. If sending new, we need the new ID.
-            if i < len(response_msgs):
-                # Ensure the view instance targets the correct message ID
-                final_view.message_id = response_msgs[i].id
-                current_segment_view = final_view
+        for line in full_response_text.splitlines(keepends=True):
+            if len(current_message) + len(line) <= max_len:
+                current_message += line
             else:
-                # We can't set the correct message_id before sending, so we'll attach it *after* sending.
-                # Send without the view first.
-                pass # current_segment_view remains None for now
-        elif is_absolute_final_segment and final_view is None:
-             # If it's the final segment but no view is needed (e.g., no grounding)
-             current_segment_view = None
+                # Send the current message if it's not empty
+                if current_message.strip():
+                    messages_to_send.append(current_message)
+                # Start a new message, handle case where single line exceeds limit
+                if len(line) > max_len:
+                     # Split the long line itself
+                     for i in range(0, len(line), max_len):
+                         messages_to_send.append(line[i:i+max_len])
+                     current_message = "" # Reset after handling long line
+                else:
+                    current_message = line
 
+        # Add the last message if it has content
+        if current_message.strip():
+            messages_to_send.append(current_message)
+
+        # Send the messages
+        if not messages_to_send: # Should not happen if full_response_text wasn't empty
+             await interaction.response.send_message("No grounding information found.", suppress_embeds=True)
+             return
+
+        # Send the first message using the initial interaction response
+        await interaction.response.send_message(messages_to_send[0], suppress_embeds=True)
+
+        # Send subsequent messages using followup
+        for msg_content in messages_to_send[1:]:
+            await interaction.followup.send(msg_content, suppress_embeds=True)
+
+    async def get_response_file_callback(self, interaction: Interaction):
+        """Callback for the 'get the response as text file' button."""
+        # Ensure interaction message exists
+        if not interaction.message:
+            await interaction.response.send_message("Error: Could not find the original message.")
+            return
+
+        full_text = full_response_texts.get(interaction.message.id)
+
+        if not full_text:
+            await interaction.response.send_message(
+                "Sorry, the full response text for this message is no longer available (it might be too old or the bot restarted)."
+            )
+            # Optionally disable the button
+            # button = discord.utils.get(self.children, custom_id="get_response_as_file_button")
+            # if button:
+            #     button.disabled = True
+            #     await interaction.message.edit(view=self)
+            return
 
         try:
-            previous_msg_id = response_msgs[i-1].id if i > 0 and i <= len(response_msgs) else None
-
-            if i < len(response_msgs):
-                # Edit existing message
-                target_msg = response_msgs[i]
-                # Update the view's message_id if it's the final segment being edited
-                if is_absolute_final_segment and isinstance(final_view, ResponseActionsView):
-                    final_view.message_id = target_msg.id
-                    current_segment_view = final_view # Use the updated view
-                await target_msg.edit(embed=segment_embed, view=current_segment_view)
-                # Ensure link from previous segment if it exists
-                if previous_msg_id and previous_msg_id in msg_nodes:
-                     msg_nodes[previous_msg_id].next_segment_msg_id = target_msg.id
-
-            else:
-                # Send new message
-                reply_target = response_msgs[-1] if response_msgs else initial_user_msg # Use the renamed parameter
-                # Send without view first if view needs ID set later
-                view_to_send = None if (is_absolute_final_segment and isinstance(final_view, ResponseActionsView)) else current_segment_view
-                new_msg_sent = await reply_target.reply(embed=segment_embed, mention_author = False, view=view_to_send)
-                response_msgs.append(new_msg_sent)
-
-                # Create and lock node for the new message
-                if new_msg_sent.id not in msg_nodes:
-                    # Parent should be the original user message that triggered this whole response sequence
-                    msg_nodes[new_msg_sent.id] = MsgNode(parent_msg=initial_user_msg)
-                    await msg_nodes[new_msg_sent.id].lock.acquire()
-                    logging.debug(f"Created and locked MsgNode for new segment message {new_msg_sent.id}")
-
-                # Link previous segment to this new one
-                if previous_msg_id and previous_msg_id in msg_nodes:
-                     msg_nodes[previous_msg_id].next_segment_msg_id = new_msg_sent.id
-
-                # Attach ResponseActionsView if needed (after getting the message ID)
-                if is_absolute_final_segment and isinstance(final_view, ResponseActionsView) and current_segment_view is None:
-                    # Update the view's internal message_id before attaching
-                    final_view.message_id = new_msg_sent.id
-                    await new_msg_sent.edit(view=final_view)
-
-        except (discord.NotFound, discord.HTTPException) as e:
-             logging.warning(f"Failed to send or edit message segment {i}: {e}")
-             # If editing failed, try sending a new message for this segment
-             if i < len(response_msgs):
-                 failed_msg_ref = response_msgs.pop(i) # Remove the failed message reference
-                 logging.info(f"Edit failed for segment {i} (msg {failed_msg_ref.id}), attempting to send as new reply.")
-                 # Retry sending this segment
-                 try:
-                     reply_target = response_msgs[-1] if response_msgs else initial_user_msg # Use renamed parameter
-                     # Determine view again for the new message
-                     view_to_send_retry = None # Default to no view initially
-                     if is_absolute_final_segment and isinstance(final_view, ResponseActionsView):
-                          # Send without view first, attach after
-                          pass
-                     else:
-                          view_to_send_retry = current_segment_view # Use original view intent
-
-                     new_msg_sent_retry = await reply_target.reply(embed=segment_embed, mention_author = False, view=view_to_send_retry)
-                     # Insert the new message at the correct position
-                     response_msgs.insert(i, new_msg_sent_retry)
-
-                     if new_msg_sent_retry.id not in msg_nodes:
-                          msg_nodes[new_msg_sent_retry.id] = MsgNode(parent_msg=initial_user_msg) # Use renamed parameter
-                          await msg_nodes[new_msg_sent_retry.id].lock.acquire()
-                          logging.debug(f"Created and locked MsgNode for replacement segment message {new_msg_sent_retry.id}")
-
-                     # Link previous segment if possible after retry
-                     previous_msg_id_retry = response_msgs[i-1].id if i > 0 and i <= len(response_msgs) else None
-                     if previous_msg_id_retry and previous_msg_id_retry in msg_nodes:
-                          msg_nodes[previous_msg_id_retry].next_segment_msg_id = new_msg_sent_retry.id
-
-                     # Attach ResponseActionsView if needed after sending retry
-                     if is_absolute_final_segment and isinstance(final_view, ResponseActionsView) and view_to_send_retry is None:
-                          # Update the view's internal message_id before attaching
-                          final_view.message_id = new_msg_sent_retry.id
-                          await new_msg_sent_retry.edit(view=final_view)
-
-                 except Exception as send_e:
-                     logging.error(f"Failed to send new message segment {i} after edit failed: {send_e}")
-             # If sending the initial message failed, we can't do much more here
-
-    # Clean up any extra messages if the response shrank
-    while len(response_msgs) > num_messages_needed:
-         msg_to_delete = response_msgs.pop()
-         try:
-             await msg_to_delete.delete()
-             if msg_to_delete.id in msg_nodes:
-                 # Release lock if held before deleting node
-                 if msg_nodes[msg_to_delete.id].lock.locked():
-                     msg_nodes[msg_to_delete.id].lock.release()
-                 del msg_nodes[msg_to_delete.id]
-         except (discord.NotFound, discord.HTTPException) as e:
-             logging.warning(f"Failed to delete superfluous message {msg_to_delete.id}: {e}")
+            # Create a file-like object from the text, ensuring UTF-8 encoding
+            file_content = io.BytesIO(full_text.encode('utf-8'))
+            # Create a discord File object
+            discord_file = discord.File(fp=file_content, filename="response.txt")
+            await interaction.response.send_message(file=discord_file)
+        except Exception as e:
+            logging.error(f"Error creating or sending response file for message {interaction.message.id}: {e}", exc_info=True)
+            await interaction.response.send_message("Sorry, an error occurred while creating the response file.")
 
 
-# --- Slash Command Definition ---
+# --- Regex Patterns ---
+YOUTUBE_URL_PATTERN = re.compile(
+    # Protocol optional, www optional, domains, path, query parameter v=, video ID, optional extra params
+    r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/|youtube\.com/v/|youtube-nocookie\.com/embed/)([\w-]{11})(?:\S+)?'
+)
+REDDIT_URL_PATTERN = re.compile(
+    # Protocol optional, www optional, domain, /r/, subreddit, /comments/, submission_id, optional slug/?, optional query/fragment
+    r'(?:https?://)?(?:www\.)?reddit\.com/r/(\w+)/comments/([\w]+)(?:/[\w-]+/?)*(?:\S*)?'
+)
+# Improved regex to avoid matching markdown links like [text](url) or <url>
+# It looks for URLs not immediately preceded by '](', '<', or followed by ')' (if preceded by '(')
+# It also handles various TLDs better and requires http(s)://
+GENERAL_URL_PATTERN = re.compile(
+    r'(?<![<(])' # Negative lookbehind for '<' or '('
+    r'(https?://' # Require http:// or https://
+    r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}' # Domain name
+    r'(?::\d+)?' # Optional port
+    r'(?:/[^\s<>()"]*)?' # Optional path, avoid spaces and brackets/quotes
+    r')'
+    r'(?![^<>()"]*\))' # Negative lookahead to avoid matching URLs inside parentheses like (http://...)
+)
 
-async def provider_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    """Autocompletes the provider parameter."""
-    providers = list(ALLOWED_MODELS.keys())
-    return [
-        app_commands.Choice(name=provider, value=provider)
-        for provider in providers if current.lower() in provider.lower()
-    ]
+def extract_youtube_video_ids_with_urls(text):
+    """Extracts unique YouTube video IDs and their original URLs from text."""
+    matches = YOUTUBE_URL_PATTERN.finditer(text)
+    # Use a dict to store unique IDs and the first URL found for each
+    unique_videos = {}
+    for match in matches:
+        video_id = match.group(1)
+        full_url = match.group(0)
+        if video_id not in unique_videos:
+            # Ensure URL starts with http(s):// for clarity
+            if not full_url.startswith(('http://', 'https://')):
+                full_url = 'https://' + full_url
+            unique_videos[video_id] = full_url
+    # Return list of tuples (video_id, url)
+    return list(unique_videos.items())
 
-async def model_autocomplete(interaction: discord.Interaction, current: str) -> List[app_commands.Choice[str]]:
-    """Autocompletes the model parameter based on the selected provider."""
-    provider = interaction.data['options'][0].get('value') # Get the value of the 'provider' option
-    if not provider or provider not in ALLOWED_MODELS:
-        return []
+def extract_reddit_submission_ids_with_urls(text):
+    """Extracts unique Reddit submission IDs and their original URLs from text."""
+    unique_submissions = {}
+    for match in REDDIT_URL_PATTERN.finditer(text):
+        submission_id = match.group(2)
+        full_url = match.group(0)
+        if submission_id not in unique_submissions:
+             # Ensure URL starts with http(s)://
+            if not full_url.startswith(('http://', 'https://')):
+                full_url = 'https://' + full_url
+            unique_submissions[submission_id] = full_url
+    return [(url, sub_id) for sub_id, url in unique_submissions.items()] # Return list of (url, id)
 
-    models = ALLOWED_MODELS[provider]
-    return [
-        app_commands.Choice(name=model, value=model)
-        for model in models if current.lower() in model.lower()
-    ]
+def extract_general_urls(text):
+    """Extracts all HTTP/HTTPS URLs from text, avoiding markdown links."""
+    return GENERAL_URL_PATTERN.findall(text)
 
-@tree.command(name="model", description="Set your preferred LLM provider and model.")
-@app_commands.describe(provider="The LLM provider (e.g., google, openai).", model="The specific model name.")
-@app_commands.autocomplete(provider=provider_autocomplete)
-@app_commands.autocomplete(model=model_autocomplete)
-async def set_model(interaction: discord.Interaction, provider: str, model: str):
-    """Allows users to set their preferred LLM model."""
-    user_id = interaction.user.id
+# --- Helper Function for Gemini Image Conversion ---
+def get_gemini_image_part(image_dict):
+    """Converts an OpenAI-style image dict to a Gemini Part, handling potential errors."""
+    data_url = image_dict.get("image_url", {}).get("url", "")
+    match = re.match(r"data:(image/\w+);base64,(.*)", data_url)
+    if match:
+        mime_type, base64_data = match.groups()
+        try:
+            image_bytes = b64decode(base64_data)
+            return genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+        except Exception as e: # Catch specific decoding exception
+            log_snippet = data_url[:50] + "..." + data_url[-20:] if len(data_url) > 70 else data_url
+            logging.warning(f"Failed to decode base64 image data. Error: {type(e).__name__}: {e}. Data URL snippet: {log_snippet}")
+    else:
+         if data_url: # Only log if data_url wasn't empty
+             logging.warning(f"Regex failed to match expected data URL format: {data_url[:100]}...")
+    return None
 
-    # Validate provider and model
-    if provider not in ALLOWED_MODELS:
-        await interaction.response.send_message(f"Invalid provider '{provider}'. Allowed providers: {', '.join(ALLOWED_MODELS.keys())}")
-        return
-    if model not in ALLOWED_MODELS[provider]:
-        await interaction.response.send_message(f"Invalid model '{model}' for provider '{provider}'. Allowed models: {', '.join(ALLOWED_MODELS[provider])}")
-        return
+# --- API Key Manager Initialization ---
+async def get_api_key_manager(provider_name: str, config: Dict) -> Optional[ApiKeyManager]:
+    """Gets or creates an ApiKeyManager instance for a provider."""
+    global api_key_managers
+    async with api_key_managers_lock:
+        if provider_name in api_key_managers:
+            return api_key_managers[provider_name]
 
-    # Store the user's preference
-    model_selection = f"{provider}/{model}"
-    user_model_preferences[user_id] = model_selection
-    logging.info(f"User {user_id} set model preference to {model_selection}")
+        provider_config = config.get("providers", {}).get(provider_name)
+        if not provider_config:
+            logging.error(f"Provider '{provider_name}' not found in config.")
+            return None
 
-    await interaction.response.send_message(f"Your LLM model has been set to `{model_selection}`.")
+        api_keys = provider_config.get("api_key", []) # Expect list now
+        # No need to check for empty list here, ApiKeyManager handles it
 
+        try:
+            manager = ApiKeyManager(provider_name, api_keys)
+            api_key_managers[provider_name] = manager
+            return manager
+        except ValueError as e:
+            logging.error(f"Failed to initialize ApiKeyManager for {provider_name}: {e}")
+            return None
+        except Exception as e:
+             logging.error(f"Unexpected error initializing ApiKeyManager for {provider_name}: {e}", exc_info=True)
+             return None
 
 # --- Main Event Handler ---
 @discord_client.event
-async def on_message(new_msg): # new_msg is the initial message from the user
-    global msg_nodes, youtube_data_service, reddit_client
+async def on_message(new_msg):
+    global msg_nodes, last_task_time, gemini_grounding_metadata, full_response_texts
 
-    # --- Basic Checks ---
-    if new_msg.author.bot or new_msg.id in active_tasks:
-        return
+    # --- Initial Checks and Permissions ---
+    if new_msg.author.bot: return
+    is_dm = isinstance(new_msg.channel, discord.DMChannel)
+    # --- Refined Trigger Check ---
+    # Use regex to check if message starts with keyword followed by whitespace or end of string
+    trigger_pattern = re.compile(rf'^{re.escape(BOT_MENTION_KEYWORD)}(\s+.*|$)', re.IGNORECASE)
+    triggered_by_keyword = bool(trigger_pattern.match(new_msg.content))
 
-    is_dm = new_msg.channel.type == discord.ChannelType.private
-    is_mention = discord_client.user in new_msg.mentions
-    content_lower_stripped = new_msg.content.strip().lower()
-    is_at_ai_mention = content_lower_stripped.startswith("at ai")
-    is_at_ai_mention_orig = new_msg.content.lower().startswith("at ai") # Check original for trigger logic
+    if not is_dm and discord_client.user not in new_msg.mentions: # Check mentions first
+        is_reply_to_bot = False
+        if new_msg.reference and new_msg.reference.message_id:
+             ref_node = msg_nodes.get(new_msg.reference.message_id)
+             if ref_node and ref_node.role == "assistant": is_reply_to_bot = True
+             else:
+                 try:
+                     # Fetch if not in cache or role unknown
+                     ref_msg = new_msg.reference.cached_message or await new_msg.channel.fetch_message(new_msg.reference.message_id)
+                     if ref_msg.author == discord_client.user:
+                         is_reply_to_bot = True
+                 except (discord.NotFound, discord.HTTPException):
+                     pass # Ignore if reference message not found
+        # Add keyword check here
+        if not is_reply_to_bot and not triggered_by_keyword: # Check keyword trigger if not mention/reply
+             return # Exit if not mentioned and not a direct reply to the bot
 
-    if not is_dm and not is_mention and not is_at_ai_mention_orig:
-        return
+    cfg = await get_config() # Use async getter
 
-    # --- Reload Config and Check Permissions ---
-    global cfg
-    cfg = get_config() # Reload config
-
+    # Permission checks (simplified for brevity, logic remains the same)
+    role_ids = set(role.id for role in getattr(new_msg.author, "roles", []))
+    channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
     allow_dms = cfg.get("allow_dms", True)
     permissions = cfg.get("permissions", {})
     user_perms = permissions.get("users", {"allowed_ids": [], "blocked_ids": []})
     role_perms = permissions.get("roles", {"allowed_ids": [], "blocked_ids": []})
     channel_perms = permissions.get("channels", {"allowed_ids": [], "blocked_ids": []})
+    (allowed_user_ids, blocked_user_ids) = (user_perms.get("allowed_ids", []), user_perms.get("blocked_ids", []))
+    (allowed_role_ids, blocked_role_ids) = (role_perms.get("allowed_ids", []), role_perms.get("blocked_ids", []))
+    (allowed_channel_ids, blocked_channel_ids) = (channel_perms.get("allowed_ids", []), channel_perms.get("blocked_ids", []))
+    user_blocked = new_msg.author.id in blocked_user_ids or any(id in blocked_role_ids for id in role_ids)
+    user_allowed = not allowed_user_ids and not allowed_role_ids or new_msg.author.id in allowed_user_ids or any(id in allowed_role_ids for id in role_ids)
+    if user_blocked or not user_allowed: logging.warning(f"User {new_msg.author.id} denied (Blocked: {user_blocked}, Allowed: {user_allowed})."); return
+    if is_dm and not allow_dms: logging.warning(f"User {new_msg.author.id} denied DM (allow_dms: False)."); return
+    elif not is_dm:
+        channel_blocked = any(id in blocked_channel_ids for id in channel_ids)
+        channel_allowed = not allowed_channel_ids or any(id in allowed_channel_ids for id in channel_ids)
+        if channel_blocked or not channel_allowed: logging.warning(f"User {new_msg.author.id} denied in channel {new_msg.channel.id} (Blocked: {channel_blocked}, Allowed: {channel_allowed})."); return
 
-    role_ids = {role.id for role in getattr(new_msg.author, "roles", [])}
-    channel_ids = {new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None)} - {None}
+    # --- Configuration and Client Initialization ---
+    provider_slash_model = cfg.get("model", "google/gemini-2.0-flash")
+    try:
+        provider, model = provider_slash_model.split("/", 1)
+        if provider not in cfg.get("providers", {}): raise ValueError(f"Provider '{provider}' not found.")
+    except (ValueError, AttributeError) as e:
+        logging.error(f"Invalid model format '{provider_slash_model}' or provider config missing: {e}")
+        await new_msg.reply("Config error: Invalid model/provider.", mention_author = False); return
 
-    allow_all_users = not user_perms["allowed_ids"] if is_dm else not user_perms["allowed_ids"] and not role_perms["allowed_ids"]
-    is_good_user = allow_all_users or new_msg.author.id in user_perms["allowed_ids"] or any(id in role_perms["allowed_ids"] for id in role_ids)
-    is_bad_user = not is_good_user or new_msg.author.id in user_perms["blocked_ids"] or any(id in role_perms["blocked_ids"] for id in role_ids)
-
-    allow_all_channels = not channel_perms["allowed_ids"]
-    is_good_channel = allow_dms if is_dm else allow_all_channels or any(id in channel_perms["allowed_ids"] for id in channel_ids)
-    is_bad_channel = not is_good_channel or any(id in channel_perms["blocked_ids"] for id in channel_ids)
-
-    if is_bad_user or is_bad_channel:
-        logging.debug(f"Message {new_msg.id} blocked due to permissions.")
+    key_manager = await get_api_key_manager(provider, cfg)
+    if not key_manager:
+        await new_msg.reply(f"Config error: Could not initialize API keys for provider '{provider}'. Check logs.", mention_author = False)
         return
 
-    # --- Initialize External Services (if not already done) ---
-    # Re-check and initialize YouTube service if key exists and service is None
-    if youtube_api_key and not youtube_data_service:
-        try:
-            youtube_data_service = await asyncio.to_thread(
-                build_google_api_client, 'youtube', 'v3', developerKey=youtube_api_key
-            )
-            logging.info("YouTube Data API client initialized successfully.")
-        except Exception as e: # Catch potential HttpError or others during build
-            logging.error(f"Failed to initialize YouTube Data API client: {e}")
-            youtube_data_service = None
+    # --- Model Capabilities and Limits ---
+    accept_images = any(tag in model.lower() for tag in VISION_MODEL_TAGS)
+    accept_usernames = provider in PROVIDERS_SUPPORTING_USERNAMES
+    max_text = cfg.get("max_text", 100000)
+    max_images = cfg.get("max_images", 5) if accept_images else 0
+    max_messages = cfg.get("max_messages", 25)
+    use_plain_responses = cfg.get("use_plain_responses", False)
+    max_embed_desc_length = 4090
+    max_plain_msg_length = 2000
+    max_message_length = max_plain_msg_length if use_plain_responses else max_embed_desc_length
 
-    if cfg.get("reddit") and not reddit_client:
-        reddit_cfg = cfg["reddit"]
-        if all(k in reddit_cfg for k in ['client_id', 'client_secret', 'user_agent']):
-            try:
-                reddit_client = asyncpraw.Reddit(
-                    client_id=reddit_cfg['client_id'],
-                    client_secret=reddit_cfg['client_secret'],
-                    user_agent=reddit_cfg['user_agent'],
-                )
-                logging.info("Async PRAW Reddit client initialized successfully (read-only).")
-            except Exception as e:
-                logging.error(f"Failed to initialize asyncpraw Reddit client: {e}")
-                reddit_client = None
-        else:
-            logging.warning("Reddit config found but incomplete. Reddit processing disabled.")
-            reddit_client = None
+    # --- Initial Message Content Processing ---
+    original_content_stripped = new_msg.content.strip() # Store original stripped content
+    is_reply = new_msg.reference is not None
 
-    # --- Task Locking ---
-    task_lock = asyncio.Lock()
-    active_tasks[new_msg.id] = task_lock
-    async with task_lock: # Acquire lock for this message ID
+    # Check if the original content was just a mention or keyword
+    is_only_mention = original_content_stripped == f"<@!{discord_client.user.id}>" or original_content_stripped == f"<@{discord_client.user.id}>" # Check against stripped content
+    # Check if it starts with keyword and has nothing significant after it
+    is_only_keyword = original_content_stripped.lower() == BOT_MENTION_KEYWORD.lower() # Check against stripped content
+    is_only_trigger = is_only_mention or is_only_keyword
 
-        # --- Determine LLM Provider and Model (User Preference or Default) ---
-        user_id = new_msg.author.id
-        provider_slash_model = user_model_preferences.get(user_id, cfg.get("model", "openai/gpt-4.1"))
-        try:
-            # Validate the selected model (either user's or default) against config
-            provider, model_name = provider_slash_model.split("/", 1)
-            if provider not in cfg.get("providers", {}):
-                 logging.error(f"Provider '{provider}' not found in config.yaml providers list.")
-                 await new_msg.reply(f"⚠️ Configured LLM provider '{provider}' not found.", mention_author = False)
-                 active_tasks.pop(new_msg.id, None)
-                 return
-        except ValueError:
-            logging.error(f"Invalid model format determined: '{provider_slash_model}'. Should be 'provider/model_name'.")
-            await new_msg.reply("⚠️ Invalid model format in configuration.", mention_author = False)
-            active_tasks.pop(new_msg.id, None)
-            return
-
-        is_google_provider = provider == "google"
-        llm_rate_manager = rate_limit_managers.get(provider)
-        serpapi_rate_manager = rate_limit_managers.get("serpapi")
-
-        # --- Configuration Values ---
-        accept_images = any(tag in model_name.lower() for tag in VISION_MODEL_TAGS)
-        accept_usernames = provider in PROVIDERS_SUPPORTING_USERNAMES
-
-        max_text = cfg.get("max_text", 100000)
-        max_images = cfg.get("max_images", 5) if accept_images else 0
-        max_messages = cfg.get("max_messages", 25)
-        use_plain_responses = cfg.get("use_plain_responses", False)
-        # Use a slightly smaller max length for embeds to be safe with potential variations
-        max_message_length = 1990 if use_plain_responses else 4000
-
-        # --- Build Message Chain ---
-        api_history = []
-        user_warnings = set()
-        youtube_context_string = ""
-        reddit_context_string = ""
-        generic_url_context_string = ""
-        google_lens_context_string = ""
-        curr_msg = new_msg
-        processed_ids = set() # Prevent infinite loops
-
-        while curr_msg is not None and len(api_history) < max_messages and curr_msg.id not in processed_ids:
-            processed_ids.add(curr_msg.id)
-            curr_node = msg_nodes.setdefault(curr_msg.id, MsgNode())
-
-            async with curr_node.lock:
-                # --- Process current node (fetch content if needed) ---
-                if curr_node.text is None:
-                    # Fetch raw message content
-                    raw_content = curr_msg.content
-                    cleaned_content = raw_content.strip() # Start with basic stripping
-                    is_lens_command = False
-
-                    # Clean mention/trigger only for the *initial* message being processed in this chain walk
-                    # This check needs refinement if we combine segments later. Let's assume initial message is new_msg for now.
-                    if curr_msg.id == new_msg.id:
-                        if is_mention:
-                            cleaned_content = raw_content.replace(f'<@{discord_client.user.id}>', '', 1).lstrip()
-                            if cleaned_content == raw_content.lstrip() and new_msg.guild and new_msg.guild.me.display_name:
-                                cleaned_content = raw_content.replace(f'@{new_msg.guild.me.display_name}', '', 1).lstrip()
-                        elif is_at_ai_mention_orig:
-                            if raw_content.lower().startswith("at ai ") and len(raw_content) >= 6: cleaned_content = raw_content[6:].lstrip()
-                            elif raw_content.lower() == "at ai": cleaned_content = ""
-                            elif raw_content.lower().startswith("at ai") and len(raw_content) >= 5: cleaned_content = raw_content[5:].lstrip()
-                            else: cleaned_content = raw_content # Fallback
-
-                        # Check for 'lens' command *after* cleaning trigger
-                        if cleaned_content.lower().startswith("lens "):
-                            is_lens_command = True
-                            cleaned_content = cleaned_content[5:].lstrip()
-
-                    # --- URL and Attachment Processing (only for initial message) ---
-                    if curr_msg.id == new_msg.id:
-                        # YouTube
-                        youtube_urls_found = YOUTUBE_URL_PATTERN.findall(cleaned_content)
-                        unique_video_ids = list(dict.fromkeys(youtube_urls_found))
-                        if unique_video_ids:
-                            logging.info(f"Found YouTube video IDs: {unique_video_ids}")
-                            youtube_data_tasks = [asyncio.gather(fetch_youtube_transcript(vid), fetch_youtube_details_and_comments(vid), return_exceptions=True) for vid in unique_video_ids]
-                            results = await asyncio.gather(*youtube_data_tasks)
-                            youtube_content_parts = []
-                            for i, (vid, result_pair) in enumerate(zip(unique_video_ids, results)):
-                                url = f"https://www.youtube.com/watch?v={vid}"
-                                content_part = f"youtube url {i+1}: {url}\nyoutube url {i+1} content:\n"
-                                errors = []
-                                transcript_res, details_res = result_pair
-                                transcript, t_err = transcript_res if not isinstance(transcript_res, BaseException) else (None, str(transcript_res))
-                                details, d_err = details_res if not isinstance(details_res, BaseException) else (None, str(details_res))
-                                if t_err: errors.append(f"- Transcript: {t_err}")
-                                if d_err: errors.append(f"- Details/Comments: {d_err}")
-                                content_part += format_youtube_data(vid, transcript, details, errors)
-                                youtube_content_parts.append(content_part)
-                            youtube_context_string = "\n\n".join(youtube_content_parts)
-                            curr_node.youtube_content = youtube_context_string
-
-                        # Reddit
-                        if reddit_client:
-                            reddit_url_matches = list(REDDIT_URL_PATTERN.finditer(cleaned_content))
-                            unique_reddit_urls = list(dict.fromkeys([match.group(0) for match in reddit_url_matches]))
-                            if unique_reddit_urls:
-                                logging.info(f"Found Reddit URLs: {unique_reddit_urls}")
-                                reddit_tasks = [fetch_reddit_content(url) for url in unique_reddit_urls]
-                                results = await asyncio.gather(*reddit_tasks, return_exceptions=True)
-                                reddit_content_parts = []
-                                for i, (url, res) in enumerate(zip(unique_reddit_urls, results)):
-                                    content_part = f"reddit url {i+1}: {url}\nreddit url {i+1} content:\n"
-                                    text, err = res if not isinstance(res, BaseException) else (None, str(res))
-                                    content_part += text if text else f"Could not extract content: {err or 'No text found.'}"
-                                    reddit_content_parts.append(content_part)
-                                reddit_context_string = "\n\n".join(reddit_content_parts)
-                                curr_node.reddit_content = reddit_context_string
-
-                        # Generic URLs
-                        all_urls = GENERAL_URL_PATTERN.findall(cleaned_content)
-                        yt_urls = {m.group(0) for m in YOUTUBE_URL_PATTERN.finditer(cleaned_content)}
-                        rd_urls = {m.group(0) for m in REDDIT_URL_PATTERN.finditer(cleaned_content)}
-                        generic_urls = []
-                        for url in all_urls:
-                            url = url.rstrip('.,;!?')
-                            if url not in yt_urls and url not in rd_urls:
-                                try:
-                                    p = urlparse(url)
-                                    if p.scheme in ['http', 'https'] and '.' in p.netloc and len(url) < 500 and not url.startswith('data:'):
-                                        generic_urls.append(url)
-                                except ValueError: continue
-                        unique_generic_urls = list(dict.fromkeys(generic_urls))
-                        if unique_generic_urls:
-                            logging.info(f"Found generic URLs: {unique_generic_urls}")
-                            generic_tasks = [fetch_generic_url_content(url) for url in unique_generic_urls]
-                            results = await asyncio.gather(*generic_tasks, return_exceptions=True)
-                            generic_content_parts = []
-                            for i, (url, res) in enumerate(zip(unique_generic_urls, results)):
-                                content_part = f"url {i+1}: {url}\nurl {i+1} content:\n"
-                                text, err = res if not isinstance(res, BaseException) else (None, str(res))
-                                content_part += text if text else f"Could not extract content: {err or 'No text/error.'}"
-                                generic_content_parts.append(content_part)
-                            generic_url_context_string = "\n\n".join(generic_content_parts)
-                            curr_node.generic_url_content = generic_url_context_string
-
-                        # Google Lens (SerpAPI)
-                        if is_lens_command and serpapi_rate_manager and serpapi_rate_manager.all_keys:
-                            image_attachments = [att for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")]
-                            if image_attachments:
-                                if len(image_attachments) > max_images:
-                                    user_warnings.add(f"⚠️ Too many images ({len(image_attachments)} > {max_images}). Using first {max_images} for Lens.")
-                                    image_attachments = image_attachments[:max_images]
-
-                                logging.info(f"Processing {len(image_attachments)} image(s) with Google Lens...")
-                                lens_content_parts = []
-                                lens_errors = []
-                                for i, attachment in enumerate(image_attachments):
-                                    lens_result_text = lens_error = None
-                                    last_lens_error = None
-                                    available_serp_keys = await serpapi_rate_manager.get_available_keys()
-                                    if not available_serp_keys:
-                                        lens_error = "All SerpApi keys are currently rate-limited."
-                                        await serpapi_rate_manager.reset_if_all_limited() # Check if reset is needed
-                                    else:
-                                        for key_index, key in enumerate(available_serp_keys):
-                                            try:
-                                                lens_result_text, lens_error = await fetch_google_lens_results(attachment.url, key)
-                                                if lens_result_text is not None: # Success
-                                                    break # Stop trying keys for this image
-                                                else: # Error occurred, but maybe not rate limit
-                                                    last_lens_error = lens_error or "Unknown SerpApi error"
-                                                    # Continue to next key if error wasn't fatal
-                                            except httpx.HTTPStatusError as http_err:
-                                                last_lens_error = str(http_err)
-                                                if http_err.response.status_code in [429, 500, 503]: # Rate limit or server error
-                                                    await serpapi_rate_manager.add_key(key)
-                                                    if await serpapi_rate_manager.reset_if_all_limited():
-                                                         # If reset happened, get fresh list for next image
-                                                         available_serp_keys = await serpapi_rate_manager.get_available_keys()
-                                                         # Need to restart the key loop for *this* image with fresh keys
-                                                         # This is complex, for now just log and fail this image if reset happens mid-loop
-                                                         logging.warning("SerpApi DB reset during Lens processing. May need to retry message.")
-                                                         lens_error = "SerpApi keys reset during processing."
-                                                         break # Break inner key loop for this image
-                                                    if key_index == len(available_serp_keys) - 1: # Last key also failed
-                                                        lens_error = f"All available SerpApi keys failed. Last error: {last_lens_error}"
-                                                else: # Other HTTP error (e.g., 401, 403) - likely key issue, but don't mark rate limit
-                                                    logging.error(f"Non-rate-limit HTTP error {http_err.response.status_code} with SerpApi key {key[:4]}...")
-                                                    if key_index == len(available_serp_keys) - 1:
-                                                         lens_error = f"All available SerpApi keys failed. Last error: {last_lens_error}"
-                                            except Exception as e: # Catch other unexpected errors
-                                                last_lens_error = f"Unexpected error: {type(e).__name__}"
-                                                logging.error(f"Unexpected error during SerpApi call: {e}")
-                                                if key_index == len(available_serp_keys) - 1:
-                                                     lens_error = f"All available SerpApi keys failed. Last error: {last_lens_error}"
-
-                                    # Append result or error for this image
-                                    content_part = f"SerpAPI's Google Lens API results for image {i+1}:\n"
-                                    content_part += lens_result_text if lens_result_text else f"Could not get results: {lens_error or 'Unknown error.'}"
-                                    lens_content_parts.append(content_part)
-                                    if lens_error and "rate-limited" in lens_error: # Add warning if all keys were limited
-                                        user_warnings.add("⚠️ SerpApi rate limit hit.")
-
-                                google_lens_context_string = "\n\n".join(lens_content_parts)
-                                curr_node.google_lens_content = google_lens_context_string
-                            elif not image_attachments:
-                                user_warnings.add("⚠️ 'lens' command used, but no images attached.")
-                        elif is_lens_command and (not serpapi_rate_manager or not serpapi_rate_manager.all_keys):
-                             user_warnings.add("⚠️ 'lens' command used, but no SerpApi API key configured.")
+    # Clean prefix/mention only for the initial message
+    cleaned_content = new_msg.content # Start with original content
+    if triggered_by_keyword:
+        # More robust keyword removal at the start
+        cleaned_content = re.sub(rf'^{re.escape(BOT_MENTION_KEYWORD)}\s*', '', cleaned_content, flags=re.IGNORECASE).strip()
+    # Remove standard bot mention (<@...> or <@!...) anywhere in the string
+    cleaned_content = re.sub(rf'<@!?{discord_client.user.id}>', '', cleaned_content).strip()
 
 
-                    # Process Attachments (Text and Image)
-                    good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
-                    attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
+    # Process attachments for the initial message
+    good_attachments = [att for att in new_msg.attachments if att.content_type and (att.content_type.startswith("text") or (accept_images and att.content_type.startswith("image")))]
+    bad_attachments_initial = len(new_msg.attachments) > len(good_attachments)
+    attachment_texts_initial = []
+    attachment_images_initial = []
 
-                    # Combine text content
-                    embed_texts = ["\n".join(filter(None, (e.title, e.description, getattr(e.footer, 'text', None)))) for e in curr_msg.embeds if e.type == 'rich']
-                    text_attachments = [resp.text for att, resp in zip(good_attachments, attachment_responses) if isinstance(resp, httpx.Response) and att.content_type.startswith("text")]
+    if good_attachments:
+        attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments], return_exceptions=True)
+        for att, resp in zip(good_attachments, attachment_responses):
+            if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                if att.content_type.startswith("text"):
+                    try:
+                        text_content = resp.content.decode(resp.encoding or 'utf-8', errors='replace')
+                        attachment_texts_initial.append(text_content[:max_text])
+                        if len(text_content) > max_text: bad_attachments_initial = True # Consider it bad if truncated
+                    except Exception as e:
+                        logging.warning(f"Failed to decode text attachment {att.filename}: {e}")
+                        bad_attachments_initial = True
+                elif att.content_type.startswith("image"):
+                    try:
+                        img_data = f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"
+                        attachment_images_initial.append(dict(type="image_url", image_url=dict(url=img_data)))
+                    except Exception as e:
+                         logging.warning(f"Failed to encode image attachment {att.filename}: {e}")
+                         bad_attachments_initial = True
+            else:
+                logging.warning(f"Failed to fetch attachment {att.url}: {resp}")
+                bad_attachments_initial = True
 
-                    # Start with cleaned content (mention/trigger/lens removed if applicable)
-                    combined_text_parts = [cleaned_content] if cleaned_content else []
-                    combined_text_parts.extend(embed_texts)
-                    combined_text_parts.extend(text_attachments)
+    # --- Empty Query Check (Modified) ---
+    is_content_effectively_empty = not cleaned_content.strip() and not attachment_texts_initial and not attachment_images_initial
+    # Treat as empty ONLY if the content is empty AND it wasn't a reply consisting solely of a trigger mention/keyword
+    should_treat_as_empty = is_content_effectively_empty and not (is_reply and is_only_trigger)
 
-                    # Append context strings
-                    if curr_node.youtube_content: combined_text_parts.append(curr_node.youtube_content)
-                    if curr_node.reddit_content: combined_text_parts.append(curr_node.reddit_content)
-                    if curr_node.generic_url_content: combined_text_parts.append(curr_node.generic_url_content)
-                    if curr_node.google_lens_content: combined_text_parts.append(curr_node.google_lens_content)
+    if should_treat_as_empty:
+        await new_msg.reply("Your query is empty. Please reply to a message to reference it or don't send an empty query.", mention_author=False)
+        return
 
-                    curr_node.text = "\n\n".join(filter(None, combined_text_parts)) # Join with double newline for clarity
+    # --- URL Extraction (from initial message only) ---
+    text_content_for_extraction = new_msg.content # Use original content for URL extraction
+    video_ids_with_urls = extract_youtube_video_ids_with_urls(text_content_for_extraction)
+    reddit_urls_with_ids = extract_reddit_submission_ids_with_urls(text_content_for_extraction)
+    general_urls = extract_general_urls(text_content_for_extraction)
+    youtube_urls_set = {url for _, url in video_ids_with_urls}
+    reddit_urls_set = {url for url, _ in reddit_urls_with_ids}
+    filtered_general_urls = [url for url in general_urls if url not in youtube_urls_set and url not in reddit_urls_set]
+    youtube_content_to_append = ""
+    reddit_content_to_append = ""
+    general_url_content_to_append = ""
 
-                    # Store images
-                    curr_node.images = [(att.content_type, resp.content) for att, resp in zip(good_attachments, attachment_responses) if isinstance(resp, httpx.Response) and att.content_type.startswith("image")]
+    # --- Build Message Chain (Following Replies Only) ---
+    messages = []
+    user_warnings = set()
+    curr_msg = new_msg
+    processed_ids = set() # Prevent infinite loops
 
-                    curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
-                    curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
-                    curr_node.has_bad_attachments = len(curr_msg.attachments) > len(good_attachments) or any(isinstance(r, BaseException) for r in attachment_responses)
+    while curr_msg is not None and len(messages) < max_messages and curr_msg.id not in processed_ids:
+        processed_ids.add(curr_msg.id)
+        curr_node = msg_nodes.setdefault(curr_msg.id, MsgNode())
 
-                # --- Fetch Parent Message ---
-                # (Existing logic for finding parent_msg remains largely the same)
-                try:
-                    parent_msg_to_fetch_id = None
-                    is_reply = curr_msg.reference is not None
-                    is_thread_start_reply = (
-                        curr_msg.channel.type == discord.ChannelType.public_thread
-                        and not is_reply
-                        and hasattr(curr_msg.channel, 'parent')
-                        and curr_msg.channel.parent.type == discord.ChannelType.text
-                    )
-
-                    if is_reply:
-                        parent_msg_to_fetch_id = curr_msg.reference.message_id
-                        curr_node.parent_msg = curr_msg.reference.cached_message
-                        if not curr_node.parent_msg and parent_msg_to_fetch_id:
-                            try: curr_node.parent_msg = await curr_msg.channel.fetch_message(parent_msg_to_fetch_id)
-                            except (discord.NotFound, discord.HTTPException): curr_node.fetch_parent_failed = True; logging.warning(f"Failed to fetch replied-to message {parent_msg_to_fetch_id}")
-                    elif is_thread_start_reply:
-                        parent_msg_to_fetch_id = curr_msg.channel.id
-                        curr_node.parent_msg = curr_msg.channel.starter_message
-                        if not curr_node.parent_msg and parent_msg_to_fetch_id:
-                             try: curr_node.parent_msg = await curr_msg.channel.parent.fetch_message(parent_msg_to_fetch_id)
-                             except (discord.NotFound, discord.HTTPException, AttributeError): curr_node.fetch_parent_failed = True; logging.warning(f"Failed to fetch thread starter message {parent_msg_to_fetch_id}")
-                    elif not is_dm and not is_mention and not is_at_ai_mention_orig: # Auto-chain previous in guilds
-                         prev_msg = ([m async for m in curr_msg.channel.history(before=curr_msg, limit=1)] or [None])[0]
-                         if prev_msg and prev_msg.author == curr_msg.author and prev_msg.type in (discord.MessageType.default, discord.MessageType.reply):
-                             curr_node.parent_msg = prev_msg
-                    elif is_dm: # Auto-chain in DMs
-                         prev_msg = ([m async for m in curr_msg.channel.history(before=curr_msg, limit=1)] or [None])[0]
-                         if prev_msg and prev_msg.type in (discord.MessageType.default, discord.MessageType.reply):
-                              prev_is_mention = discord_client.user in prev_msg.mentions
-                              prev_is_at_ai = prev_msg.content.lower().startswith("at ai")
-                              if not prev_is_mention and not prev_is_at_ai:
-                                   curr_node.parent_msg = prev_msg
-                except Exception as e:
-                    logging.exception(f"Unexpected error fetching parent message for {curr_msg.id}: {e}")
-                    curr_node.fetch_parent_failed = True
-
-            # --- Combine segments if it's an assistant message ---
-            combined_text_content = curr_node.text
-            combined_images = list(curr_node.images) # Start with current node's images
-            combined_grounding_metadata = curr_node.grounding_metadata # Use metadata from the first segment initially
-
-            if curr_node.role == "assistant":
-                next_segment_id = curr_node.next_segment_msg_id
-                while next_segment_id is not None and next_segment_id in msg_nodes and next_segment_id not in processed_ids:
-                    processed_ids.add(next_segment_id) # Mark segment as processed
-                    next_node = msg_nodes[next_segment_id]
-                    async with next_node.lock: # Lock the next segment node
-                        if next_node.text is not None: # Ensure node was processed
-                            # Append text with a newline separator if both parts have text
-                            if combined_text_content and next_node.text:
-                                combined_text_content += "\n\n" + next_node.text
-                            elif next_node.text:
-                                combined_text_content = next_node.text
-
-                            combined_images.extend(next_node.images)
-                            # Keep grounding metadata from the *last* segment if available
-                            if next_node.grounding_metadata:
-                                combined_grounding_metadata = next_node.grounding_metadata
-                        else:
-                            # This shouldn't happen if locking is correct, but log if it does
-                            logging.warning(f"Encountered unprocessed segment node {next_segment_id} while combining.")
-                    next_segment_id = next_node.next_segment_msg_id # Move to the next segment
-
-            # --- Construct API message format using combined content ---
-            api_parts = []
-            # Use combined_text_content, truncated if necessary
-            final_text_content = combined_text_content[:max_text] if combined_text_content else ""
-
-            if final_text_content:
-                if is_google_provider:
-                    api_parts.append(google_genai_types.Part(text=final_text_content))
+        async with curr_node.lock:
+            # Populate node if not already done
+            if curr_node.text is None:
+                # Use pre-processed content/attachments for the initial message
+                if curr_msg.id == new_msg.id:
+                    node_text_content = cleaned_content # Use already cleaned content
+                    node_attachment_texts = attachment_texts_initial
+                    node_attachment_images = attachment_images_initial
+                    node_bad_attachments = bad_attachments_initial
                 else:
-                    api_parts.append({"type": "text", "text": final_text_content})
+                    # Process content and attachments for parent messages
+                    node_text_content = curr_msg.content
+                    # Remove bot mention from parent messages as well
+                    node_text_content = re.sub(rf'<@!?{discord_client.user.id}>', '', node_text_content).strip()
 
-            # Use combined_images, truncated if necessary
-            processed_images = 0
-            for mime_type, img_bytes in combined_images:
-                if processed_images < max_images:
-                    if is_google_provider:
-                        api_parts.append(google_genai_types.Part.from_bytes(data=img_bytes, mime_type=mime_type))
-                    else:
-                        b64_img = b64encode(img_bytes).decode('utf-8')
-                        api_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}})
-                    processed_images += 1
-                else: break
+                    node_good_attachments = [att for att in curr_msg.attachments if att.content_type and (att.content_type.startswith("text") or (accept_images and att.content_type.startswith("image")))]
+                    node_bad_attachments = len(curr_msg.attachments) > len(node_good_attachments)
+                    node_attachment_texts = []
+                    node_attachment_images = []
 
-            if api_parts:
-                if is_google_provider:
-                    api_role = 'model' if curr_node.role == 'assistant' else 'user'
-                    # Store combined grounding metadata with the combined assistant message
-                    content_obj = google_genai_types.Content(parts=api_parts, role=api_role)
-                    # Grounding metadata is stored on the node, view logic uses the node.
-                    api_history.append(content_obj)
-                else:
-                    message_dict = {"role": curr_node.role, "content": api_parts}
-                    if accept_usernames and curr_node.user_id is not None and curr_node.role == 'user':
-                         message_dict["name"] = str(curr_node.user_id)
-                    api_history.append(message_dict)
-
-            # --- Add User Warnings (based on the *first* node of the segment) ---
-            # Check original node's text length before combination for truncation warning
-            if len(curr_node.text or "") > max_text: user_warnings.add(f"⚠️ Max {max_text:,} chars/msg")
-            # Check original node's image count before combination
-            if len(curr_node.images) > max_images: user_warnings.add(f"⚠️ Max {max_images} image(s)" if max_images > 0 else "⚠️ Can't see images")
-            if curr_node.has_bad_attachments: user_warnings.add("⚠️ Unsupported attachments")
-            if curr_node.fetch_parent_failed or (curr_node.parent_msg is not None and len(api_history) == max_messages):
-                user_warnings.add(f"⚠️ Only using last {len(api_history)} message(s)")
-
-            # --- Move to Parent ---
-            # Crucially, only move up the chain via parent_msg, not next_segment_msg_id
-            curr_msg = curr_node.parent_msg
-
-        # --- Prepare API Call ---
-        api_history.reverse() # Correct order
-        logging.info(f"Processing message {new_msg.id} (user: {new_msg.author.id}, history: {len(api_history)}, provider: {provider}, model: {model_name})")
-
-        system_instruction = None
-        if system_prompt := cfg.get("system_prompt"):
-            system_prompt_extras = [f"Today's date: {dt.now().strftime('%B %d %Y')}."]
-            if not is_google_provider and accept_usernames:
-                system_prompt_extras.append("User's names are their Discord IDs and should be typed as '<@ID>'.")
-            system_instruction = "\n".join([system_prompt] + system_prompt_extras)
-
-        if system_instruction and not is_google_provider:
-            api_history.insert(0, {"role": "system", "content": system_instruction})
-
-        # --- Generate and Send Response (with Key Rotation and Retry) ---
-        response_msgs = []
-        final_error = None
-        llm_call_succeeded = False
-        response_contents = [] # Initialize here
-
-        available_keys = await llm_rate_manager.get_available_keys()
-        if not available_keys:
-            final_error = f"All {provider} API keys are currently rate-limited."
-            await llm_rate_manager.reset_if_all_limited() # Check if reset needed
-
-        async with new_msg.channel.typing():
-            for key_index, current_api_key in enumerate(available_keys):
-                logging.info(f"Attempting LLM call with {provider} key index {key_index} (starts with {current_api_key[:4]}...)")
-                response_contents = [] # Reset for each key attempt
-                final_response_obj = None
-                final_grounding_metadata = None
-                final_prompt_feedback = None
-                final_view_to_attach = None # Reset final view for each attempt
-                stream_error = None # Track errors specifically during streaming
-
-                # Create the base embed with warnings *before* the loop
-                base_embed = discord.Embed()
-                for warning in sorted(user_warnings):
-                    base_embed.add_field(name=warning, value="", inline=False)
-
-                # --- START DEBUG LOGGING ---
-                logging.debug(f"--- Sending API Request (Key Index: {key_index}) ---")
-                logging.debug(f"Provider: {provider}, Model: {model_name}")
-                # Use repr for potentially large history to avoid overly long logs
-                logging.debug(f"API History (repr): {repr(api_history)}")
-                logging.debug(f"Extra Body: {cfg.get('extra_api_parameters', {})}")
-                logging.debug(f"-------------------------------------------------")
-                # --- END DEBUG LOGGING ---
-
-                try:
-                    # --- Initialize Client with Current Key ---
-                    genai_client = None
-                    openai_client = None
-                    if is_google_provider:
-                        genai_client = google_genai.Client(api_key=current_api_key)
-                    else:
-                        openai_client = AsyncOpenAI(
-                            base_url=cfg["providers"][provider].get("base_url"),
-                            api_key=current_api_key or "sk-no-key-required" # Handle optional key for local models
-                        )
-
-                    # --- API Call ---
-                    if is_google_provider:
-                        safety_settings = [
-                            google_genai_types.SafetySetting(
-                                category=google_genai_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                                threshold=google_genai_types.HarmBlockThreshold.BLOCK_NONE),
-                            google_genai_types.SafetySetting(
-                                category=google_genai_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                                threshold=google_genai_types.HarmBlockThreshold.BLOCK_NONE),
-                            google_genai_types.SafetySetting(
-                                category=google_genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                                threshold=google_genai_types.HarmBlockThreshold.BLOCK_NONE),
-                            google_genai_types.SafetySetting(
-                                category=google_genai_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                                threshold=google_genai_types.HarmBlockThreshold.BLOCK_NONE),
-                            google_genai_types.SafetySetting(
-                                category=google_genai_types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY,
-                                threshold=google_genai_types.HarmBlockThreshold.BLOCK_NONE),
-                        ]
-                        tools = [google_genai_types.Tool(google_search=google_genai_types.GoogleSearch())]
-                        generation_config_dict = {k: v for k, v in cfg.get("extra_api_parameters", {}).items() if k in ['temperature', 'top_p', 'top_k', 'max_output_tokens', 'stop_sequences']}
-                        config = google_genai_types.GenerateContentConfig(
-                            tools=tools,
-                            safety_settings=safety_settings,
-                            system_instruction=system_instruction,
-                            **generation_config_dict
-                        )
-                        stream = await genai_client.aio.models.generate_content_stream(
-                            model=f"models/{model_name}",
-                            contents=api_history,
-                            config=config,
-                        )
-                    else: # OpenAI compatible
-                        stream = await openai_client.chat.completions.create(
-                            model=model_name,
-                            messages=api_history,
-                            stream=True,
-                            extra_body=cfg.get("extra_api_parameters", {})
-                        )
-
-                    # --- Process Stream ---
-                    last_chunk_time = 0
-                    async for chunk in stream:
-                        final_response_obj = chunk # Store last chunk for metadata
-                        delta_text = ""
-
-                        if is_google_provider:
-                            if hasattr(chunk, 'prompt_feedback') and chunk.prompt_feedback:
-                                final_prompt_feedback = chunk.prompt_feedback
-                                # Check for immediate prompt blocking
-                                if final_prompt_feedback.block_reason != google_genai_types.BlockReason.BLOCK_REASON_UNSPECIFIED:
-                                     block_reason_str = final_prompt_feedback.block_reason.name
-                                     logging.warning(f"Google GenAI prompt blocked with key {current_api_key[:4]}... Reason: {block_reason_str}")
-                                     # Treat prompt blocking as a failure for this key, but not necessarily a rate limit
-                                     stream_error = google_api_core_exceptions.InvalidArgument(f"Prompt blocked by safety filter: {block_reason_str}")
-                                     break # Stop processing this stream
-
-                            delta_text = getattr(chunk, 'text', None) or ""
-                            # Check for response blocking mid-stream (less common but possible)
-                            if hasattr(chunk, 'candidates') and chunk.candidates:
-                                candidate = chunk.candidates[0]
-                                finish_reason_enum = getattr(candidate, 'finish_reason', None)
-                                if finish_reason_enum == google_genai_types.FinishReason.SAFETY:
-                                    logging.warning(f"Google GenAI response blocked mid-stream due to safety with key {current_api_key[:4]}...")
-                                    stream_error = google_api_core_exceptions.InvalidArgument("Response blocked by safety filter mid-stream.")
-                                    break # Stop processing this stream
-                        else: # OpenAI
-                            delta_text = chunk.choices[0].delta.content or ""
-                            finish_reason = chunk.choices[0].finish_reason
-                            if finish_reason: # Check for finish reason (e.g., 'content_filter')
-                                if finish_reason == 'content_filter':
-                                     logging.warning(f"OpenAI response blocked mid-stream due to content filter with key {current_api_key[:4]}...")
-                                     stream_error = OpenAIAPIError("Response blocked by content filter mid-stream.", request=None, body=None) # Simulate error
-                                     break
-                                elif finish_reason == 'length':
-                                     # Add warning only if not already present
-                                     if "⚠️ Max output tokens reached." not in user_warnings:
-                                         user_warnings.add("⚠️ Max output tokens reached.")
-                                         # Update base embed immediately
-                                         base_embed.clear_fields() # Clear old warnings
-                                         for warning in sorted(user_warnings): # Add updated warnings
-                                             base_embed.add_field(name=warning, value="", inline=False)
-                                # No need to break for 'stop' or 'tool_calls' here, just process delta
-
-                        if delta_text:
-                            response_contents.append(delta_text)
-
-                        # Edit logic (only if no stream error yet)
-                        if not stream_error:
-                            current_time = dt.now().timestamp()
-                            if not response_msgs or (current_time - last_chunk_time >= EDIT_DELAY_SECONDS):
-                                if use_plain_responses:
-                                    # Handle plain text streaming (send new message if needed)
-                                    full_response = "".join(response_contents)
-                                    num_plain_needed = max(1, math.ceil(len(full_response) / max_message_length))
-                                    for i in range(num_plain_needed):
-                                        text_segment = full_response[i * max_message_length : (i + 1) * max_message_length]
-                                        is_last_segment = (i == num_plain_needed - 1)
-                                        display_content = text_segment + ("" if is_last_segment else "...") # Indicate continuation
-                                        previous_msg_id_plain = response_msgs[i-1].id if i > 0 and i <= len(response_msgs) else None
-
-                                        if i < len(response_msgs):
-                                            await response_msgs[i].edit(content=display_content, suppress_embeds=True, view=None)
-                                            # Link previous segment
-                                            if previous_msg_id_plain and previous_msg_id_plain in msg_nodes:
-                                                msg_nodes[previous_msg_id_plain].next_segment_msg_id = response_msgs[i].id
-                                        else:
-                                            reply_target = response_msgs[-1] if response_msgs else new_msg
-                                            new_msg_sent = await reply_target.reply(content=display_content, suppress_embeds=True, mention_author = False, view=None)
-                                            response_msgs.append(new_msg_sent)
-                                            if new_msg_sent.id not in msg_nodes:
-                                                msg_nodes[new_msg_sent.id] = MsgNode(parent_msg=new_msg)
-                                                await msg_nodes[new_msg_sent.id].lock.acquire()
-                                            # Link previous segment
-                                            if previous_msg_id_plain and previous_msg_id_plain in msg_nodes:
-                                                msg_nodes[previous_msg_id_plain].next_segment_msg_id = new_msg_sent.id
-                                else:
-                                    # Handle embed streaming (calls the updated function)
-                                    await update_response_messages(
-                                        new_msg, response_msgs, "".join(response_contents),
-                                        base_embed, False, msg_nodes, max_message_length, # Pass model name here
-                                         provider_slash_model
-                                    )
-                                last_chunk_time = current_time
-
-                    # --- Post-Stream Check (if stream finished without error) ---
-                    if stream_error:
-                        raise stream_error # Raise the error caught during streaming
-
-                    # --- Final Checks and View Creation ---
-                    if is_google_provider:
-                        finish_reason_enum = None
-                        if final_response_obj and hasattr(final_response_obj, 'candidates') and final_response_obj.candidates:
-                            candidate = final_response_obj.candidates[0]
-                            finish_reason_enum = getattr(candidate, 'finish_reason', None)
-                            if finish_reason_enum == google_genai_types.FinishReason.SAFETY:
-                                logging.warning(f"Google GenAI response blocked post-stream due to safety with key {current_api_key[:4]}...")
-                                raise google_api_core_exceptions.InvalidArgument("Response blocked by safety filter post-stream.")
-                            elif finish_reason_enum == google_genai_types.FinishReason.RECITATION:
-                                 if "⚠️ Response potentially contains recited content." not in user_warnings:
-                                     user_warnings.add("⚠️ Response potentially contains recited content.")
-                                     base_embed.clear_fields(); [base_embed.add_field(name=w, value="", inline=False) for w in sorted(user_warnings)]
-                            elif finish_reason_enum == google_genai_types.FinishReason.MAX_TOKENS:
-                                 if "⚠️ Max output tokens reached." not in user_warnings:
-                                     user_warnings.add("⚠️ Max output tokens reached.")
-                                     base_embed.clear_fields(); [base_embed.add_field(name=w, value="", inline=False) for w in sorted(user_warnings)]
-
-                            # Extract grounding metadata if response wasn't blocked
-                            if hasattr(candidate, 'grounding_metadata'):
-                                final_grounding_metadata = candidate.grounding_metadata
-                                # Create the view instance here, message_id will be set later
-                                # Pass grounding metadata to the view constructor
-                                final_view_to_attach = ResponseActionsView(message_id=0, grounding_metadata=final_grounding_metadata) # Placeholder ID
-                    else: # OpenAI or other providers
-                         # Always create the view for non-Google providers (for the file button)
-                         final_view_to_attach = ResponseActionsView(message_id=0, grounding_metadata=None) # Placeholder ID, no grounding
-
-
-                    # --- Final Update/Send ---
-                    full_response_text = "".join(response_contents)
-
-                    if use_plain_responses:
-                        # Final update for plain text
-                        num_plain_needed = max(1, math.ceil(len(full_response_text) / max_message_length))
-                        if not full_response_text and num_plain_needed == 1: # Handle truly empty response
-                             text_segment = "(empty response)" # Placeholder for empty
-                             # Ensure final_view_to_attach has the correct ID if needed (even for plain text, though view won't show)
-                             if isinstance(final_view_to_attach, ResponseActionsView):
-                                 if response_msgs: final_view_to_attach.message_id = response_msgs[0].id
-                                 else: # Need to send first to get ID
-                                     temp_msg = await new_msg.reply(content=text_segment, suppress_embeds=True, mention_author = False, view=None)
-                                     final_view_to_attach.message_id = temp_msg.id
-                                     # Don't attach view to plain text message
-                                     response_msgs.append(temp_msg)
-                                     # Skip the loop below as we've handled the only message
-                                     num_plain_needed = 0 # Prevent loop execution
-                             else: # No view needed
-                                 if response_msgs: await response_msgs[0].edit(content=text_segment, suppress_embeds=True, view=None)
-                                 else: response_msgs.append(await new_msg.reply(content=text_segment, suppress_embeds=True, mention_author = False, view=None))
-
-                        for i in range(num_plain_needed):
-                            text_segment = full_response_text[i * max_message_length : (i + 1) * max_message_length]
-                            is_last_segment = (i == num_plain_needed - 1)
-                            current_segment_view = None
-                            previous_msg_id_final_plain = response_msgs[i-1].id if i > 0 and i <= len(response_msgs) else None
-                            # Views are not attached to plain text, but we still need to manage the view object's state if it exists
-                            if is_last_segment and isinstance(final_view_to_attach, ResponseActionsView):
-                                # If we are editing the last message, set the ID now
-                                if i < len(response_msgs):
-                                    final_view_to_attach.message_id = response_msgs[i].id
-                                    # current_segment_view remains None for plain text
-                                # If sending new, view will be attached after sending
-
-                            if i < len(response_msgs):
-                                await response_msgs[i].edit(content=text_segment, suppress_embeds=True, view=current_segment_view)
-                                # Link previous segment
-                                if previous_msg_id_final_plain and previous_msg_id_final_plain in msg_nodes:
-                                    msg_nodes[previous_msg_id_final_plain].next_segment_msg_id = response_msgs[i].id
+                    if node_good_attachments:
+                        node_attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in node_good_attachments], return_exceptions=True)
+                        for att, resp in zip(node_good_attachments, node_attachment_responses):
+                            if isinstance(resp, httpx.Response) and resp.status_code == 200:
+                                if att.content_type.startswith("text"):
+                                    try:
+                                        text_content = resp.content.decode(resp.encoding or 'utf-8', errors='replace')
+                                        node_attachment_texts.append(text_content[:max_text])
+                                        if len(text_content) > max_text: node_bad_attachments = True
+                                    except Exception as e:
+                                        logging.warning(f"Failed to decode text attachment {att.filename} in parent: {e}")
+                                        node_bad_attachments = True
+                                elif att.content_type.startswith("image"):
+                                    try:
+                                        img_data = f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"
+                                        node_attachment_images.append(dict(type="image_url", image_url=dict(url=img_data)))
+                                    except Exception as e:
+                                         logging.warning(f"Failed to encode image attachment {att.filename} in parent: {e}")
+                                         node_bad_attachments = True
                             else:
-                                reply_target = response_msgs[-1] if response_msgs else new_msg
-                                # Send without view first if it needs ID set later
-                                view_to_send = None # Always None for plain text
-                                new_msg_sent = await reply_target.reply(content=text_segment, suppress_embeds=True, mention_author = False, view=view_to_send)
-                                response_msgs.append(new_msg_sent)
-                                if new_msg_sent.id not in msg_nodes:
-                                    msg_nodes[new_msg_sent.id] = MsgNode(parent_msg=new_msg)
-                                    await msg_nodes[new_msg_sent.id].lock.acquire()
-                                # Link previous segment
-                                if previous_msg_id_final_plain and previous_msg_id_final_plain in msg_nodes:
-                                    msg_nodes[previous_msg_id_final_plain].next_segment_msg_id = new_msg_sent.id
-                                # Set message ID on the view object if it exists, even though not attached
-                                if is_last_segment and isinstance(final_view_to_attach, ResponseActionsView):
-                                    final_view_to_attach.message_id = new_msg_sent.id
+                                logging.warning(f"Failed to fetch attachment {att.url} in parent: {resp}")
+                                node_bad_attachments = True
 
-                        # Clean up extra plain messages
-                        while len(response_msgs) > num_plain_needed:
-                            msg_to_delete = response_msgs.pop()
-                            try: await msg_to_delete.delete()
-                            except: pass
-                            if msg_to_delete.id in msg_nodes:
-                                if msg_nodes[msg_to_delete.id].lock.locked(): msg_nodes[msg_to_delete.id].lock.release()
-                                del msg_nodes[msg_to_delete.id]
+                embed_texts = [
+                    "\n".join(filter(None, (embed.title, embed.description, getattr(embed.footer, 'text', None))))
+                    for embed in curr_msg.embeds if embed.type == 'rich' # Process only rich embeds
+                ]
 
-                    else:
-                        # Final update for embeds
-                        # Use the final_view_to_attach created earlier
-                        await update_response_messages(
-                            new_msg, response_msgs, full_response_text,
-                            base_embed, True, msg_nodes, max_message_length,
-                            provider_slash_model, final_view=final_view_to_attach # Pass the combined view
-                        )
+                curr_node.text = "\n".join(filter(None, [node_text_content] + embed_texts + node_attachment_texts))
+                curr_node.images = node_attachment_images
+                curr_node.role = "assistant" if curr_msg.author == discord_client.user else "user"
+                curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
+                curr_node.has_bad_attachments = node_bad_attachments
 
-                    llm_call_succeeded = True
-                    logging.info(f"LLM call successful with {provider} key index {key_index}.")
-                    break # Exit key rotation loop on success
-
-                # --- Exception Handling for the Current Key ---
-                except (OpenAIRateLimitError, google_api_core_exceptions.ResourceExhausted) as e:
-                    logging.warning(f"Rate limit error with {provider} key index {key_index} ({current_api_key[:4]}...): {e}")
-                    await llm_rate_manager.add_key(current_api_key)
-                    final_error = e
-                    if await llm_rate_manager.reset_if_all_limited():
-                        logging.warning(f"All {provider} keys rate-limited, DB reset. Stopping retries for this request.")
-                        final_error = Exception(f"All {provider} API keys became rate-limited during this request.")
-                        break # Stop trying keys for this request
-                    # Continue to next key
-                except (OpenAIConnectionError, google_api_core_exceptions.ServiceUnavailable, google_api_core_exceptions.DeadlineExceeded) as e:
-                    logging.warning(f"Connection/Service error with {provider} key index {key_index} ({current_api_key[:4]}...): {e}. Retrying with next key.")
-                    final_error = e
-                    await asyncio.sleep(1) # Small delay before next key
-                    # Continue to next key
-                except (OpenAIAuthenticationError, google_api_core_exceptions.PermissionDenied) as e:
-                     logging.error(f"Authentication error with {provider} key index {key_index} ({current_api_key[:4]}...): {e}. Skipping this key.")
-                     # Don't mark as rate limited, but skip for this request cycle
-                     final_error = e
-                     # Continue to next key
-                except (OpenAIAPIError, google_api_core_exceptions.InvalidArgument, google_api_core_exceptions.FailedPrecondition, google_genai_errors.ClientError) as e: # Added ClientError
-                     # Handle errors like prompt/response blocking, invalid args etc.
-                     logging.error(f"API Error (non-rate-limit) with {provider} key index {key_index} ({current_api_key[:4]}...): {e}")
-                     final_error = e
-                     # Decide if retryable. For safety blocks or bad args, maybe not.
-                     # For now, let's retry with the next key unless it's clearly a permanent issue with the prompt itself.
-                     error_str = str(e).lower()
-                     if "safety filter" in error_str or "prompt" in error_str or "invalid" in error_str or "match is not a function" in error_str: # Added the specific error message check
-                          logging.warning("Error seems related to prompt/safety/invalid arg/server bug, stopping retries for this request.")
-                          break # Stop trying keys
-                     # Continue to next key otherwise
-                except Exception as e:
-                    logging.exception(f"Unexpected error during API call with {provider} key index {key_index} ({current_api_key[:4]}...)")
-                    final_error = e
-                    # Decide if retryable. Let's retry for unexpected errors.
-                    # Continue to next key
-
-            # --- After Key Rotation Loop ---
-            if not llm_call_succeeded:
-                error_message = f"⚠️ LLM call failed after trying all available keys for provider {provider}." # Simplified initial message
-                if final_error:
-                    error_message += f" Last error: {type(final_error).__name__}"
-                    # Provide more specific feedback for common errors
-                    if isinstance(final_error, (OpenAIAuthenticationError, google_api_core_exceptions.PermissionDenied)):
-                         error_message += " (Check API keys)"
-                    elif isinstance(final_error, (OpenAIRateLimitError, google_api_core_exceptions.ResourceExhausted)):
-                         error_message += " (Rate limit or quota exceeded)"
-                    elif "safety filter" in str(final_error).lower():
-                         error_message += " (Content blocked by safety filters)"
-                    elif "invalid" in str(final_error).lower() or "match is not a function" in str(final_error).lower(): # Added check here too
-                         error_message += " (Invalid request/argument or server error)"
-                    # Add the raw error message if it's an APIError for more context
-                    # FIX: Check for OpenAIAPIError and google_api_core_exceptions.GoogleAPICallError
-                    if isinstance(final_error, (OpenAIAPIError, google_api_core_exceptions.GoogleAPICallError)):
-                         try:
-                             # Attempt to get the message from the error object
-                             detail_message = getattr(final_error, 'message', str(final_error))
-                             if detail_message and len(detail_message) < 100: # Keep it concise
-                                 error_message += f" - {detail_message}"
-                         except Exception:
-                             pass # Ignore if message extraction fails
-
-
-                logging.error(f"LLM call failed after trying all available keys for provider {provider}. Last error: {final_error}")
+                # Determine parent message (Simplified logic - ONLY follow explicit replies or thread starters)
+                parent_msg_obj = None
                 try:
-                    # If some partial message was sent during a failed stream attempt, edit it. Otherwise, reply.
-                    if response_msgs:
-                        if use_plain_responses:
-                             # Append error to the last plain text message
-                             last_msg_content = response_msgs[-1].content.replace("...", "") # Remove continuation indicator if present
-                             await response_msgs[-1].edit(content=last_msg_content + f"\n\n{error_message}", view=None)
+                    # 1. Direct Reply
+                    if curr_msg.reference and curr_msg.reference.message_id:
+                        # Avoid fetching self-reference in replies (shouldn't happen often but safety)
+                        if curr_msg.reference.message_id != curr_msg.id:
+                            parent_msg_obj = curr_msg.reference.cached_message or await curr_msg.channel.fetch_message(curr_msg.reference.message_id)
                         else:
-                             # Get the last embed, update its description and color
-                             last_embed = response_msgs[-1].embeds[0].copy()
-                             last_embed.description = (last_embed.description or "").replace(STREAMING_INDICATOR, "") + f"\n\n{error_message}"
-                             last_embed.color = discord.Color.red()
-                             last_embed.set_footer(text=f"Model: {provider_slash_model}") # Add footer even on error
-                             await response_msgs[-1].edit(embed=last_embed, view=None) # Remove view on error
+                             logging.warning(f"Message {curr_msg.id} references itself, stopping chain.")
+
+                    # 2. Thread Start (Only if it's the *first* user message in the thread)
+                    elif isinstance(curr_msg.channel, discord.Thread) and curr_msg.id == new_msg.id: # Check if it's the trigger message
+                         is_first_message = not [msg async for msg in curr_msg.channel.history(limit=1, before=curr_msg)]
+                         if is_first_message:
+                             # Try fetching the starter message directly
+                             try:
+                                 parent_msg_obj = curr_msg.channel.starter_message or await curr_msg.channel.fetch_starter_message()
+                             except (discord.NotFound, discord.HTTPException, AttributeError):
+                                 logging.warning(f"Could not fetch starter message for thread {curr_msg.channel.id}")
+                                 # Fallback: Try fetching the message that created the thread (if applicable)
+                                 try:
+                                     parent_channel = curr_msg.channel.parent
+                                     if parent_channel and curr_msg.channel.id != curr_msg.id: # Ensure it's not the thread message itself
+                                         parent_msg_obj = await parent_channel.fetch_message(curr_msg.channel.id)
+                                 except (discord.NotFound, discord.HTTPException, AttributeError):
+                                     logging.warning(f"Could not fetch thread creation message for thread {curr_msg.channel.id}")
+                                     pass # No parent found
+
+                    # --- REMOVED Automatic Chaining Logic ---
+                    # The logic that checked channel history for same author messages is removed.
+
+                    curr_node.parent_msg = parent_msg_obj
+                except (discord.NotFound, discord.HTTPException) as e: curr_node.fetch_parent_failed = True; logging.warning(f"Error fetching parent for {curr_msg.id}: {e}")
+                except Exception as e: curr_node.fetch_parent_failed = True; logging.error(f"Unexpected error determining parent for {curr_msg.id}: {e}", exc_info=True)
+
+
+            # --- Prepare message content for LLM ---
+            content_for_llm = None
+            images_for_llm = curr_node.images[:max_images] # Apply limit
+            text_for_llm = curr_node.text[:max_text] if curr_node.text else ""
+            if curr_node.text and len(curr_node.text) > max_text: user_warnings.add(f"⚠️ Max {max_text:,} chars/message")
+
+            if provider == "google":
+                parts = []
+                if text_for_llm: parts.append(genai_types.Part.from_text(text=text_for_llm))
+                if accept_images:
+                    for img_dict in images_for_llm:
+                        if gemini_part := get_gemini_image_part(img_dict): parts.append(gemini_part)
+                        else: curr_node.has_bad_attachments = True # Mark if conversion failed
+                content_for_llm = parts # List of Parts
+            else: # OpenAI format
+                if accept_images and images_for_llm:
+                    content_for_llm = []
+                    if text_for_llm: content_for_llm.append(dict(type="text", text=text_for_llm))
+                    content_for_llm.extend(images_for_llm)
+                elif text_for_llm: content_for_llm = text_for_llm # String only if no images
+                # If neither text nor images, content_for_llm remains None
+
+            # Add message to list if it has content OR if it's the initial message and was just a trigger
+            is_initial_trigger_reply = curr_msg.id == new_msg.id and is_reply and is_only_trigger and not content_for_llm
+            if content_for_llm or (curr_node.role == "assistant" and not content_for_llm) or is_initial_trigger_reply:
+                message = dict(role=curr_node.role)
+                if accept_usernames and curr_node.user_id is not None: message["name"] = str(curr_node.user_id)
+                if provider == "google": message["parts"] = content_for_llm if content_for_llm else [] # Ensure parts is list
+                else: message["content"] = content_for_llm if content_for_llm else "" # Ensure content is string or list
+                messages.append(message)
+            elif curr_node.role == "user": logging.warning(f"User message {curr_msg.id} resulted in empty content after processing.")
+
+            # Add warnings based on node state
+            if len(curr_node.images) > max_images: user_warnings.add(f"⚠️ Max {max_images} image{'s' if max_images != 1 else ''}" if max_images > 0 else "⚠️ Can't see images")
+            if curr_node.has_bad_attachments: user_warnings.add("⚠️ Unsupported attachments")
+            if curr_node.fetch_parent_failed: user_warnings.add("⚠️ Couldn't fetch full history")
+            elif curr_node.parent_msg is not None and len(messages) == max_messages: user_warnings.add(f"⚠️ Only using last {len(messages)} message{'s' if len(messages) != 1 else ''}")
+
+            curr_msg = curr_node.parent_msg # Move to the next message in the chain (only if parent_msg was set by reply/thread logic)
+
+    # --- Process External Content (URLs) ---
+    if video_ids_with_urls:
+        youtube_api_key = cfg.get("youtube_data_api_key")
+        logging.info(f"Processing {len(video_ids_with_urls)} YouTube URL(s)...")
+        tasks = [process_youtube_url(vid, youtube_api_key, url) for vid, url in video_ids_with_urls]
+        youtube_results = await asyncio.gather(*tasks, return_exceptions=True)
+        append_parts = []
+        for i, result in enumerate(youtube_results):
+            vid, url = video_ids_with_urls[i]
+            if isinstance(result, Exception):
+                logging.error(f"Error processing YouTube URL {url}: {result}", exc_info=result)
+                append_parts.append(f"youtube url {i+1}: {url}\nyoutube url {i+1} content: [Error processing URL: {type(result).__name__}]")
+            elif result:
+                formatted_parts = [f"URL: {url}"] # Start with the URL itself
+                if result.get('title'): formatted_parts.append(f"Title: {result['title']}")
+                if result.get('channel_name'): formatted_parts.append(f"Channel: {result['channel_name']}") # No truncation
+                if result.get('description'): formatted_parts.append(f"Description: {result['description']}") # No truncation
+                if result.get('transcript_text'): formatted_parts.append(f"Transcript: {result['transcript_text']}") # No truncation
+                if result.get('comments_text'): formatted_parts.append(f"Top Comments: {result['comments_text']}") # No truncation
+                append_parts.append(f"--- YouTube Content {i+1} ---\n" + "\n".join(formatted_parts))
+        if append_parts:
+            youtube_content_to_append = "\n\n" + "\n\n".join(append_parts)
+            logging.info("Finished processing YouTube URLs.")
+        if not youtube_api_key:
+             user_warnings.add("⚠️ YouTube URLs found, but processing limited (no API key).")
+
+    if reddit_urls_with_ids:
+        reddit = await get_reddit_client()
+        if reddit:
+            logging.info(f"Processing {len(reddit_urls_with_ids)} Reddit URL(s)...")
+            tasks = [fetch_reddit_content(reddit, sub_id) for _, sub_id in reddit_urls_with_ids]
+            reddit_results = await asyncio.gather(*tasks, return_exceptions=True)
+            append_parts = []
+            for i, result in enumerate(reddit_results):
+                url, sub_id = reddit_urls_with_ids[i]
+                if isinstance(result, Exception):
+                    logging.error(f"Error processing Reddit URL {url}: {result}", exc_info=result)
+                    append_parts.append(f"reddit url {i+1}: {url}\nreddit url {i+1} content: [Error processing URL: {type(result).__name__}]")
+                else:
+                    append_parts.append(f"--- Reddit Content {i+1} ---\nURL: {url}\n{result}")
+            if append_parts:
+                reddit_content_to_append = "\n\n" + "\n\n".join(append_parts)
+                logging.info("Finished processing Reddit URLs.")
+        else:
+            logging.warning("Reddit URLs detected, but Reddit client failed to initialize. Skipping Reddit processing.")
+            user_warnings.add("⚠️ Reddit URLs found, but processing disabled (check config/logs).")
+
+    if filtered_general_urls:
+        logging.info(f"Processing {len(filtered_general_urls)} general URL(s)...")
+        tasks = [fetch_and_extract_content(url) for url in filtered_general_urls]
+        general_results = await asyncio.gather(*tasks, return_exceptions=True)
+        append_parts = []
+        for i, result in enumerate(general_results):
+            url = filtered_general_urls[i]
+            if isinstance(result, Exception):
+                logging.error(f"Error processing general URL {url}: {result}", exc_info=result)
+                append_parts.append(f"url {i+1}: {url}\nurl {i+1} content: [Error processing URL: {type(result).__name__}]")
+            elif result and not result.startswith("[Error") and result != "[Unsupported content type]" and result != "[No text content found]": # Append only if successful and has content
+                append_parts.append(f"--- Web Content {i+1} ---\nURL: {url}\n{result}")
+        if append_parts:
+            general_url_content_to_append = "\n\n" + "\n\n".join(append_parts)
+            logging.info("Finished processing general URLs.")
+    elif general_urls:
+        logging.info("General URLs found, but they were all YouTube or Reddit URLs.")
+
+
+    # --- Prepare Final Messages for LLM ---
+    system_instruction_text = None
+    if system_prompt := cfg.get("system_prompt"):
+        system_prompt_extras = [f"Today's date: {dt.now().strftime('%B %d %Y')}."]
+        if accept_usernames:
+            system_prompt_extras.append("User's names (if provided) are their Discord IDs and should be typed as '<@ID>'.")
+        full_system_prompt = "\n".join([system_prompt] + system_prompt_extras)
+        if provider == "google":
+             system_instruction_text = full_system_prompt
+        else:
+            # Insert system message at the beginning if not already present
+            if not messages or messages[0].get("role") != "system":
+                 messages.insert(0, dict(role="system", content=full_system_prompt))
+            else: # Update existing system message if needed (less common)
+                 messages[0]["content"] = full_system_prompt
+
+
+    # Reverse messages to chronological order for LLM
+    final_messages_for_llm = messages[::-1]
+
+    # Append external content to the *last user message*
+    content_to_append = youtube_content_to_append + reddit_content_to_append + general_url_content_to_append
+    if content_to_append:
+        appended_to_message = False
+        for i in range(len(final_messages_for_llm) - 1, -1, -1):
+            if final_messages_for_llm[i]['role'] == 'user':
+                target_message = final_messages_for_llm[i]
+                append_text = "\n\n<context>\n" + content_to_append + "\n</context>"
+
+                if provider == "google":
+                    # Ensure 'parts' exists and is a list, initialize if necessary
+                    if 'parts' not in target_message or not isinstance(target_message['parts'], list):
+                         content_val = target_message.get('content', '') # Get existing content if any
+                         target_message['parts'] = [genai_types.Part.from_text(text=str(content_val))] if content_val else []
+                    # Append the new text part
+                    target_message['parts'].append(genai_types.Part.from_text(text=append_text))
+                    target_message.pop('content', None) # Remove old content field if it exists
+                else: # OpenAI
+                    if 'content' not in target_message: target_message['content'] = ""
+                    if isinstance(target_message['content'], str):
+                        target_message['content'] += append_text
+                    elif isinstance(target_message['content'], list):
+                        # Find the last text part and append, or add a new text part
+                        found_text_part = False
+                        for part in reversed(target_message['content']):
+                            if part.get('type') == 'text':
+                                part['text'] += append_text
+                                found_text_part = True
+                                break
+                        if not found_text_part:
+                            target_message['content'].append({"type": "text", "text": append_text})
                     else:
-                         await new_msg.reply(error_message, mention_author = False)
-                except discord.HTTPException as e:
-                    logging.error(f"Failed to send final error message to Discord: {e}")
+                        # Handle unexpected content type by converting to string and appending
+                        logging.warning(f"Unexpected content type in OpenAI message: {type(target_message['content'])}. Converting.")
+                        target_message['content'] = str(target_message['content']) + append_text
+                appended_to_message = True
+                logging.info("Appended external content to the last user message.")
+                break
+        if not appended_to_message:
+             logging.warning("Could not find a user message to append external content to. Appending as a new user message.")
+             # Append as a new user message if no suitable one found
+             new_user_message = {"role": "user"}
+             append_text = "<context>\n" + content_to_append + "\n</context>"
+             if provider == "google":
+                 new_user_message["parts"] = [genai_types.Part.from_text(text=append_text)]
+             else:
+                 new_user_message["content"] = append_text
+             if accept_usernames: # Add user ID if possible
+                 new_user_message["name"] = str(new_msg.author.id)
+             final_messages_for_llm.append(new_user_message)
 
-    # --- Finalize and Cache ---
-    full_response_text = "".join(response_contents)
-    for i, response_msg in enumerate(response_msgs):
-        if response_msg.id in msg_nodes:
-            node = msg_nodes[response_msg.id]
-            # Store the correct text segment in each node
-            segment_start = i * max_message_length
-            segment_end = (i + 1) * max_message_length
-            node.text = full_response_text[segment_start:segment_end]
 
-            # Store grounding metadata only on the node for the *last* message segment
-            if response_msg == response_msgs[-1]:
-                 node.grounding_metadata = final_grounding_metadata
+    logging.info(f"Prepared {len(final_messages_for_llm)} messages for LLM provider '{provider}'. Last message length (approx): {len(str(final_messages_for_llm[-1])) if final_messages_for_llm else 0}")
 
-            # Release lock if held
-            if node.lock.locked():
-                node.lock.release()
-                logging.debug(f"Released lock for MsgNode {response_msg.id}")
+    # --- LLM Interaction with Retry Logic ---
+    response_msgs = []
+    edit_task = None
+    last_task_time = 0
+    # final_response_text is reset inside the loop
+    embed = discord.Embed(description=STREAMING_INDICATOR, color=EMBED_COLOR_INCOMPLETE)
+    embed.set_footer(text=f"Model: {provider_slash_model}") # Add footer initially
+    initial_embed_sent = False
+    last_exception = None
+    tried_keys: Set[str] = set()
+    max_retries = key_manager.get_total_keys()
+    # If max_retries is 0 (e.g., local model with no keys), set to 1 to allow one attempt
+    if max_retries == 0 and provider in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]:
+        max_retries = 1
 
-    # --- Cache Cleanup ---
-    if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
-        ids_to_remove = sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]
-        for msg_id in ids_to_remove:
-            node_to_remove = msg_nodes.pop(msg_id, None)
-            # Ensure lock is released if node is removed mid-processing (shouldn't happen often)
-            if node_to_remove and node_to_remove.lock.locked():
-                node_to_remove.lock.release()
-                logging.warning(f"Released lock for MsgNode {msg_id} during cache cleanup.")
 
-    # Remove task from active tasks *after* releasing lock
-    active_tasks.pop(new_msg.id, None)
+    async with new_msg.channel.typing(): # Keep typing indicator during retries
+        for attempt in range(max_retries):
+            # --- Reset state for retry ---
+            current_message_content = ""
+            final_response_text = "" # Reset accumulated text for the new attempt
+            last_chunk = None
+            finish_reason = None
+            stream_error = None # Specific error encountered during streaming
+            # Don't reset response_msgs here, we might edit the last one on error
+
+            # --- Get Key and Initialize Client ---
+            api_key = await key_manager.get_valid_key()
+            # If api_key is None and it's a local provider, proceed without a key
+            if api_key is None and provider not in ["ollama", "lmstudio", "vllm", "oobabooga", "jan"]:
+                logging.error(f"Attempt {attempt+1}/{max_retries}: No valid API keys available for provider '{provider}'.")
+                last_exception = Exception(f"No valid API keys available for provider '{provider}' after checking rate limits.")
+                break # Exit retry loop if no keys are available for non-local
+
+            if api_key: # Log key usage only if a key exists
+                if api_key in tried_keys:
+                     logging.warning(f"Attempt {attempt+1}/{max_retries}: Re-trying key ...{api_key[-4:]} for {provider} after DB reset.")
+                     # Allow re-trying if DB was reset
+                tried_keys.add(api_key)
+                logging.info(f"Attempt {attempt+1}/{max_retries}: Using key ...{api_key[-4:]} for provider '{provider}'.")
+            else:
+                 logging.info(f"Attempt {attempt+1}/{max_retries}: Proceeding without API key for local provider '{provider}'.")
+
+
+            try:
+                # Initialize the specific client with the selected key (or None for local)
+                if provider == "google":
+                    if not api_key: # Should not happen based on previous check, but safety first
+                         raise ValueError("Google provider requires an API key.")
+                    genai_client = genai.Client(api_key=api_key)
+                    # Prepare Gemini specific request parts (contents, config)
+                    gemini_contents = []
+                    for msg in final_messages_for_llm:
+                        role = 'model' if msg['role'] == 'assistant' else msg['role']
+                        if role == 'system': continue # Skip system for contents, handled in config
+                        parts_data = msg.get('parts', [])
+                        if isinstance(parts_data, list):
+                            valid_parts = [p for p in parts_data if isinstance(p, genai_types.Part)]
+                            if valid_parts:
+                                gemini_contents.append(genai_types.Content(role=role, parts=valid_parts))
+                            # else: logging.warning(f"No valid parts for Gemini message role {role}.") # Reduce noise
+                        # else: logging.warning(f"Unexpected parts data type for Gemini: {type(parts_data)}") # Reduce noise
+
+                    # Define safety settings and tools
+                    safety_settings = [
+                        genai_types.SafetySetting(category=cat, threshold=genai_types.HarmBlockThreshold.BLOCK_NONE)
+                        for cat in [
+                            genai_types.HarmCategory.HARM_CATEGORY_HARASSMENT, genai_types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                            genai_types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, genai_types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                            # Add CIVIC_INTEGRITY if needed/available for the model
+                            # genai_types.HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY
+                        ]
+                    ]
+                    # Conditionally add grounding tool based on model support (example)
+                    tools = []
+                    # Simple check based on common model names supporting grounding
+                    if any(m in model for m in ["gemini-2.5", "gemini-2.0"]):
+                        tools.append(genai_types.Tool(google_search=genai_types.GoogleSearch()))
+                        logging.debug(f"Adding GoogleSearch tool for model {model}")
+                    else:
+                         logging.debug(f"Grounding tool skipped for model {model}")
+
+
+                    generation_config_params = {"safety_settings": safety_settings}
+                    if tools: generation_config_params["tools"] = tools
+                    if system_instruction_text: generation_config_params["system_instruction"] = system_instruction_text
+
+                    # Apply extra parameters from config
+                    extra_params = cfg.get("extra_api_parameters", {})
+                    for key, value in extra_params.items():
+                         # Map common params, allow others if they exist in GenerateContentConfig
+                         if key == "max_tokens": generation_config_params["max_output_tokens"] = value
+                         elif key in ["temperature", "top_p", "top_k", "stop_sequences", "candidate_count", "seed"]: # Add seed here
+                             generation_config_params[key] = value
+                         else: logging.warning(f"Ignoring unsupported extra_api_parameter for Gemini: {key}")
+
+                    generation_config = genai_types.GenerateContentConfig(**generation_config_params)
+
+                    # --- Gemini Streaming ---
+                    stream_iterator = await genai_client.aio.models.generate_content_stream(
+                        model=model, contents=gemini_contents, config=generation_config
+                    )
+                    async for chunk in stream_iterator:
+                        last_chunk = chunk # Store the last received chunk
+
+                        # Check for safety blocking first
+                        if chunk.candidates and chunk.candidates[0].finish_reason == genai_types.FinishReason.SAFETY:
+                            logging.warning(f"Gemini response blocked (Safety). Key: ...{api_key[-4:] if api_key else 'N/A'}. Ratings: {chunk.candidates[0].safety_ratings}")
+                            user_warnings.add("⚠️ Response blocked by safety filter")
+                            finish_reason = "SAFETY" # Use uppercase enum name for consistency
+                            current_message_content = "Response blocked by safety filter."
+                            stream_error = genai_errors.BlockedPromptException("Response blocked by safety filter") # Use specific error type
+                            break # Stop processing this stream
+
+                        # Check for other finish reasons indicating an issue mid-stream
+                        # Ensure finish_reason exists before accessing .name
+                        chunk_finish_reason = chunk.candidates[0].finish_reason if chunk.candidates else None
+                        if chunk_finish_reason and chunk_finish_reason not in (genai_types.FinishReason.FINISH_REASON_UNSPECIFIED, genai_types.FinishReason.STOP):
+                             # e.g., RECITATION, OTHER
+                             reason_name = chunk_finish_reason.name # Safe to access .name now
+                             logging.warning(f"Gemini stream stopped prematurely. Key: ...{api_key[-4:] if api_key else 'N/A'}. Reason: {reason_name}")
+                             finish_reason = reason_name # Store the reason name
+                             # Treat OTHER and RECITATION as errors for retry purposes
+                             if chunk_finish_reason in (genai_types.FinishReason.OTHER, genai_types.FinishReason.RECITATION):
+                                 stream_error = genai_errors.StopCandidateException(f"Stream stopped due to: {reason_name}")
+                             break # Stop processing stream
+
+                        if new_text := getattr(chunk, 'text', None):
+                            current_message_content += new_text
+                            final_response_text += new_text # Accumulate full text for this attempt
+
+                            # --- Message Splitting and Sending/Editing Logic (Common) ---
+                            while len(current_message_content) > max_message_length:
+                                split_point = current_message_content[:max_message_length].rfind('\n') if '\n' in current_message_content[:max_message_length] else max_message_length
+                                text_to_send = current_message_content[:split_point]
+                                current_message_content = current_message_content[split_point:].lstrip()
+                                reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+
+                                if use_plain_responses:
+                                    response_msg = await reply_to_msg.reply(content=text_to_send or " ", suppress_embeds=True, mention_author = False)
+                                else:
+                                    if edit_task: await edit_task # Wait for previous edit to finish
+                                    embed.description = text_to_send or " " # Ensure not empty
+                                    embed.color = EMBED_COLOR_COMPLETE
+                                    embed.clear_fields() # Clear fields on completed messages
+                                    embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on split message
+                                    if not response_msgs: # This is the first message being sent
+                                         # Add warnings to the first message
+                                         for warning in sorted(user_warnings): embed.add_field(name=warning, value="", inline=False)
+                                         response_msg = await reply_to_msg.reply(embed=embed, mention_author = False)
+                                         initial_embed_sent = True
+                                    else: # Edit the *previous* message to finalize it before sending the new one
+                                         # Finalize previous message (remove streaming indicator, set color, remove view)
+                                         prev_embed = discord.Embed(description=text_to_send or " ", color=EMBED_COLOR_COMPLETE)
+                                         prev_embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on finalized previous message
+                                         edit_task = asyncio.create_task(response_msgs[-1].edit(embed=prev_embed, view=None)) # Remove view from finalized message
+                                         await edit_task # Wait for final edit
+                                         # Now send the new message as a reply to the finalized one
+                                         embed.description = current_message_content + STREAMING_INDICATOR # Prepare embed for the *new* message
+                                         embed.color = EMBED_COLOR_INCOMPLETE
+                                         embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on new streaming message
+                                         embed.clear_fields() # Clear fields for the new message
+                                         response_msg = await response_msgs[-1].reply(embed=embed, mention_author = False) # Reply to the previous bot message
+                                         edit_task = None # Reset edit task for the new message
+
+                                if response_msg not in response_msgs:
+                                    response_msgs.append(response_msg)
+                                    msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                last_task_time = dt.now().timestamp()
+
+                            # --- Throttled Edit (Common) ---
+                            if not use_plain_responses:
+                                ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
+                                if not response_msgs or not initial_embed_sent: # Send initial message if not split yet
+                                    embed.description = current_message_content + STREAMING_INDICATOR
+                                    embed.color = EMBED_COLOR_INCOMPLETE
+                                    embed.clear_fields()
+                                    embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on initial message
+                                    for warning in sorted(user_warnings): embed.add_field(name=warning, value="", inline=False)
+                                    reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+                                    response_msg = await reply_to_msg.reply(embed=embed, mention_author = False)
+                                    if response_msg not in response_msgs:
+                                         response_msgs.append(response_msg)
+                                         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                    initial_embed_sent = True
+                                    last_task_time = dt.now().timestamp()
+                                elif ready_to_edit and response_msgs: # Edit existing message
+                                    if edit_task: await edit_task
+                                    embed.description = current_message_content + STREAMING_INDICATOR
+                                    embed.color = EMBED_COLOR_INCOMPLETE
+                                    embed.clear_fields() # Keep fields clear during streaming edits
+                                    embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer during streaming edits
+                                    try:
+                                        edit_task = asyncio.create_task(response_msgs[-1].edit(embed=embed))
+                                    except discord.errors.HTTPException as e:
+                                         # Handle potential 400 error during edit (e.g., if content somehow became too long between checks)
+                                         logging.error(f"HTTPException during streaming edit (Message ID: {response_msgs[-1].id}): {e}")
+                                         # If edit fails, we might lose the streaming indicator, but the final update should fix it.
+                                         # Avoid crashing the whole process.
+                                         edit_task = None # Ensure task is None so we don't await a failed task
+                                    last_task_time = dt.now().timestamp()
+                    # --- End Common Streaming Logic ---
+
+                    # Check for stream error after processing chunk
+                    if stream_error:
+                         raise stream_error # Raise the error to be caught by the outer try/except
+
+                    # Determine final finish reason *after* the loop
+                    if finish_reason is None and last_chunk and last_chunk.candidates:
+                        final_reason_enum = last_chunk.candidates[0].finish_reason
+                        if final_reason_enum: # Check if it's not None
+                            finish_reason = final_reason_enum.name
+                        else:
+                            # If finish_reason is still None after the loop, assume STOP if content was generated
+                            finish_reason = "STOP" if final_response_text else "UNKNOWN"
+                            logging.warning(f"Gemini stream finished without explicit reason. Assuming '{finish_reason}'.")
+
+
+                else: # OpenAI compatible provider
+                    provider_config = cfg["providers"][provider]
+                    base_url = provider_config.get("base_url")
+                    # Use the selected API key (or default for local)
+                    openai_api_key = api_key if api_key else "sk-no-key-required"
+                    openai_client = AsyncOpenAI(base_url=base_url, api_key=openai_api_key, timeout=300)
+
+                    kwargs = dict(model=model, messages=final_messages_for_llm, stream=True, extra_body=cfg.get("extra_api_parameters", {}))
+
+                    # --- OpenAI Streaming ---
+                    stream = await openai_client.chat.completions.create(**kwargs)
+                    async for curr_chunk in stream:
+                        last_chunk = curr_chunk # Store last chunk for OpenAI as well
+                        # Check finish reason first
+                        current_finish_reason = curr_chunk.choices[0].finish_reason
+                        if current_finish_reason:
+                             finish_reason = current_finish_reason # Store the final reason
+                             # Check if it's an error reason
+                             if finish_reason not in ("stop", "length", "tool_calls"): # Consider length (max_tokens) as non-error finish
+                                 logging.warning(f"OpenAI stream stopped prematurely. Key: ...{openai_api_key[-4:]}. Reason: {finish_reason}")
+                                 # Treat content_filter as a specific error type for potential retry logic
+                                 if finish_reason == "content_filter":
+                                     stream_error = APIError("Response blocked by content filter", request=None, body=None) # Create a generic APIError
+                                 else:
+                                     # For other reasons like 'function_call_error', treat as unexpected stop for now
+                                     stream_error = APIError(f"Stream stopped unexpectedly: {finish_reason}", request=None, body=None)
+                                 break # Stop processing stream
+
+                        delta_content = curr_chunk.choices[0].delta.content or ""
+
+                        current_message_content += delta_content
+                        final_response_text += delta_content # Accumulate full text for this attempt
+
+                        # --- Message Splitting and Sending/Editing Logic (Common - Copied) ---
+                        while len(current_message_content) > max_message_length:
+                            split_point = current_message_content[:max_message_length].rfind('\n') if '\n' in current_message_content[:max_message_length] else max_message_length
+                            text_to_send = current_message_content[:split_point]
+                            current_message_content = current_message_content[split_point:].lstrip()
+                            reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+
+                            if use_plain_responses:
+                                response_msg = await reply_to_msg.reply(content=text_to_send or " ", suppress_embeds=True, mention_author = False)
+                            else:
+                                if edit_task: await edit_task
+                                embed.description = text_to_send or " "
+                                embed.color = EMBED_COLOR_COMPLETE
+                                embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on split message
+                                embed.clear_fields()
+                                if not response_msgs:
+                                    for warning in sorted(user_warnings): embed.add_field(name=warning, value="", inline=False)
+                                    response_msg = await reply_to_msg.reply(embed=embed, mention_author = False)
+                                    initial_embed_sent = True
+                                else:
+                                    prev_embed = discord.Embed(description=text_to_send or " ", color=EMBED_COLOR_COMPLETE)
+                                    prev_embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on finalized previous message
+                                    edit_task = asyncio.create_task(response_msgs[-1].edit(embed=prev_embed, view=None))
+                                    await edit_task
+                                    embed.description = current_message_content + STREAMING_INDICATOR
+                                    embed.color = EMBED_COLOR_INCOMPLETE
+                                    embed.clear_fields()
+                                    embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on new streaming message
+                                    response_msg = await response_msgs[-1].reply(embed=embed, mention_author = False)
+                                    edit_task = None
+
+                            if response_msg not in response_msgs:
+                                response_msgs.append(response_msg)
+                                msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                            last_task_time = dt.now().timestamp()
+
+                        # --- Throttled Edit (Common - Copied) ---
+                        if not use_plain_responses:
+                            ready_to_edit = (edit_task is None or edit_task.done()) and dt.now().timestamp() - last_task_time >= EDIT_DELAY_SECONDS
+                            if not response_msgs or not initial_embed_sent:
+                                embed.description = current_message_content + STREAMING_INDICATOR
+                                embed.color = EMBED_COLOR_INCOMPLETE
+                                embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on initial message
+                                embed.clear_fields(); [embed.add_field(name=w, value="", inline=False) for w in sorted(user_warnings)]
+                                reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+                                response_msg = await reply_to_msg.reply(embed=embed, mention_author = False)
+                                if response_msg not in response_msgs: response_msgs.append(response_msg); msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+                                initial_embed_sent = True; last_task_time = dt.now().timestamp()
+                            elif ready_to_edit and response_msgs:
+                                if edit_task: await edit_task # Wait for previous edit if any
+                                embed.description = current_message_content + STREAMING_INDICATOR
+                                embed.color = EMBED_COLOR_INCOMPLETE
+                                embed.clear_fields()
+                                embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer during streaming edits
+                                try: edit_task = asyncio.create_task(response_msgs[-1].edit(embed=embed))
+                                except discord.errors.HTTPException as e: logging.error(f"HTTPException during streaming edit (Msg ID: {response_msgs[-1].id}): {e}"); edit_task = None
+                                last_task_time = dt.now().timestamp()
+                    # --- End Common Streaming Logic ---
+
+                    # Check for stream error after processing chunk
+                    if stream_error:
+                         raise stream_error # Raise the error to be caught by the outer try/except
+
+                # If we finished the stream without errors, break the retry loop
+                logging.info(f"Successfully completed API call with key ...{api_key[-4:] if api_key else 'N/A'} for provider '{provider}'. Finish reason: {finish_reason}")
+                last_exception = None # Clear last exception on success
+                break # Exit retry loop
+
+            # --- Exception Handling for the current attempt ---
+            # Catch Google Rate Limit (ResourceExhausted) and OpenAI Rate Limit
+            except (core_exceptions.ResourceExhausted, OpenAIRateLimitError) as e:
+                logging.warning(f"Rate limit error for key ...{api_key[-4:] if api_key else 'N/A'} (Provider: {provider}). Attempt {attempt+1}/{max_retries}. Error: {e}")
+                if api_key: # Only mark if a key was actually used
+                    await key_manager.mark_rate_limited(api_key)
+                last_exception = e
+                await asyncio.sleep(0.5) # Small delay before trying next key
+                continue # Go to the next attempt
+
+            # Catch Temporary / Server-Side Errors
+            except (genai_errors.InternalServerError, genai_errors.DeadlineExceededError, APITimeoutError, APIConnectionError, httpx.ReadTimeout, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.WriteTimeout, genai_errors.ServiceUnavailableError, genai_errors.UnknownError, core_exceptions.InternalServerError, core_exceptions.ServiceUnavailable) as e:
+                logging.warning(f"Temporary API Error for key ...{api_key[-4:] if api_key else 'N/A'} (Provider: {provider}). Attempt {attempt+1}/{max_retries}. Error: {type(e).__name__}: {e}")
+                # Don't mark key as rate limited for temporary errors
+                last_exception = e
+                await asyncio.sleep(1.0 + attempt * 0.5) # Slightly longer delay, increasing with attempts
+                continue # Go to the next attempt
+
+            # Catch Authentication / Permission Errors
+            except (genai_errors.PermissionDeniedError, OpenAIAuthenticationError, OpenAIPermissionDeniedError, core_exceptions.PermissionDenied) as e:
+                 logging.error(f"Authentication/Permission Error for key ...{api_key[-4:] if api_key else 'N/A'} (Provider: {provider}). Attempt {attempt+1}/{max_retries}. Error: {type(e).__name__}: {e}", exc_info=False)
+                 if api_key: # Mark the failing key as rate-limited to prevent immediate reuse
+                      await key_manager.mark_rate_limited(api_key)
+                 last_exception = e
+                 # Continue to try other keys unless it's the last attempt
+                 if attempt + 1 >= max_retries:
+                     break # Exit loop if last attempt failed
+                 else:
+                     await asyncio.sleep(0.5)
+                     continue
+
+            # Catch Bad Requests / Content Filters / Other API Errors
+            except (genai_errors.APIError, APIError, OpenAIBadRequestError, ValueError, genai_errors.BlockedPromptException, genai_errors.StopCandidateException, core_exceptions.InvalidArgument, core_exceptions.FailedPrecondition) as e:
+                 logging.error(f"Non-retryable API/Request Error for key ...{api_key[-4:] if api_key else 'N/A'} (Provider: {provider}). Attempt {attempt+1}/{max_retries}. Error: {type(e).__name__}: {e}", exc_info=False)
+                 # Don't mark key as rate limited, could be a config/prompt issue
+                 last_exception = e
+                 break # Exit retry loop for non-retryable errors for this request
+
+            # Catch any other unexpected errors
+            except Exception as e:
+                logging.exception(f"Unexpected error during API call/stream with key ...{api_key[-4:] if api_key else 'N/A'} (Provider: {provider}). Attempt {attempt+1}/{max_retries}.")
+                last_exception = e
+                # Assume most unexpected errors aren't key-specific or easily retryable
+                break # Exit retry loop
+
+        # --- After Retry Loop ---
+        if last_exception:
+            # All keys failed or a non-retryable error occurred
+            error_type_name = type(last_exception).__name__
+            error_message_detail = str(last_exception)
+
+            # Customize error message based on type
+            if isinstance(last_exception, (core_exceptions.ResourceExhausted, OpenAIRateLimitError)):
+                 # Use the imported constant here
+                 error_message = f"Sorry, all API keys for '{provider}' seem to be rate-limited. Please try again in {COOLDOWN_PERIOD_HOURS} hours or contact the bot owner."
+            elif isinstance(last_exception, (genai_errors.InternalServerError, genai_errors.DeadlineExceededError, APITimeoutError, APIConnectionError, httpx.ReadTimeout, httpx.ConnectTimeout, genai_errors.ServiceUnavailableError, core_exceptions.InternalServerError, core_exceptions.ServiceUnavailable)):
+                 error_message = f"Sorry, the AI service seems busy or unavailable ({error_type_name}). Please try again later."
+            elif isinstance(last_exception, (genai_errors.PermissionDeniedError, OpenAIAuthenticationError, OpenAIPermissionDeniedError, core_exceptions.PermissionDenied)):
+                 error_message = f"Sorry, an API authentication/permission error occurred ({error_type_name}). Please contact the bot owner to check the API keys."
+            elif isinstance(last_exception, (genai_errors.APIError, APIError, OpenAIBadRequestError, ValueError, genai_errors.BlockedPromptException, genai_errors.StopCandidateException, core_exceptions.InvalidArgument, core_exceptions.FailedPrecondition)):
+                 # Includes bad requests, content filters, other API issues
+                 error_message = f"Sorry, the request failed ({error_type_name}). Please check your prompt/attachments or contact the bot owner if the issue persists.\n`{error_message_detail}`"
+            else: # General unexpected error
+                 error_message = f"Sorry, an unexpected error occurred: {error_type_name}\n`{error_message_detail}`"
+
+            logging.error(f"All API key attempts failed for provider '{provider}'. Final error: {error_type_name}: {error_message_detail}")
+
+            # Send error message to Discord
+            if response_msgs and not use_plain_responses: # Edit last message if possible
+                if edit_task:
+                    try: await edit_task
+                    except Exception as task_e: logging.error(f"Error awaiting final edit task before error message: {task_e}")
+                embed.description = (current_message_content or "") + f"\n\n**Error:** {error_message}" # Include any partial text received
+                # Truncate if necessary
+                if len(embed.description) > max_embed_desc_length:
+                    embed.description = embed.description[:max_embed_desc_length - len("... (error message truncated)")] + "... (error message truncated)"
+                embed.color = EMBED_COLOR_ERROR
+                embed.set_footer(text=f"Model: {provider_slash_model}") # Add footer even on error
+                embed.clear_fields(); [embed.add_field(name=w, value="", inline=False) for w in sorted(user_warnings)] # Add warnings even on error
+                try: await response_msgs[-1].edit(embed=embed, view=None)
+                except discord.errors.HTTPException as edit_err: logging.error(f"HTTPException during final error edit: {edit_err}")
+                except discord.errors.NotFound: logging.warning("Could not edit final error message (message not found).")
+            else: # Reply to original message
+                # Combine warnings with the error message for plain text
+                warning_text = "\n".join(sorted(user_warnings))
+                full_error_message = f"{error_message}\n\n{warning_text}".strip()
+                # Truncate if necessary
+                if len(full_error_message) > max_plain_msg_length:
+                     full_error_message = full_error_message[:max_plain_msg_length - len("... (message truncated)")] + "... (message truncated)"
+                await new_msg.reply(full_error_message, mention_author = False)
+            return # Stop processing this message
+
+    # --- Final Message Update (Successful Completion) ---
+    final_view = None
+    should_show_sources = False
+    # Refined check for good finish reason (convert potential enum name to lowercase)
+    is_good_finish = finish_reason is not None and finish_reason.lower() in ("stop", "end_turn", "tool_calls", "length", "max_tokens")
+
+    final_part_content = current_message_content # Remaining content after loop
+
+    # Check for grounding metadata (Gemini only)
+    if provider == "google" and last_chunk and last_chunk.candidates:
+        candidate = last_chunk.candidates[0]
+        # Check if grounding_metadata exists and is not empty
+        if metadata := getattr(candidate, 'grounding_metadata', None):
+            has_queries = hasattr(metadata, 'web_search_queries') and metadata.web_search_queries
+            has_chunks = hasattr(metadata, 'grounding_chunks') and metadata.grounding_chunks
+            if (has_queries or has_chunks) and response_msgs:
+                gemini_grounding_metadata[response_msgs[-1].id] = metadata
+                if not use_plain_responses: should_show_sources = True; logging.info("Grounding metadata found, enabling sources button.")
+                else: logging.info("Grounding metadata found, plain responses enabled, button skipped.")
+            elif not response_msgs: logging.warning("Grounding metadata found, but no response message exists.")
+            # else: logging.debug("Grounding metadata object present but empty.") # Debug level
+        # else: logging.debug("No grounding metadata found in final chunk.") # Debug level
+
+    # Create the final view only if needed and response was successful
+    if not use_plain_responses and is_good_finish:
+        final_view = ResponseActionsView(show_sources_button=should_show_sources)
+
+    # Final update/send logic
+    if use_plain_responses:
+        # Send the last part if it has content and wasn't sent during splitting
+        last_sent_content = response_msgs[-1].content if response_msgs else ""
+        if final_part_content and final_part_content.strip() and final_part_content != last_sent_content: # Check strip()
+            reply_to_msg = new_msg if not response_msgs else response_msgs[-1]
+            # Plain responses don't get the button view
+            try:
+                response_msg = await reply_to_msg.reply(content=final_part_content or " ", suppress_embeds=True, mention_author = False)
+                response_msgs.append(response_msg)
+                msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+            except discord.errors.HTTPException as send_err:
+                 logging.error(f"Failed to send final plain text part: {send_err}")
+
+    elif response_msgs: # Final edit for the last embed message
+        if edit_task:
+            try: await edit_task
+            except Exception as task_e: logging.error(f"Error awaiting final edit task before final update: {task_e}")
+
+        embed.description = final_part_content or " " # Use the remaining content
+        embed.color = EMBED_COLOR_COMPLETE if is_good_finish else EMBED_COLOR_ERROR
+        embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on final update
+        embed.clear_fields(); [embed.add_field(name=w, value="", inline=False) for w in sorted(user_warnings)]
+
+        # Ensure description isn't too long for the final edit
+        if len(embed.description) > max_embed_desc_length:
+             logging.warning(f"Final embed description truncated (was {len(embed.description)} chars).")
+             embed.description = embed.description[:max_embed_desc_length]
+
+        # --- Retry logic for final edit ---
+        last_edit_exception = None
+        for attempt in range(MAX_FINAL_EDIT_RETRIES):
+            try:
+                await response_msgs[-1].edit(embed=embed, view=final_view) # Use the combined view
+                logging.info(f"Final edit successful for message {response_msgs[-1].id} on attempt {attempt + 1}.")
+                last_edit_exception = None # Clear exception on success
+                break # Exit retry loop on success
+            except discord.errors.HTTPException as e:
+                last_edit_exception = e
+                status_code = e.status if hasattr(e, 'status') else 'Unknown'
+                error_text = e.text if hasattr(e, 'text') else 'No details'
+                logging.warning(f"HTTPException during final edit attempt {attempt + 1}/{MAX_FINAL_EDIT_RETRIES} (Message ID: {response_msgs[-1].id}): {status_code} {error_text}")
+                if attempt < MAX_FINAL_EDIT_RETRIES - 1:
+                    await asyncio.sleep(FINAL_EDIT_RETRY_DELAY * (attempt + 1)) # Basic backoff
+                else:
+                    logging.error(f"Final edit failed after {MAX_FINAL_EDIT_RETRIES} attempts for message {response_msgs[-1].id}. Leaving message as is.")
+            except discord.errors.NotFound:
+                logging.warning(f"Could not perform final edit on message {response_msgs[-1].id} (message not found).")
+                last_edit_exception = None # Don't treat NotFound as a retryable failure of the edit itself
+                break # Exit loop, message is gone
+            except Exception as e: # Catch other potential errors during edit
+                 last_edit_exception = e
+                 logging.error(f"Unexpected error during final edit attempt {attempt + 1} for message {response_msgs[-1].id}: {e}", exc_info=True)
+                 break # Don't retry unexpected errors
+
+        # If last_edit_exception is still set, all retries failed. The message is left in its last streamed state.
+        # No need for the old fallback plain text message here.
+
+    elif not response_msgs and final_part_content: # Handle case where no streaming occurred but there's a final response
+         # Send the initial message now if it wasn't sent during streaming
+         embed.description = final_part_content or " "
+         # Ensure description isn't too long
+         if len(embed.description) > max_embed_desc_length:
+              logging.warning(f"Initial embed description truncated (was {len(embed.description)} chars).")
+              embed.description = embed.description[:max_embed_desc_length]
+         embed.color = EMBED_COLOR_COMPLETE if is_good_finish else EMBED_COLOR_ERROR
+         embed.set_footer(text=f"Model: {provider_slash_model}") # Ensure footer on initial non-streamed message
+         embed.clear_fields(); [embed.add_field(name=w, value="", inline=False) for w in sorted(user_warnings)]
+         try:
+             response_msg = await new_msg.reply(embed=embed, view=final_view, mention_author = False) # Use the combined view
+             response_msgs.append(response_msg)
+             msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
+             if should_show_sources and provider == "google": # Need to store metadata if button added here
+                  if last_chunk and last_chunk.candidates and hasattr(last_chunk.candidates[0], 'grounding_metadata'):
+                       gemini_grounding_metadata[response_msg.id] = last_chunk.candidates[0].grounding_metadata
+         except discord.errors.HTTPException as send_err:
+              logging.error(f"Failed to send initial non-streamed response: {send_err}")
+         except Exception as e:
+              logging.error(f"Unexpected error sending initial non-streamed response: {e}", exc_info=True)
+
+
+    # --- Update Caches ---
+    if response_msgs and is_good_finish: # Only store if successful
+        last_msg_id = response_msgs[-1].id
+        # Store full text for file download, check cache size before adding
+        if len(full_response_texts) < MAX_FULL_RESPONSE_CACHE:
+            full_response_texts[last_msg_id] = final_response_text
+        else:
+            # Simple FIFO eviction if cache is full
+            try:
+                oldest_key = next(iter(full_response_texts))
+                full_response_texts.pop(oldest_key, None)
+                full_response_texts[last_msg_id] = final_response_text
+                logging.debug(f"Full response cache full, evicted {oldest_key}")
+            except StopIteration: # Cache was empty
+                full_response_texts[last_msg_id] = final_response_text
+
+
+        # Update node cache (optional, could store truncated text if needed)
+        node = msg_nodes.setdefault(last_msg_id, MsgNode(parent_msg=new_msg))
+        async with node.lock:
+            # Store truncated text in node if desired, or leave as None
+            # node.text = final_response_text[:1000] # Example: store first 1000 chars
+            node.role = "assistant"
+
+    # --- Cleanup Old Nodes and Full Responses ---
+    # Cleanup msg_nodes (More efficient check)
+    if len(msg_nodes) > MAX_MESSAGE_NODES:
+        # Sort keys by message ID (assuming higher ID means newer)
+        sorted_node_ids = sorted(msg_nodes.keys())
+        num_to_remove = len(msg_nodes) - MAX_MESSAGE_NODES
+        node_ids_to_remove = sorted_node_ids[:num_to_remove]
+        for msg_id in node_ids_to_remove:
+            msg_nodes.pop(msg_id, None)
+            gemini_grounding_metadata.pop(msg_id, None) # Also remove associated grounding data
+        logging.debug(f"Cleaned up {num_to_remove} old message nodes.")
+
+    # Cleanup full_response_texts (Already handled by FIFO above)
 
 
 @discord_client.event
 async def on_ready():
-    logging.info(f"Logged in as {discord_client.user.name} (ID: {discord_client.user.id})")
-    logging.info(f"discord.py version: {discord.__version__}")
-    logging.info(f"Loaded config: {cfg}")
-    # Start the background cleanup task
-    await tree.sync() # Sync slash commands
-    discord_client.loop.create_task(cleanup_task())
-    logging.info("Rate limit cleanup task started.")
+    logging.info(f"Logged in as {discord_client.user}")
+    # Register persistent view (show_sources_button=False initially, actual button added dynamically)
+    # Need to pass a dummy value that evaluates to False initially.
+    discord_client.add_view(ResponseActionsView(show_sources_button=False))
+    await get_reddit_client() # Initialize Reddit client
+
+
+@discord_client.event
+async def on_disconnect():
+    logging.warning("Discord client disconnected.")
+    await httpx_client.aclose()
+    logging.info("Closed httpx client.")
+    global reddit_client
+    if reddit_client:
+        try:
+            await reddit_client.close()
+            logging.info("Closed asyncpraw Reddit client session.")
+        except Exception as e:
+            logging.error(f"Error closing asyncpraw Reddit client: {e}")
+        finally:
+             reddit_client = None
+
 
 async def main():
-    global cfg # Ensure main uses the validated config
-    # Initial checks before starting
-    if not cfg.get("bot_token"):
-        logging.error("CRITICAL: bot_token is missing in config.yaml")
-        exit(1)
-    if not cfg.get("model"):
-        logging.warning("LLM model not specified in config.yaml, defaulting might occur or errors.")
-    if not cfg.get("providers"):
-        logging.error("CRITICAL: 'providers' section is missing in config.yaml")
-        exit(1)
-
-    # Log warnings for missing optional keys
-    if not cfg.get("youtube_api_key"): logging.warning("youtube_api_key not found. YouTube processing disabled.")
-    if not cfg.get("reddit"): logging.warning("Reddit config not found. Reddit processing disabled.")
-    if not cfg.get("serpapi_api_keys"): logging.warning("serpapi_api_keys not found. Google Lens disabled.")
-
+    global cfg # Ensure cfg is accessible
+    cfg = await get_config() # Load config async at start
+    bot_token = cfg.get("bot_token")
+    if not bot_token:
+        logging.critical("CRITICAL: bot_token not found in config.yaml. Exiting.")
+        return
     try:
-        await discord_client.start(cfg["bot_token"])
+        await discord_client.start(bot_token)
     except discord.LoginFailure:
-        logging.error("CRITICAL: Failed to log in. Check the bot_token in config.yaml.")
+        logging.critical("CRITICAL: Failed to log in. Please check your bot_token in config.yaml.")
     except Exception as e:
-        logging.error(f"CRITICAL: Error starting Discord client: {e}")
+        logging.critical(f"CRITICAL: Discord client encountered an error during startup: {e}", exc_info=True)
     finally:
-        # Gracefully close DB connections on exit
-        logging.info("Closing rate limit database connections...")
-        await asyncio.gather(*(manager.close() for manager in rate_limit_managers.values()))
-        logging.info("Database connections closed.")
-        if httpx_client:
-            await httpx_client.aclose()
+        if not discord_client.is_closed():
+            await discord_client.close()
+        # Ensure httpx client is closed if main loop exits unexpectedly
+        if not httpx_client.is_closed:
+             await httpx_client.aclose()
+             logging.info("Closed httpx client during shutdown.")
+        # Ensure Reddit client is closed
+        global reddit_client
         if reddit_client:
-             await reddit_client.close()
+            try:
+                await reddit_client.close()
+                logging.info("Closed asyncpraw Reddit client session during shutdown.")
+            except Exception as e:
+                logging.error(f"Error closing asyncpraw Reddit client during shutdown: {e}")
+            finally:
+                 reddit_client = None
 
 
 if __name__ == "__main__":
     try:
+        # Ensure database directory exists before running main loop
+        os.makedirs("ratelimit_db", exist_ok=True)
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Bot stopped manually.")
+        logging.info("Shutdown requested by user.")

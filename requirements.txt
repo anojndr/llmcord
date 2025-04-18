@@ -1,11 +1,10 @@
-discord.py>=2.0.0 # Ensure version 2+ for views/buttons
+beautifulsoup4
+asyncpraw
+discord.py
+google-api-python-client
+google-genai
 httpx
-openai>=1.3.0 # Use a recent version
-asyncpraw # For Reddit API interaction
-google-genai>=0.7.0 # Use the new SDK
-youtube-transcript-api>=0.6.2 # Ensure recent version
-google-api-python-client # For YouTube Data API v3
+openai
 pyyaml
-beautifulsoup4 # For parsing HTML from generic URLs
-google-search-results # For SerpAPI
-# aiosqlite # Optional, but recommended for async SQLite access if issues arise
+lxml
+youtube-transcript-api

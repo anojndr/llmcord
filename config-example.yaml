@@ -1,8 +1,8 @@
 # Discord settings:
 
-bot_token: YOUR_DISCORD_BOT_TOKEN
-client_id: YOUR_DISCORD_CLIENT_ID
-status_message: "Chatting with LLMs | github.com/jakobdylanc/llmcord"
+bot_token:
+client_id:
+status_message:
 
 max_text: 100000
 max_images: 5
@@ -13,94 +13,74 @@ allow_dms: true
 
 permissions:
   users:
-    allowed_ids: [] # Empty = allow all users
+    allowed_ids: []
     blocked_ids: []
   roles:
-    allowed_ids: [] # Empty = allow all roles (in guilds)
+    allowed_ids: []
     blocked_ids: []
   channels:
-    allowed_ids: [] # Empty = allow all channels (in guilds)
+    allowed_ids: []
     blocked_ids: []
 
+# Reddit API Credentials (Optional - Required for processing Reddit URLs):
+# Create a script app here: https://www.reddit.com/prefs/apps
+# Ensure the redirect uri is set to something like: http://localhost:8080
+reddit_client_id:
+reddit_client_secret:
+reddit_user_agent: "<platform>:<app ID>:<version string> (by u/<your reddit username>)" # e.g., discord:llmcord:v1.0 (by u/myusername)
+# reddit_username: # Optional: Needed only if you need authorized actions (not typical for read-only bots)
+# reddit_password: # Optional: Needed only if you need authorized actions (not typical for read-only bots)
+
+# YouTube Data API v3 Key (Optional):
+# Create a key here: https://console.cloud.google.com/apis/credentials
+youtube_data_api_key:
 
 # LLM settings:
 
 providers:
   openai:
     base_url: https://api.openai.com/v1
-    api_keys: # Use 'api_keys' (plural) which is a list
-      - YOUR_OPENAI_KEY_1
-      # - YOUR_OPENAI_KEY_2
-      # - ... add more keys as needed
+    api_key: # Can be a single key (string) or a list of keys (strings)
+      # - sk-key1
+      # - sk-key2
+  google:
+    # No base_url needed for google-genai, it uses default endpoints
+    api_key: # Can be a single key (string) or a list of keys (strings)
+      # - ai-key1
+      # - ai-key2
   x-ai:
     base_url: https://api.x.ai/v1
-    api_keys:
-      - YOUR_XAI_KEY_1
+    api_key: # Can be a single key (string) or a list of keys (strings)
   mistral:
     base_url: https://api.mistral.ai/v1
-    api_keys:
-      - YOUR_MISTRAL_KEY_1
+    api_key: # Can be a single key (string) or a list of keys (strings)
   groq:
     base_url: https://api.groq.com/openai/v1
-    api_keys:
-      - YOUR_GROQ_KEY_1
+    api_key: # Can be a single key (string) or a list of keys (strings)
   openrouter:
     base_url: https://openrouter.ai/api/v1
-    api_keys:
-      - YOUR_OPENROUTER_KEY_1
-  # --- Local / No Key Providers ---
+    api_key: # Can be a single key (string) or a list of keys (strings)
   ollama:
     base_url: http://localhost:11434/v1
-    api_keys: [] # Keep empty list if no key needed
+    # api_key: # Usually not required for local models
   lmstudio:
     base_url: http://localhost:1234/v1
-    api_keys: []
+    # api_key:
   vllm:
     base_url: http://localhost:8000/v1
-    api_keys: []
+    # api_key:
   oobabooga:
     base_url: http://localhost:5000/v1
-    api_keys: []
+    # api_key:
   jan:
     base_url: http://localhost:1337/v1
-    api_keys: []
-  # --- Google Gemini ---
-  google:
-    # No base_url needed for google-genai
-    api_keys: # Use 'api_keys' (plural) which is a list
-      - YOUR_GEMINI_KEY_1
-      # - YOUR_GEMINI_KEY_2
-      # - ... add more keys as needed
+    # api_key:
 
-# Select the model using 'provider_name/model_name'
-# Examples: openai/gpt-4.1, google/gemini-2.0-flash, ollama/llama3.1
-model: openai/gpt-4.1
+model: google/gemini-2.0-flash # Example: Use a Gemini model
 
 extra_api_parameters:
   max_tokens: 4096
   temperature: 1.0
-  # Add other provider-specific parameters here if needed
-  # e.g., top_p: 0.9
 
 system_prompt: >
-  You are a helpful assistant integrated into Discord. Be concise unless asked otherwise.
-
-# YouTube Data API settings:
-# Required for fetching video details (title, description, comments)
-# NOTE: This uses a *single* key. Key rotation is NOT implemented for YouTube Data API.
-youtube_api_key: YOUR_YOUTUBE_DATA_API_KEY
-
-# Reddit API settings:
-# Required for fetching content from Reddit URLs
-# NOTE: This uses a *single* set of credentials. Key rotation is NOT implemented for Reddit.
-reddit:
-  client_id: YOUR_REDDIT_CLIENT_ID
-  client_secret: YOUR_REDDIT_CLIENT_SECRET
-  user_agent: "discord:your-bot-name:v1.0 (by /u/your-reddit-username)" # Replace with your info
-
-# SerpApi settings:
-# Required for Google Lens image search (using the "lens" keyword)
-serpapi_api_keys: # Use 'serpapi_api_keys' (plural) which is a list
-  - YOUR_SERPAPI_KEY_1
-  # - YOUR_SERPAPI_KEY_2
-  # - ... add more keys as needed
+  You are a helpful assistant.
