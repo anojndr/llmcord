@@ -112,7 +112,7 @@ async def on_message(new_msg: discord.Message) -> None:
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
 
-    if (not is_dm and discord_bot.user not in new_msg.mentions) or new_msg.author.bot:
+    if (not is_dm and discord_bot.user not in new_msg.mentions and "at ai" not in new_msg.content.lower()) or new_msg.author.bot:
         return
 
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
@@ -175,6 +175,8 @@ async def on_message(new_msg: discord.Message) -> None:
         async with curr_node.lock:
             if curr_node.text == None:
                 cleaned_content = curr_msg.content.removeprefix(discord_bot.user.mention).lstrip()
+                if cleaned_content.lower().startswith("at ai"):
+                    cleaned_content = cleaned_content[5:].lstrip()
 
                 allowed_types = ("text", "image")
                 if provider == "gemini":
@@ -212,6 +214,7 @@ async def on_message(new_msg: discord.Message) -> None:
                     if (
                         curr_msg.reference == None
                         and discord_bot.user.mention not in curr_msg.content
+                        and "at ai" not in curr_msg.content.lower()
                         and (prev_msg_in_channel := ([m async for m in curr_msg.channel.history(before=curr_msg, limit=1)] or [None])[0])
                         and prev_msg_in_channel.type in (discord.MessageType.default, discord.MessageType.reply)
                         and prev_msg_in_channel.author == (discord_bot.user if curr_msg.channel.type == discord.ChannelType.private else curr_msg.author)
