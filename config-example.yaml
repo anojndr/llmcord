@@ -36,6 +36,9 @@ providers:
     extra_query:
       api-version: 2024-12-01-preview
 
+  gemini:
+    api_key: 
+
   google:
     base_url: https://generativelanguage.googleapis.com/v1beta/openai
     api_key: 
@@ -71,6 +74,8 @@ providers:
     base_url: http://localhost:8000/v1
 
 models:
+  gemini/gemini-2.5-flash:
+
   openai/gpt-5:
     reasoning_effort: high
     verbosity: medium
