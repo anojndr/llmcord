@@ -2,6 +2,7 @@ import asyncio
 from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime
+import re
 import logging
 from typing import Any, Literal, Optional
 
@@ -13,6 +14,7 @@ from google import genai
 from google.genai import types
 import httpx
 from openai import AsyncOpenAI
+from youtube_transcript_api import YouTubeTranscriptApi
 import yaml
 
 logging.basicConfig(
@@ -203,6 +205,32 @@ async def on_message(new_msg: discord.Message) -> None:
                     dict(content_type=att.content_type, content=resp.content)
                     for att, resp in zip(good_attachments, attachment_responses)
                 ]
+
+                yt_transcripts = []
+                for video_id in re.findall(r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})", cleaned_content):
+                    try:
+                        ytt_api = YouTubeTranscriptApi()
+                        transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
+                        transcript = transcript_obj.to_raw_data()
+
+                        response = await httpx_client.get(f"https://www.youtube.com/watch?v={video_id}", follow_redirects=True)
+                        html = response.text
+                        title_match = re.search(r'<meta name="title" content="(.*?)">', html)
+                        title = title_match.group(1) if title_match else "Unknown Title"
+                        channel_match = re.search(r'<link itemprop="name" content="(.*?)">', html)
+                        channel = channel_match.group(1) if channel_match else "Unknown Channel"
+
+                        yt_transcripts.append(f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\nTranscript:\n" + " ".join(x["text"] for x in transcript))
+                    except Exception:
+                        pass
+
+                curr_node.text = "\n".join(
+                    ([cleaned_content] if cleaned_content else [])
+                    + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
+                    + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
+                    + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
+                    + yt_transcripts
+                )
 
                 curr_node.role = "assistant" if curr_msg.author == discord_bot.user else "user"
 

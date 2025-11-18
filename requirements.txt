@@ -3,3 +3,4 @@ google-genai
 httpx
 openai
 pyyaml
+youtube-transcript-api
