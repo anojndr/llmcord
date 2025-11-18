@@ -2,10 +2,12 @@ import asyncio
 from base64 import b64encode
 from dataclasses import dataclass, field
 from datetime import datetime
+import os
 import re
 import logging
 from typing import Any, Literal, Optional
 
+from aiohttp import web
 import discord
 from discord.app_commands import Choice
 from discord.ext import commands
@@ -458,8 +460,22 @@ class SourceView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+async def health_check(request):
+    return web.Response(text="I'm alive")
+
+
+async def start_server():
+    app = web.Application()
+    app.add_routes([web.get('/', health_check)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+
+
 async def main() -> None:
-    await discord_bot.start(config["bot_token"])
+    await asyncio.gather(start_server(), discord_bot.start(config["bot_token"]))
 
 
 try:
