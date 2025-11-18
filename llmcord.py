@@ -349,16 +349,22 @@ async def on_message(new_msg: discord.Message) -> None:
             ):
                 text = chunk.text or ""
                 reason = chunk.candidates[0].finish_reason if chunk.candidates else None
-                yield text, str(reason) if reason else None
+                grounding_metadata = chunk.candidates[0].grounding_metadata if chunk.candidates else None
+                yield text, str(reason) if reason else None, grounding_metadata
         else:
             async for chunk in await openai_client.chat.completions.create(**openai_kwargs):
                 if not (choice := chunk.choices[0] if chunk.choices else None):
                     continue
-                yield choice.delta.content or "", choice.finish_reason
+                yield choice.delta.content or "", choice.finish_reason, None
+
+    grounding_metadata = None
 
     try:
         async with new_msg.channel.typing():
-            async for delta_content, new_finish_reason in get_stream():
+            async for delta_content, new_finish_reason, new_grounding_metadata in get_stream():
+                if new_grounding_metadata:
+                    grounding_metadata = new_grounding_metadata
+
                 if finish_reason != None:
                     break
 
@@ -389,11 +395,13 @@ async def on_message(new_msg: discord.Message) -> None:
                         embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
                         embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
 
+                        view = SourceView(grounding_metadata) if is_final_edit and grounding_metadata and grounding_metadata.web_search_queries else None
+
                         if start_next_msg:
-                            await reply_helper(embed=embed, silent=True)
+                            await reply_helper(embed=embed, silent=True, view=view)
                         else:
                             await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
-                            await response_msgs[-1].edit(embed=embed)
+                            await response_msgs[-1].edit(embed=embed, view=view)
 
                         last_task_time = datetime.now().timestamp()
 
@@ -413,6 +421,41 @@ async def on_message(new_msg: discord.Message) -> None:
         for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
             async with msg_nodes.setdefault(msg_id, MsgNode()).lock:
                 msg_nodes.pop(msg_id, None)
+
+
+class SourceView(discord.ui.View):
+    def __init__(self, metadata: types.GroundingMetadata):
+        super().__init__(timeout=None)
+        self.metadata = metadata
+
+    @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.secondary)
+    async def show_sources(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(title="Sources", color=discord.Color.blue())
+
+        if self.metadata.web_search_queries:
+            embed.add_field(name="Search Queries", value="\n".join(f"• {q}" for q in self.metadata.web_search_queries), inline=False)
+
+        if self.metadata.grounding_chunks:
+            sources = []
+            for i, chunk in enumerate(self.metadata.grounding_chunks):
+                if chunk.web:
+                    sources.append(f"{i+1}. [{chunk.web.title}]({chunk.web.uri})")
+
+            if sources:
+                current_chunk = ""
+                field_count = 1
+                for source in sources:
+                    if len(current_chunk) + len(source) + 1 > 1024:
+                        embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
+                        current_chunk = source
+                        field_count += 1
+                    else:
+                        current_chunk = (current_chunk + "\n" + source) if current_chunk else source
+
+                if current_chunk:
+                    embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def main() -> None:
