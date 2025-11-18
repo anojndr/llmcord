@@ -9,6 +9,8 @@ import discord
 from discord.app_commands import Choice
 from discord.ext import commands
 from discord.ui import LayoutView, TextDisplay
+from google import genai
+from google.genai import types
 import httpx
 from openai import AsyncOpenAI
 import yaml
@@ -53,6 +55,7 @@ httpx_client = httpx.AsyncClient()
 class MsgNode:
     text: Optional[str] = None
     images: list[dict[str, Any]] = field(default_factory=list)
+    raw_attachments: list[dict[str, Any]] = field(default_factory=list)
 
     role: Literal["user", "assistant"] = "assistant"
     user_id: Optional[int] = None
@@ -143,7 +146,7 @@ async def on_message(new_msg: discord.Message) -> None:
 
     provider_config = config["providers"][provider]
 
-    base_url = provider_config["base_url"]
+    base_url = provider_config.get("base_url")
     api_key = provider_config.get("api_key", "sk-no-key-required")
     openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
 
@@ -162,6 +165,7 @@ async def on_message(new_msg: discord.Message) -> None:
 
     # Build message chain and set user warnings
     messages = []
+    gemini_contents = []
     user_warnings = set()
     curr_msg = new_msg
 
@@ -172,7 +176,11 @@ async def on_message(new_msg: discord.Message) -> None:
             if curr_node.text == None:
                 cleaned_content = curr_msg.content.removeprefix(discord_bot.user.mention).lstrip()
 
-                good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in ("text", "image"))]
+                allowed_types = ("text", "image")
+                if provider == "gemini":
+                    allowed_types += ("audio", "video", "application/pdf")
+
+                good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in allowed_types)]
 
                 attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
 
@@ -187,6 +195,11 @@ async def on_message(new_msg: discord.Message) -> None:
                     dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
                     for att, resp in zip(good_attachments, attachment_responses)
                     if att.content_type.startswith("image")
+                ]
+
+                curr_node.raw_attachments = [
+                    dict(content_type=att.content_type, content=resp.content)
+                    for att, resp in zip(good_attachments, attachment_responses)
                 ]
 
                 curr_node.role = "assistant" if curr_msg.author == discord_bot.user else "user"
@@ -218,6 +231,21 @@ async def on_message(new_msg: discord.Message) -> None:
                     logging.exception("Error fetching next message in the chain")
                     curr_node.fetch_parent_failed = True
 
+            if provider == "gemini":
+                parts = []
+                if curr_node.text:
+                    parts.append(types.Part.from_text(text=curr_node.text[:max_text]))
+
+                for att in curr_node.raw_attachments:
+                    if att["content_type"].startswith("text"):
+                        continue
+
+                    parts.append(types.Part.from_bytes(data=att["content"], mime_type=att["content_type"]))
+
+                if parts:
+                    role = "model" if curr_node.role == "assistant" else "user"
+                    gemini_contents.append(types.Content(role=role, parts=parts))
+
             if curr_node.images[:max_images]:
                 content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
             else:
@@ -243,7 +271,8 @@ async def on_message(new_msg: discord.Message) -> None:
 
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}")
 
-    if system_prompt := config.get("system_prompt"):
+    system_prompt = config.get("system_prompt")
+    if system_prompt:
         now = datetime.now().astimezone()
 
         system_prompt = system_prompt.replace("{date}", now.strftime("%B %d %Y")).replace("{time}", now.strftime("%H:%M:%S %Z%z")).strip()
@@ -273,19 +302,39 @@ async def on_message(new_msg: discord.Message) -> None:
         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
         await msg_nodes[response_msg.id].lock.acquire()
 
+    async def get_stream():
+        if provider == "gemini":
+            client = genai.Client(api_key=api_key, http_options=dict(api_version="v1beta"))
+            tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
+            gemini_config = types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                tools=tools,
+                temperature=model_parameters.get("temperature") if model_parameters else None,
+            )
+            async for chunk in await client.aio.models.generate_content_stream(
+                model=model,
+                contents=gemini_contents[::-1],
+                config=gemini_config
+            ):
+                text = chunk.text or ""
+                reason = chunk.candidates[0].finish_reason if chunk.candidates else None
+                yield text, str(reason) if reason else None
+        else:
+            async for chunk in await openai_client.chat.completions.create(**openai_kwargs):
+                if not (choice := chunk.choices[0] if chunk.choices else None):
+                    continue
+                yield choice.delta.content or "", choice.finish_reason
+
     try:
         async with new_msg.channel.typing():
-            async for chunk in await openai_client.chat.completions.create(**openai_kwargs):
+            async for delta_content, new_finish_reason in get_stream():
                 if finish_reason != None:
                     break
 
-                if not (choice := chunk.choices[0] if chunk.choices else None):
-                    continue
-
-                finish_reason = choice.finish_reason
+                finish_reason = new_finish_reason
 
                 prev_content = curr_content or ""
-                curr_content = choice.delta.content or ""
+                curr_content = delta_content
 
                 new_content = prev_content if finish_reason == None else (prev_content + curr_content)
 
@@ -303,7 +352,7 @@ async def on_message(new_msg: discord.Message) -> None:
                     ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
                     msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
                     is_final_edit = finish_reason != None or msg_split_incoming
-                    is_good_finish = finish_reason != None and finish_reason.lower() in ("stop", "end_turn")
+                    is_good_finish = finish_reason != None and any(x in str(finish_reason).lower() for x in ("stop", "end_turn"))
 
                     if start_next_msg or ready_to_edit or is_final_edit:
                         embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
