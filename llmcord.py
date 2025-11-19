@@ -398,58 +398,76 @@ async def on_message(new_msg: discord.Message) -> None:
 
     grounding_metadata = None
 
-    try:
-        async with new_msg.channel.typing():
-            async for delta_content, new_finish_reason, new_grounding_metadata in get_stream():
-                if new_grounding_metadata:
-                    grounding_metadata = new_grounding_metadata
+    while True:
+        curr_content = finish_reason = None
+        response_contents = []
 
-                if finish_reason != None:
-                    break
+        try:
+            async with new_msg.channel.typing():
+                async for delta_content, new_finish_reason, new_grounding_metadata in get_stream():
+                    if new_grounding_metadata:
+                        grounding_metadata = new_grounding_metadata
 
-                finish_reason = new_finish_reason
+                    if finish_reason != None:
+                        break
 
-                prev_content = curr_content or ""
-                curr_content = delta_content
+                    finish_reason = new_finish_reason
 
-                new_content = prev_content if finish_reason == None else (prev_content + curr_content)
+                    prev_content = curr_content or ""
+                    curr_content = delta_content
 
-                if response_contents == [] and new_content == "":
-                    continue
+                    new_content = prev_content if finish_reason == None else (prev_content + curr_content)
 
-                if start_next_msg := response_contents == [] or len(response_contents[-1] + new_content) > max_message_length:
-                    response_contents.append("")
+                    if response_contents == [] and new_content == "":
+                        continue
 
-                response_contents[-1] += new_content
+                    if start_next_msg := response_contents == [] or len(response_contents[-1] + new_content) > max_message_length:
+                        response_contents.append("")
 
-                if not use_plain_responses:
-                    time_delta = datetime.now().timestamp() - last_task_time
+                    response_contents[-1] += new_content
 
-                    ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
-                    msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
-                    is_final_edit = finish_reason != None or msg_split_incoming
-                    is_good_finish = finish_reason != None and any(x in str(finish_reason).lower() for x in ("stop", "end_turn"))
+                    if not use_plain_responses:
+                        time_delta = datetime.now().timestamp() - last_task_time
 
-                    if start_next_msg or ready_to_edit or is_final_edit:
-                        embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
-                        embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
+                        ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
+                        msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
+                        is_final_edit = finish_reason != None or msg_split_incoming
+                        is_good_finish = finish_reason != None and any(x in str(finish_reason).lower() for x in ("stop", "end_turn"))
 
-                        view = SourceView(grounding_metadata) if is_final_edit and grounding_metadata and grounding_metadata.web_search_queries else None
+                        if start_next_msg or ready_to_edit or is_final_edit:
+                            embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
+                            embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
 
-                        if start_next_msg:
-                            await reply_helper(embed=embed, silent=True, view=view)
-                        else:
-                            await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
-                            await response_msgs[-1].edit(embed=embed, view=view)
+                            view = SourceView(grounding_metadata) if is_final_edit and grounding_metadata and grounding_metadata.web_search_queries else None
 
-                        last_task_time = datetime.now().timestamp()
+                            msg_index = len(response_contents) - 1
+                            if start_next_msg:
+                                if msg_index < len(response_msgs):
+                                    await response_msgs[msg_index].edit(embed=embed, view=view)
+                                else:
+                                    await reply_helper(embed=embed, silent=True, view=view)
+                            else:
+                                await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
+                                await response_msgs[msg_index].edit(embed=embed, view=view)
+
+                            last_task_time = datetime.now().timestamp()
 
             if use_plain_responses:
                 for content in response_contents:
                     await reply_helper(view=LayoutView().add_item(TextDisplay(content=content)))
 
-    except Exception:
-        logging.exception("Error while generating response")
+            break
+
+        except Exception:
+            logging.exception("Error while generating response")
+
+    if not use_plain_responses and len(response_msgs) > len(response_contents):
+        for msg in response_msgs[len(response_contents):]:
+            await msg.delete()
+            if msg.id in msg_nodes:
+                msg_nodes[msg.id].lock.release()
+                del msg_nodes[msg.id]
+        response_msgs = response_msgs[:len(response_contents)]
 
     for response_msg in response_msgs:
         msg_nodes[response_msg.id].text = "".join(response_contents)
