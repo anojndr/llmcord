@@ -186,6 +186,39 @@ async def on_message(new_msg: discord.Message) -> None:
                 if cleaned_content.lower().startswith("at ai"):
                     cleaned_content = cleaned_content[5:].lstrip()
 
+                if cleaned_content.lower().startswith("googlelens") and (serpapi_key := config.get("serpapi_api_key")):
+                    lens_query = cleaned_content[10:].strip()
+
+                    if image_url := next((att.url for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")), None):
+                        try:
+                            params = {
+                                "engine": "google_lens",
+                                "api_key": serpapi_key,
+                                "url": image_url,
+                            }
+                            if lens_query:
+                                params["q"] = lens_query
+
+                            lens_resp = await httpx_client.get("https://serpapi.com/search", params=params, timeout=60)
+                            lens_data = lens_resp.json()
+
+                            if not lens_data.get("error"):
+                                lens_results = []
+                                if visual_matches := lens_data.get("visual_matches"):
+                                    lens_results.append("Visual Matches:")
+                                    for match in visual_matches[:5]:
+                                        lens_results.append(f"- [{match.get('title')}]({match.get('link')}) ({match.get('source')})")
+
+                                if related_content := lens_data.get("related_content"):
+                                    lens_results.append("\nRelated Content:")
+                                    for content in related_content[:5]:
+                                        lens_results.append(f"- [{content.get('query')}]({content.get('link')})")
+
+                                if lens_results:
+                                    cleaned_content = (cleaned_content + "\n\nGoogle Lens Results:\n" + "\n".join(lens_results))
+                        except Exception:
+                            logging.exception("Error fetching Google Lens results")
+
                 allowed_types = ("text", "image")
                 if provider == "gemini":
                     allowed_types += ("audio", "video", "application/pdf")
