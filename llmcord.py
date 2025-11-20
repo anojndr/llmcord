@@ -454,6 +454,9 @@ async def on_message(new_msg: discord.Message) -> None:
 
                             last_task_time = datetime.now().timestamp()
 
+            if not response_contents:
+                raise Exception("Response stream ended with no content")
+
             if use_plain_responses:
                 for content in response_contents:
                     await reply_helper(view=LayoutView().add_item(TextDisplay(content=content)))
