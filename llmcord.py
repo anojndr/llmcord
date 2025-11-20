@@ -397,10 +397,12 @@ async def on_message(new_msg: discord.Message) -> None:
                 yield choice.delta.content or "", choice.finish_reason, None
 
     grounding_metadata = None
+    attempt_count = 0
 
     while True:
         curr_content = finish_reason = None
         response_contents = []
+        attempt_count += 1
 
         try:
             async with new_msg.channel.typing():
@@ -460,6 +462,21 @@ async def on_message(new_msg: discord.Message) -> None:
 
         except Exception:
             logging.exception("Error while generating response")
+            if attempt_count >= 10:
+                error_text = "I encountered too many errors and couldn't generate a response. Please try again later."
+
+                if use_plain_responses:
+                    await reply_helper(content=error_text)
+                    response_contents = [error_text]
+                else:
+                    embed.description = error_text
+                    embed.color = EMBED_COLOR_INCOMPLETE
+                    if response_msgs:
+                        await response_msgs[-1].edit(embed=embed, view=None)
+                    else:
+                        await reply_helper(embed=embed)
+                    response_contents = [error_text]
+                break
 
     if not use_plain_responses and len(response_msgs) > len(response_contents):
         for msg in response_msgs[len(response_contents):]:
