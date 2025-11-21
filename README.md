@@ -51,7 +51,10 @@ Or run local models with:
 
 ### And more:
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
+- Supports Google Lens (start your message with "googlelens" and attach an image)
+- Supports YouTube video transcripts (just paste a YouTube link)
 - Supports text file attachments (.txt, .py, .c, etc.)
+- Supports audio, video, and PDF attachments (Gemini only)
 - Customizable personality (aka system prompt)
 - User identity aware (OpenAI API and xAI API only)
 - Streamed responses (turns green when complete, automatically splits into separate messages when too long)
@@ -78,6 +81,7 @@ Or run local models with:
 | **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
+| **serpapi_api_key** | Optional. Allows the bot to use Google Lens. Get an API key from [serpapi.com](https://serpapi.com). |
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br /><br />Default: `100,000` |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br /><br />Default: `5`<br /><br />**Only applicable when using a vision model.** |
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br /><br />Default: `25` |
