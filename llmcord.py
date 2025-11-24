@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types
 import httpx
 from openai import AsyncOpenAI
+from twscrape import API, gather
 from youtube_transcript_api import YouTubeTranscriptApi
 import yaml
 
@@ -57,6 +58,7 @@ activity = discord.CustomActivity(name=(config.get("status_message") or "github.
 discord_bot = commands.Bot(intents=intents, activity=activity, command_prefix=None, allowed_mentions=discord.AllowedMentions(replied_user=False))
 
 httpx_client = httpx.AsyncClient()
+twitter_api = API(proxy=config.get("twitter_proxy"))
 
 
 @dataclass
@@ -112,6 +114,17 @@ async def on_ready() -> None:
         logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/oauth2/authorize?client_id={client_id}&permissions=412317191168&scope=bot\n")
 
     await discord_bot.tree.sync()
+
+    if twitter_accounts := config.get("twitter_accounts"):
+        for acc in twitter_accounts:
+            await twitter_api.pool.add_account(
+                acc["username"],
+                acc["password"],
+                acc["email"],
+                acc["email_password"],
+                cookies=acc.get("cookies"),
+            )
+        await twitter_api.pool.login_all()
 
 
 @discord_bot.event
@@ -170,6 +183,7 @@ async def on_message(new_msg: discord.Message) -> None:
     max_text = config.get("max_text", 100000)
     max_images = config.get("max_images", 5) if accept_images else 0
     max_messages = config.get("max_messages", 25)
+    max_tweet_replies = config.get("max_tweet_replies", 50)
 
     # Build message chain and set user warnings
     messages = []
@@ -263,12 +277,28 @@ async def on_message(new_msg: discord.Message) -> None:
                     except Exception:
                         pass
 
+                tweets = []
+                for tweet_id in re.findall(r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
+                    try:
+                        tweet = await twitter_api.tweet_details(int(tweet_id))
+                        tweets.append(f"Tweet from @{tweet.user.username}:\n{tweet.rawContent}")
+
+                        if max_tweet_replies > 0:
+                            replies = await gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies))
+                            if replies:
+                                tweets.append("\nReplies:")
+                                for reply in replies:
+                                    tweets.append(f"- @{reply.user.username}: {reply.rawContent}")
+                    except Exception:
+                        pass
+
                 curr_node.text = "\n".join(
                     ([cleaned_content] if cleaned_content else [])
                     + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
                     + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
                     + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
                     + yt_transcripts
+                    + tweets
                 )
 
                 curr_node.role = "assistant" if curr_msg.author == discord_bot.user else "user"

@@ -5,9 +5,19 @@ client_id:
 status_message: 
 serpapi_api_key: 
 
+twitter_proxy: 
+
+twitter_accounts:
+  - username: 
+    password: 
+    email: 
+    email_password: 
+    cookies: 
+
 max_text: 100000
 max_images: 5
 max_messages: 25
+max_tweet_replies: 50
 
 use_plain_responses: false
 allow_dms: true

@@ -53,6 +53,7 @@ Or run local models with:
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
 - Supports Google Lens (start your message with "googlelens" and attach an image)
 - Supports YouTube video transcripts (just paste a YouTube link)
+- Supports Twitter/X link expansion (automatically fetches tweet content and replies)
 - Supports text file attachments (.txt, .py, .c, etc.)
 - Supports audio, video, and PDF attachments (Gemini only)
 - Customizable personality (aka system prompt)
@@ -82,6 +83,9 @@ Or run local models with:
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
 | **serpapi_api_key** | Optional. Allows the bot to use Google Lens. Get an API key from [serpapi.com](https://serpapi.com). |
+| **twitter_accounts** | Optional. A list of Twitter/X accounts to use for tweet extraction. Each account requires a `username`, `password`, `email`, `email_password`, and `cookies` entry. |
+| **twitter_proxy** | Optional. A proxy URL (e.g., `http://user:pass@host:port`) to use for Twitter/X requests. |
+| **max_tweet_replies** | The maximum number of tweet replies to fetch when a Twitter/X link is detected.<br /><br />Default: `50` |
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br /><br />Default: `100,000` |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br /><br />Default: `5`<br /><br />**Only applicable when using a vision model.** |
 | **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br /><br />Default: `25` |
