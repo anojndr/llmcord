@@ -114,6 +114,8 @@ async def on_ready() -> None:
 
     if twitter_accounts := config.get("twitter_accounts"):
         for acc in twitter_accounts:
+            if await twitter_api.pool.get_account(acc["username"]):
+                continue
             await twitter_api.pool.add_account(
                 acc["username"],
                 acc["password"],
