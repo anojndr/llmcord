@@ -372,6 +372,37 @@ async def on_message(new_msg: discord.Message) -> None:
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}")
 
     system_prompt = config.get("system_prompt")
+
+    if provider != "gemini" and (exa_key := config.get("exa_api_key")):
+        search_query = new_msg.content.removeprefix(discord_bot.user.mention).lstrip()
+        if search_query.lower().startswith("at ai"):
+            search_query = search_query[5:].lstrip()
+
+        if search_query:
+            try:
+                exa_resp = await httpx_client.post(
+                    "https://api.exa.ai/search",
+                    headers={"x-api-key": exa_key, "Content-Type": "application/json"},
+                    json={
+                        "query": search_query,
+                        "type": "auto",
+                        "contents": {"text": True}
+                    },
+                    timeout=10
+                )
+                exa_data = exa_resp.json()
+                if results := exa_data.get("results"):
+                    search_context = "\n\nSearch Results:\n"
+                    for res in results[:3]:
+                        search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('text')[:300]}...\n"
+
+                    if system_prompt:
+                        system_prompt += search_context
+                    else:
+                        system_prompt = search_context
+            except Exception:
+                logging.exception("Error fetching Exa search results")
+
     if system_prompt:
         now = datetime.now().astimezone()
 

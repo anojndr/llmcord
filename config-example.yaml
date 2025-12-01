@@ -4,6 +4,7 @@ bot_token:
 client_id: 
 status_message: 
 serpapi_api_key: 
+exa_api_key: 
 
 twitter_proxy: 
 
