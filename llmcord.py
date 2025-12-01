@@ -85,12 +85,9 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
     if model == curr_model:
         output = f"Current model: `{curr_model}`"
     else:
-        if user_is_admin := interaction.user.id in config["permissions"]["users"]["admin_ids"]:
-            curr_model = model
-            output = f"Model switched to: `{model}`"
-            logging.info(output)
-        else:
-            output = "You don't have permission to change the model."
+        curr_model = model
+        output = f"Model switched to: `{model}`"
+        logging.info(output)
 
     await interaction.response.send_message(output, ephemeral=(interaction.channel.type == discord.ChannelType.private))
 
