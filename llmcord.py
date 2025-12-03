@@ -392,8 +392,8 @@ async def on_message(new_msg: discord.Message) -> None:
                 exa_data = exa_resp.json()
                 if results := exa_data.get("results"):
                     search_context = "\n\nSearch Results:\n"
-                    for res in results[:3]:
-                        search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('text')[:300]}...\n"
+                    for res in results[:10]:
+                        search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('text')}\n"
 
                     if system_prompt:
                         system_prompt += search_context
