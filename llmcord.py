@@ -385,6 +385,7 @@ async def on_message(new_msg: discord.Message) -> None:
                     json={
                         "query": search_query,
                         "type": "auto",
+                        "numResults": 3,
                         "contents": {"text": True}
                     },
                     timeout=10
@@ -392,7 +393,7 @@ async def on_message(new_msg: discord.Message) -> None:
                 exa_data = exa_resp.json()
                 if results := exa_data.get("results"):
                     search_context = "\n\nSearch Results:\n"
-                    for res in results[:10]:
+                    for res in results:
                         search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('text')}\n"
 
                     if system_prompt:
