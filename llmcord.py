@@ -385,8 +385,8 @@ async def on_message(new_msg: discord.Message) -> None:
                     json={
                         "query": search_query,
                         "type": "auto",
-                        "numResults": 3,
-                        "contents": {"text": True}
+                        "numResults": 5,
+                        "contents": {"text": {"maxCharacters": 20000}}
                     },
                     timeout=10
                 )
