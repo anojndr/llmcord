@@ -219,12 +219,12 @@ async def on_message(new_msg: discord.Message) -> None:
                                 lens_results = []
                                 if visual_matches := lens_data.get("visual_matches"):
                                     lens_results.append("Visual Matches:")
-                                    for match in visual_matches[:5]:
+                                    for match in visual_matches:
                                         lens_results.append(f"- [{match.get('title')}]({match.get('link')}) ({match.get('source')})")
 
                                 if related_content := lens_data.get("related_content"):
                                     lens_results.append("\nRelated Content:")
-                                    for content in related_content[:5]:
+                                    for content in related_content:
                                         lens_results.append(f"- [{content.get('query')}]({content.get('link')})")
 
                                 if lens_results:
