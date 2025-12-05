@@ -196,8 +196,7 @@ async def on_message(new_msg: discord.Message) -> None:
         async with curr_node.lock:
             if curr_node.text == None:
                 cleaned_content = curr_msg.content.removeprefix(discord_bot.user.mention).lstrip()
-                if cleaned_content.lower().startswith("at ai"):
-                    cleaned_content = cleaned_content[5:].lstrip()
+                cleaned_content = re.sub(r"\bat ai\b", "", cleaned_content, flags=re.IGNORECASE).lstrip()
 
                 if cleaned_content.lower().startswith("googlelens") and (serpapi_key := config.get("serpapi_api_key")):
                     lens_query = cleaned_content[10:].strip()
