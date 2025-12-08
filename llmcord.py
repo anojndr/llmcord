@@ -82,6 +82,10 @@ class MsgNode:
 async def model_command(interaction: discord.Interaction, model: str) -> None:
     global curr_model
 
+    if model not in config["models"]:
+        await interaction.response.send_message(f"Model `{model}` is not a valid model.", ephemeral=True)
+        return
+
     if model == curr_model:
         output = f"Current model: `{curr_model}`"
     else:
