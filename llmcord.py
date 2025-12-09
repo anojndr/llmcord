@@ -282,11 +282,11 @@ async def on_message(new_msg: discord.Message) -> None:
                 tweets = []
                 for tweet_id in re.findall(r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
                     try:
-                        tweet = await twitter_api.tweet_details(int(tweet_id))
+                        tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
                         tweets.append(f"Tweet from @{tweet.user.username}:\n{tweet.rawContent}")
 
                         if max_tweet_replies > 0:
-                            replies = await gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies))
+                            replies = await asyncio.wait_for(gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies)), timeout=10)
                             if replies:
                                 tweets.append("\nReplies:")
                                 for reply in replies:
