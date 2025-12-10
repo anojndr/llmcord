@@ -171,8 +171,9 @@ async def on_message(new_msg: discord.Message) -> None:
     provider_config = config["providers"][provider]
 
     base_url = provider_config.get("base_url")
-    api_key = provider_config.get("api_key", "sk-no-key-required")
-    openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+    api_keys = provider_config.get("api_key", "sk-no-key-required")
+    if isinstance(api_keys, str):
+        api_keys = [api_keys]
 
     model_parameters = config["models"].get(provider_slash_model, None)
 
@@ -436,7 +437,7 @@ async def on_message(new_msg: discord.Message) -> None:
         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
         await msg_nodes[response_msg.id].lock.acquire()
 
-    async def get_stream():
+    async def get_stream(api_key):
         if provider == "gemini":
             client = genai.Client(api_key=api_key, http_options=dict(api_version="v1beta"))
             tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
@@ -455,6 +456,7 @@ async def on_message(new_msg: discord.Message) -> None:
                 grounding_metadata = chunk.candidates[0].grounding_metadata if chunk.candidates else None
                 yield text, str(reason) if reason else None, grounding_metadata
         else:
+            openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
             async for chunk in await openai_client.chat.completions.create(**openai_kwargs):
                 if not (choice := chunk.choices[0] if chunk.choices else None):
                     continue
@@ -467,10 +469,11 @@ async def on_message(new_msg: discord.Message) -> None:
         curr_content = finish_reason = None
         response_contents = []
         attempt_count += 1
+        current_api_key = api_keys[(attempt_count - 1) % len(api_keys)]
 
         try:
             async with new_msg.channel.typing():
-                async for delta_content, new_finish_reason, new_grounding_metadata in get_stream():
+                async for delta_content, new_finish_reason, new_grounding_metadata in get_stream(current_api_key):
                     if new_grounding_metadata:
                         grounding_metadata = new_grounding_metadata
 
