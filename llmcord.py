@@ -236,6 +236,7 @@ async def on_message(new_msg: discord.Message) -> None:
                                 "engine": "google_lens",
                                 "api_key": serpapi_key,
                                 "url": image_url,
+                                "safe": "off",
                             }
                             if lens_query:
                                 params["q"] = lens_query
