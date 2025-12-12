@@ -249,7 +249,21 @@ async def on_message(new_msg: discord.Message) -> None:
                                 if visual_matches := lens_data.get("visual_matches"):
                                     lens_results.append("Visual Matches:")
                                     for match in visual_matches:
-                                        lens_results.append(f"- [{match.get('title')}]({match.get('link')}) ({match.get('source')})")
+                                        title = match.get('title')
+                                        link = match.get('link')
+                                        source = match.get('source')
+                                        price = match.get('price', {}).get('value')
+                                        rating = match.get('rating')
+                                        reviews = match.get('reviews')
+
+                                        details = []
+                                        if price:
+                                            details.append(price)
+                                        if rating:
+                                            details.append(f"{rating}⭐ ({reviews} reviews)")
+
+                                        details_str = f" - {', '.join(details)}" if details else ""
+                                        lens_results.append(f"- [{title}]({link}) ({source}){details_str}")
 
                                 if related_content := lens_data.get("related_content"):
                                     lens_results.append("\nRelated Content:")
