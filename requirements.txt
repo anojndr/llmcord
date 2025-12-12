@@ -1,7 +1,8 @@
-discord.py>=2.6.0
+﻿discord.py>=2.6.0
 google-genai
 httpx
 openai
 pyyaml
 twscrape
 youtube-transcript-api
+beautifulsoup4
