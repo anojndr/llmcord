@@ -18,6 +18,7 @@ import httpx
 from openai import AsyncOpenAI
 from twscrape import xclid
 import json
+from bs4 import BeautifulSoup
 
 def script_url(k: str, v: str):
     return f"https://abs.twimg.com/responsive-web/client-web/{k}.{v}.js"
@@ -227,53 +228,43 @@ async def on_message(new_msg: discord.Message) -> None:
                 cleaned_content = curr_msg.content.removeprefix(discord_bot.user.mention).lstrip()
                 cleaned_content = re.sub(r"\bat ai\b", "", cleaned_content, flags=re.IGNORECASE).lstrip()
 
-                if cleaned_content.lower().startswith("googlelens") and (serpapi_key := config.get("serpapi_api_key")):
+                if cleaned_content.lower().startswith("googlelens"):
                     lens_query = cleaned_content[10:].strip()
 
                     if image_url := next((att.url for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")), None):
                         try:
-                            params = {
-                                "engine": "google_lens",
-                                "api_key": serpapi_key,
-                                "url": image_url,
-                                "safe": "off",
+                            headers = {
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                             }
-                            if lens_query:
-                                params["q"] = lens_query
-
-                            lens_resp = await httpx_client.get("https://serpapi.com/search", params=params, timeout=60)
-                            lens_data = lens_resp.json()
-
-                            if not lens_data.get("error"):
-                                lens_results = []
-                                if visual_matches := lens_data.get("visual_matches"):
-                                    lens_results.append("Visual Matches:")
-                                    for match in visual_matches:
-                                        title = match.get('title')
-                                        link = match.get('link')
-                                        source = match.get('source')
-                                        price = match.get('price', {}).get('value')
-                                        rating = match.get('rating')
-                                        reviews = match.get('reviews')
-
-                                        details = []
-                                        if price:
-                                            details.append(price)
-                                        if rating:
-                                            details.append(f"{rating}⭐ ({reviews} reviews)")
-
-                                        details_str = f" - {', '.join(details)}" if details else ""
-                                        lens_results.append(f"- [{title}]({link}) ({source}){details_str}")
-
-                                if related_content := lens_data.get("related_content"):
-                                    lens_results.append("\nRelated Content:")
-                                    for content in related_content:
-                                        lens_results.append(f"- [{content.get('query')}]({content.get('link')})")
-
-                                if lens_results:
-                                    cleaned_content = (cleaned_content + "\n\nGoogle Lens Results:\n" + "\n".join(lens_results))
+                            params = {
+                                "rpt": "imageview",
+                                "url": image_url
+                            }
+                            
+                            yandex_resp = await httpx_client.get("https://yandex.com/images/search", params=params, headers=headers, follow_redirects=True, timeout=60)
+                            soup = BeautifulSoup(yandex_resp.text, "html.parser")
+                            
+                            lens_results = []
+                            sites_items = soup.select(".CbirSites-Item")
+                            
+                            if sites_items:
+                                lens_results.append("Sites with information about the image:")
+                                for item in sites_items:
+                                    title_el = item.select_one(".CbirSites-ItemTitle a")
+                                    domain_el = item.select_one(".CbirSites-ItemDomain")
+                                    desc_el = item.select_one(".CbirSites-ItemDescription")
+                                    
+                                    title = title_el.get_text(strip=True) if title_el else "N/A"
+                                    link = title_el["href"] if title_el else "#"
+                                    domain = domain_el.get_text(strip=True) if domain_el else ""
+                                    desc = desc_el.get_text(strip=True) if desc_el else ""
+                                    
+                                    lens_results.append(f"- [{title}]({link}) ({domain}) - {desc}")
+                            
+                            if lens_results:
+                                cleaned_content = (cleaned_content + "\n\nYandex Image Search Results:\n" + "\n".join(lens_results))
                         except Exception:
-                            logging.exception("Error fetching Google Lens results")
+                            logging.exception("Error fetching Yandex results")
 
                 allowed_types = ("text", "image")
                 if provider == "gemini":

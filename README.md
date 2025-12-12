@@ -51,7 +51,7 @@ Or run local models with:
 
 ### And more:
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
-- Supports Google Lens (start your message with "googlelens" and attach an image)
+- Supports Reverse Image Search (powered by Yandex) (start your message with "googlelens" and attach an image)
 - Supports YouTube video transcripts (just paste a YouTube link)
 - Supports Twitter/X link expansion (automatically fetches tweet content and replies)
 - Supports text file attachments (.txt, .py, .c, etc.)
@@ -82,7 +82,6 @@ Or run local models with:
 | **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
-| **serpapi_api_key** | Optional. Allows the bot to use Google Lens. Get an API key from [serpapi.com](https://serpapi.com). |
 | **twitter_accounts** | Optional. A list of Twitter/X accounts to use for tweet extraction. Each account requires a `username`, `password`, `email`, `email_password`, and `cookies` entry. |
 | **twitter_proxy** | Optional. A proxy URL (e.g., `http://user:pass@host:port`) to use for Twitter/X requests. |
 | **max_tweet_replies** | The maximum number of tweet replies to fetch when a Twitter/X link is detected.<br /><br />Default: `50` |
