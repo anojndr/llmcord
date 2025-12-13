@@ -406,36 +406,41 @@ async def on_message(new_msg: discord.Message) -> None:
 
     system_prompt = config.get("system_prompt")
 
-    if provider != "gemini" and (exa_key := config.get("exa_api_key")):
+    if provider != "gemini" and (tavily_keys := config.get("tavily_api_key")):
+        if isinstance(tavily_keys, str):
+            tavily_keys = [tavily_keys]
+
         search_query = new_msg.content.removeprefix(discord_bot.user.mention).lstrip()
         if search_query.lower().startswith("at ai"):
             search_query = search_query[5:].lstrip()
 
         if search_query:
-            try:
-                exa_resp = await httpx_client.post(
-                    "https://api.exa.ai/search",
-                    headers={"x-api-key": exa_key, "Content-Type": "application/json"},
-                    json={
-                        "query": search_query,
-                        "type": "auto",
-                        "numResults": 5,
-                        "contents": {"text": {"maxCharacters": 20000}}
-                    },
-                    timeout=10
-                )
-                exa_data = exa_resp.json()
-                if results := exa_data.get("results"):
-                    search_context = "\n\nSearch Results:\n"
-                    for res in results:
-                        search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('text')}\n"
+            for i, key in enumerate(tavily_keys):
+                try:
+                    tavily_resp = await httpx_client.post(
+                        "https://api.tavily.com/search",
+                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                        json={
+                            "query": search_query,
+                            "auto_parameters": True,
+                            "max_results": 5,
+                        },
+                        timeout=10
+                    )
+                    tavily_data = tavily_resp.json()
+                    if results := tavily_data.get("results"):
+                        search_context = "\n\nSearch Results:\n"
+                        for res in results:
+                            search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('content')}\n"
 
-                    if system_prompt:
-                        system_prompt += search_context
-                    else:
-                        system_prompt = search_context
-            except Exception:
-                logging.exception("Error fetching Exa search results")
+                        if system_prompt:
+                            system_prompt += search_context
+                        else:
+                            system_prompt = search_context
+                    break
+                except Exception:
+                    if i == len(tavily_keys) - 1:
+                        logging.exception("Error fetching Tavily search results")
 
     if system_prompt:
         now = datetime.now().astimezone()
