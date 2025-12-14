@@ -30,7 +30,6 @@ def patched_get_scripts_list(text: str):
         for k, v in json.loads(scripts).items():
             yield script_url(k, f"{v}a")
     except json.decoder.JSONDecodeError:
-        # Fix unquoted keys like: node_modules_pnpm_ws_8_18_0_node_modules_ws_browser_js
         fixed_scripts = re.sub(
             r'([,\{])(\s*)([\w]+_[\w_]+)(\s*):',
             r'\1\2"\3"\4:',
@@ -60,6 +59,96 @@ STREAMING_INDICATOR = " ⚪"
 EDIT_DELAY_SECONDS = 1
 
 MAX_MESSAGE_NODES = 500
+
+
+TAVILY_TOOL_DEFINITION = {
+    "type": "function",
+    "function": {
+        "name": "tavily_search",
+        "description": "Search the web using Tavily. Use this tool when you need to find information about current events, facts, or any topic not in your training data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to execute."
+                },
+                "topic": {
+                    "type": "string",
+                    "enum": ["general", "news"],
+                    "description": "The category of the search. 'news' is for real-time updates, 'general' for broader searches.",
+                    "default": "general"
+                },
+                "search_depth": {
+                    "type": "string",
+                    "enum": ["basic", "advanced"],
+                    "description": "The depth of the search. 'advanced' retrieves more relevant content but costs more.",
+                    "default": "basic"
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "The maximum number of search results to return.",
+                    "default": 5
+                },
+                "time_range": {
+                    "type": "string",
+                    "enum": ["day", "week", "month", "year"],
+                    "description": "The time range back from the current date to filter results.",
+                },
+                "include_answer": {
+                    "type": "boolean",
+                    "description": "Include an LLM-generated answer to the query.",
+                    "default": False
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False
+        },
+        "strict": False
+    }
+}
+
+
+async def execute_tavily_search(tool_args: dict) -> str:
+    tavily_keys = config.get("tavily_api_key")
+    if isinstance(tavily_keys, str):
+        tavily_keys = [tavily_keys]
+
+    if not tavily_keys:
+        return "Error: Tavily API key not configured."
+    
+    params = {
+        "query": tool_args.get("query"),
+        "auto_parameters": True,
+    }
+    
+    if "topic" in tool_args: params["topic"] = tool_args["topic"]
+    if "search_depth" in tool_args: params["search_depth"] = tool_args["search_depth"]
+    if "max_results" in tool_args: params["max_results"] = tool_args["max_results"]
+    if "time_range" in tool_args: params["time_range"] = tool_args["time_range"]
+    if "include_answer" in tool_args: params["include_answer"] = tool_args["include_answer"]
+
+    for i, key in enumerate(tavily_keys):
+        try:
+            tavily_resp = await httpx_client.post(
+                "https://api.tavily.com/search",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=params,
+                timeout=10
+            )
+            tavily_data = tavily_resp.json()
+            
+            if results := tavily_data.get("results"):
+                search_context = "Search Results:\n"
+                for res in results:
+                    search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('content')}\n"
+                return search_context
+            else:
+                return "No results found."
+        except Exception:
+            if i == len(tavily_keys) - 1:
+                logging.exception("Error fetching Tavily search results")
+                return "Error fetching search results."
 
 
 def get_config(filename: str = "config.yaml") -> dict[str, Any]:
@@ -214,7 +303,6 @@ async def on_message(new_msg: discord.Message) -> None:
     max_messages = config.get("max_messages", 25)
     max_tweet_replies = config.get("max_tweet_replies", 50)
 
-    # Build message chain and set user warnings
     messages = []
     gemini_contents = []
     user_warnings = set()
@@ -406,42 +494,6 @@ async def on_message(new_msg: discord.Message) -> None:
 
     system_prompt = config.get("system_prompt")
 
-    if provider != "gemini" and (tavily_keys := config.get("tavily_api_key")):
-        if isinstance(tavily_keys, str):
-            tavily_keys = [tavily_keys]
-
-        search_query = new_msg.content.removeprefix(discord_bot.user.mention).lstrip()
-        if search_query.lower().startswith("at ai"):
-            search_query = search_query[5:].lstrip()
-
-        if search_query:
-            for i, key in enumerate(tavily_keys):
-                try:
-                    tavily_resp = await httpx_client.post(
-                        "https://api.tavily.com/search",
-                        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                        json={
-                            "query": search_query,
-                            "auto_parameters": True,
-                            "max_results": 5,
-                        },
-                        timeout=10
-                    )
-                    tavily_data = tavily_resp.json()
-                    if results := tavily_data.get("results"):
-                        search_context = "\n\nSearch Results:\n"
-                        for res in results:
-                            search_context += f"- [{res.get('title')}]({res.get('url')}): {res.get('content')}\n"
-
-                        if system_prompt:
-                            system_prompt += search_context
-                        else:
-                            system_prompt = search_context
-                    break
-                except Exception:
-                    if i == len(tavily_keys) - 1:
-                        logging.exception("Error fetching Tavily search results")
-
     if system_prompt:
         now = datetime.now().astimezone()
 
@@ -451,7 +503,6 @@ async def on_message(new_msg: discord.Message) -> None:
 
         messages.append(dict(role="system", content=system_prompt))
 
-    # Generate and send response message(s) (can be multiple if response is long)
     curr_content = finish_reason = None
     response_msgs = []
     response_contents = []
@@ -492,10 +543,72 @@ async def on_message(new_msg: discord.Message) -> None:
                 yield text, str(reason) if reason else None, grounding_metadata
         else:
             openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
-            async for chunk in await openai_client.chat.completions.create(**openai_kwargs):
-                if not (choice := chunk.choices[0] if chunk.choices else None):
+            
+            current_kwargs = openai_kwargs.copy()
+            if config.get("tavily_api_key"):
+                current_kwargs["tools"] = [TAVILY_TOOL_DEFINITION]
+            
+            messages_list = list(current_kwargs["messages"])
+            current_kwargs["messages"] = messages_list
+
+            while True:
+                tool_calls = {}
+                finish_reason = None
+                
+                async for chunk in await openai_client.chat.completions.create(**current_kwargs):
+                    if not (choice := chunk.choices[0] if chunk.choices else None):
+                        continue
+                    
+                    if choice.delta.tool_calls:
+                        for tool_call_chunk in choice.delta.tool_calls:
+                            index = tool_call_chunk.index
+                            if index not in tool_calls:
+                                tool_calls[index] = {
+                                    "id": tool_call_chunk.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_call_chunk.function.name,
+                                        "arguments": ""
+                                    }
+                                }
+                            
+                            if tool_call_chunk.function.name:
+                                tool_calls[index]["function"]["name"] = tool_call_chunk.function.name
+                            
+                            if tool_call_chunk.function.arguments:
+                                tool_calls[index]["function"]["arguments"] += tool_call_chunk.function.arguments
+                    
+                    if choice.delta.content or (choice.finish_reason and choice.finish_reason != "tool_calls"):
+                        yield choice.delta.content or "", choice.finish_reason, None
+                    
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+
+                if finish_reason == "tool_calls":
+                    assistant_msg = {
+                        "role": "assistant",
+                        "tool_calls": [v for k, v in sorted(tool_calls.items())]
+                    }
+                    messages_list.append(assistant_msg)
+                    
+                    for index, tool_call in sorted(tool_calls.items()):
+                        if tool_call["function"]["name"] == "tavily_search":
+                            try:
+                                args = json.loads(tool_call["function"]["arguments"])
+                                result = await execute_tavily_search(args)
+                            except Exception as e:
+                                result = f"Error executing tool: {str(e)}"
+                            
+                            messages_list.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "content": result
+                            })
+                    
+                    current_kwargs["messages"] = messages_list
                     continue
-                yield choice.delta.content or "", choice.finish_reason, None
+                else:
+                    break
 
     grounding_metadata = None
     attempt_count = 0
@@ -595,7 +708,6 @@ async def on_message(new_msg: discord.Message) -> None:
         msg_nodes[response_msg.id].text = "".join(response_contents)
         msg_nodes[response_msg.id].lock.release()
 
-    # Delete oldest MsgNodes (lowest message IDs) from the cache
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
         for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
             async with msg_nodes.setdefault(msg_id, MsgNode()).lock:
