@@ -514,6 +514,7 @@ async def on_message(new_msg: discord.Message) -> None:
     else:
         max_message_length = 4096 - len(STREAMING_INDICATOR)
         embed = discord.Embed.from_dict(dict(fields=[dict(name=warning, value="", inline=False) for warning in sorted(user_warnings)]))
+        embed.set_footer(text=f"Model: {provider_slash_model}")
 
     async def reply_helper(**reply_kwargs) -> None:
         reply_target = new_msg if not response_msgs else response_msgs[-1]
