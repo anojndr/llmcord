@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 from twscrape import xclid
 import json
 from bs4 import BeautifulSoup
+import asyncpraw
 
 def script_url(k: str, v: str):
     return f"https://abs.twimg.com/responsive-web/client-web/{k}.{v}.js"
@@ -173,6 +174,15 @@ discord_bot = commands.Bot(intents=intents, activity=activity, command_prefix=No
 
 httpx_client = httpx.AsyncClient()
 twitter_api = API(proxy=config.get("twitter_proxy"))
+
+if config.get("reddit_client_id") and config.get("reddit_client_secret"):
+    reddit_client = asyncpraw.Reddit(
+        client_id=config.get("reddit_client_id"),
+        client_secret=config.get("reddit_client_secret"),
+        user_agent=config.get("reddit_user_agent", "llmcord:v1.0 (by /u/llmcord)")
+    )
+else:
+    reddit_client = None
 
 
 @dataclass
@@ -413,6 +423,32 @@ async def on_message(new_msg: discord.Message) -> None:
                     except Exception:
                         pass
 
+                reddit_posts = []
+                if reddit_client:
+                    for post_url in re.findall(r"(https?:\/\/(?:www\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?=&%]*)|redd\.it\/[a-zA-Z0-9_]+))", cleaned_content):
+                        try:
+                            submission = await reddit_client.submission(url=post_url)
+                            
+                            post_text = f"Reddit Post: {submission.title}\nSubreddit: r/{submission.subreddit.display_name}\nAuthor: u/{submission.author.name if submission.author else '[deleted]'}\n\n{submission.selftext}"
+                            
+                            if not submission.is_self and submission.url:
+                                post_text += f"\nLink: {submission.url}"
+
+                            submission.comment_sort = 'top'
+                            await submission.comments()
+                            top_comments = submission.comments.list()[:5]
+                            
+                            if top_comments:
+                                post_text += "\n\nTop Comments:"
+                                for comment in top_comments:
+                                    if isinstance(comment, asyncpraw.models.MoreComments):
+                                        continue
+                                    post_text += f"\n- u/{comment.author.name if comment.author else '[deleted]'}: {comment.body}"
+                            
+                            reddit_posts.append(post_text)
+                        except Exception:
+                            pass
+
                 curr_node.text = "\n".join(
                     ([cleaned_content] if cleaned_content else [])
                     + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
@@ -420,6 +456,7 @@ async def on_message(new_msg: discord.Message) -> None:
                     + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
                     + yt_transcripts
                     + tweets
+                    + reddit_posts
                 )
 
                 curr_node.role = "assistant" if curr_msg.author == discord_bot.user else "user"
