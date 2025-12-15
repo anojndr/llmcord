@@ -391,7 +391,7 @@ async def on_message(new_msg: discord.Message) -> None:
                 ]
 
                 yt_transcripts = []
-                for video_id in re.findall(r"(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})", cleaned_content):
+                for video_id in re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})", cleaned_content):
                     try:
                         ytt_api = YouTubeTranscriptApi()
                         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
@@ -409,7 +409,7 @@ async def on_message(new_msg: discord.Message) -> None:
                         pass
 
                 tweets = []
-                for tweet_id in re.findall(r"(?:https?:\/\/)?(?:www\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
+                for tweet_id in re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
                     try:
                         tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
                         tweets.append(f"Tweet from @{tweet.user.username}:\n{tweet.rawContent}")
@@ -425,7 +425,7 @@ async def on_message(new_msg: discord.Message) -> None:
 
                 reddit_posts = []
                 if reddit_client:
-                    for post_url in re.findall(r"(https?:\/\/(?:www\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?=&%]*)|redd\.it\/[a-zA-Z0-9_]+))", cleaned_content):
+                    for post_url in re.findall(r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?=&%]*)|redd\.it\/[a-zA-Z0-9_]+))", cleaned_content):
                         try:
                             submission = await reddit_client.submission(url=post_url)
                             
