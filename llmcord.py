@@ -193,6 +193,7 @@ class MsgNode:
 
     role: Literal["user", "assistant"] = "assistant"
     user_id: Optional[int] = None
+    thought_signature: Optional[str] = None
 
     has_bad_attachments: bool = False
     fetch_parent_failed: bool = False
@@ -491,13 +492,19 @@ async def on_message(new_msg: discord.Message) -> None:
             if provider == "gemini":
                 parts = []
                 if curr_node.text:
-                    parts.append(types.Part.from_text(text=curr_node.text[:max_text]))
+                    part = types.Part.from_text(text=curr_node.text[:max_text])
+                    if curr_node.thought_signature:
+                        part.thought_signature = curr_node.thought_signature
+                    parts.append(part)
 
                 for att in curr_node.raw_attachments:
                     if att["content_type"].startswith("text"):
                         continue
 
-                    parts.append(types.Part.from_bytes(data=att["content"], mime_type=att["content_type"]))
+                    part = types.Part.from_bytes(data=att["content"], mime_type=att["content_type"])
+                    if model_parameters and (media_res := model_parameters.get("media_resolution")):
+                        part.media_resolution = {"level": media_res}
+                    parts.append(part)
 
                 if parts:
                     role = "model" if curr_node.role == "assistant" else "user"
@@ -562,13 +569,29 @@ async def on_message(new_msg: discord.Message) -> None:
 
     async def get_stream(api_key):
         if provider == "gemini":
-            client = genai.Client(api_key=api_key, http_options=dict(api_version="v1beta"))
+            is_gemini_3 = "gemini-3" in model
+
+            http_options = dict(api_version="v1beta")
+            if model_parameters and model_parameters.get("media_resolution"):
+                http_options["api_version"] = "v1alpha"
+
+            client = genai.Client(api_key=api_key, http_options=http_options)
             tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
-            gemini_config = types.GenerateContentConfig(
+
+            config_kwargs = dict(
                 system_instruction=system_prompt,
                 tools=tools,
-                temperature=model_parameters.get("temperature") if model_parameters else None,
             )
+
+            if model_parameters:
+                if not is_gemini_3:
+                    config_kwargs["temperature"] = model_parameters.get("temperature")
+
+                if thinking_level := model_parameters.get("thinking_level"):
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
+
+            gemini_config = types.GenerateContentConfig(**config_kwargs)
+
             async for chunk in await client.aio.models.generate_content_stream(
                 model=model,
                 contents=gemini_contents[::-1],
@@ -577,7 +600,15 @@ async def on_message(new_msg: discord.Message) -> None:
                 text = chunk.text or ""
                 reason = chunk.candidates[0].finish_reason if chunk.candidates else None
                 grounding_metadata = chunk.candidates[0].grounding_metadata if chunk.candidates else None
-                yield text, str(reason) if reason else None, grounding_metadata
+
+                thought_signature = None
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if hasattr(part, "thought_signature") and part.thought_signature:
+                            thought_signature = part.thought_signature
+                            break
+
+                yield text, str(reason) if reason else None, grounding_metadata, thought_signature
         else:
             openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
             
@@ -616,7 +647,7 @@ async def on_message(new_msg: discord.Message) -> None:
                                 tool_calls[index]["function"]["arguments"] += tool_call_chunk.function.arguments
                     
                     if choice.delta.content or (choice.finish_reason and choice.finish_reason != "tool_calls"):
-                        yield choice.delta.content or "", choice.finish_reason, None
+                        yield choice.delta.content or "", choice.finish_reason, None, None
                     
                     if choice.finish_reason:
                         finish_reason = choice.finish_reason
@@ -658,9 +689,13 @@ async def on_message(new_msg: discord.Message) -> None:
 
         try:
             async with new_msg.channel.typing():
-                async for delta_content, new_finish_reason, new_grounding_metadata in get_stream(current_api_key):
+                thought_signature = None
+                async for delta_content, new_finish_reason, new_grounding_metadata, new_thought_signature in get_stream(current_api_key):
                     if new_grounding_metadata:
                         grounding_metadata = new_grounding_metadata
+
+                    if new_thought_signature:
+                        thought_signature = new_thought_signature
 
                     if finish_reason != None:
                         break
@@ -743,6 +778,8 @@ async def on_message(new_msg: discord.Message) -> None:
 
     for response_msg in response_msgs:
         msg_nodes[response_msg.id].text = "".join(response_contents)
+        if thought_signature:
+            msg_nodes[response_msg.id].thought_signature = thought_signature
         msg_nodes[response_msg.id].lock.release()
 
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
