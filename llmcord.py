@@ -346,7 +346,6 @@ async def on_message(new_msg: discord.Message) -> None:
                             sites_items = soup.select(".CbirSites-Item")
                             
                             if sites_items:
-                                lens_results.append("Sites with information about the image:")
                                 for item in sites_items:
                                     title_el = item.select_one(".CbirSites-ItemTitle a")
                                     domain_el = item.select_one(".CbirSites-ItemDomain")
@@ -360,7 +359,7 @@ async def on_message(new_msg: discord.Message) -> None:
                                     lens_results.append(f"- [{title}]({link}) ({domain}) - {desc}")
                             
                             if lens_results:
-                                cleaned_content = (cleaned_content + "\n\nYandex Image Search Results:\n" + "\n".join(lens_results))
+                                cleaned_content = (cleaned_content + "\n\nYandex Image Search Results (prioritize the content of these URLs):\n" + "\n".join(lens_results))
                         except Exception:
                             logging.exception("Error fetching Yandex results")
 
