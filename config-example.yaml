@@ -89,6 +89,13 @@ providers:
     base_url: http://localhost:8000/v1
 
 models:
+  gemini/gemini-3-pro-preview:
+    thinking_level: low
+    media_resolution: media_resolution_high
+
+  gemini/gemini-3-flash-preview:
+    thinking_level: minimal
+
   gemini/gemini-2.5-flash:
 
   openai/gpt-5:
