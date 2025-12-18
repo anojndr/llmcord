@@ -583,12 +583,19 @@ async def on_message(new_msg: discord.Message) -> None:
                 tools=tools,
             )
 
-            if model_parameters:
-                if not is_gemini_3:
-                    config_kwargs["temperature"] = model_parameters.get("temperature")
+            if model_parameters and not is_gemini_3:
+                config_kwargs["temperature"] = model_parameters.get("temperature")
 
-                if thinking_level := model_parameters.get("thinking_level"):
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
+            thinking_level = model_parameters.get("thinking_level") if model_parameters else None
+
+            if not thinking_level:
+                if "gemini-3-flash" in model:
+                    thinking_level = "MINIMAL"
+                elif "gemini-3-pro" in model:
+                    thinking_level = "LOW"
+
+            if thinking_level:
+                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
 
             gemini_config = types.GenerateContentConfig(**config_kwargs)
 
