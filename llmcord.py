@@ -459,6 +459,12 @@ async def on_message(new_msg: discord.Message) -> None:
                     + reddit_posts
                 )
 
+                if not curr_node.text and curr_node.images:
+                    curr_node.text = "What is in this image?"
+
+                if not curr_node.text and not curr_node.images and not curr_node.raw_attachments and curr_msg == new_msg:
+                    curr_node.text = "Hello"
+
                 curr_node.role = "assistant" if curr_msg.author == discord_bot.user else "user"
 
                 curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
