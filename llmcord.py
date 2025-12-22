@@ -328,7 +328,7 @@ async def on_message(new_msg: discord.Message) -> None:
                 cleaned_content = re.sub(r"\bat ai\b", "", cleaned_content, flags=re.IGNORECASE).lstrip()
 
                 if cleaned_content.lower().startswith("googlelens"):
-                    lens_query = cleaned_content[10:].strip()
+                    cleaned_content = cleaned_content[10:].strip()
 
                     if image_url := next((att.url for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")), None):
                         try:
