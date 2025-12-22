@@ -360,7 +360,7 @@ async def on_message(new_msg: discord.Message) -> None:
                                     lens_results.append(f"- [{title}]({link}) ({domain}) - {desc}")
                             
                             if lens_results:
-                                cleaned_content = (cleaned_content + "\n\nYandex Image Search Results (prioritize the content of these URLs):\n" + "\n".join(lens_results))
+                                cleaned_content = (cleaned_content + "\n\nanswer the user's query based on the yandex reverse image results:\n" + "\n".join(lens_results))
                         except Exception:
                             logging.exception("Error fetching Yandex results")
 
