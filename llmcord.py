@@ -576,13 +576,26 @@ async def on_message(new_msg: discord.Message) -> None:
     async def get_stream(api_key):
         if provider == "gemini":
             is_gemini_3 = "gemini-3" in model
+            is_preview = "preview" in model
 
             http_options = dict(api_version="v1beta")
             if model_parameters and model_parameters.get("media_resolution"):
                 http_options["api_version"] = "v1alpha"
 
             client = genai.Client(api_key=api_key, http_options=http_options)
-            tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
+            
+            if is_preview:
+                if config.get("tavily_api_key"):
+                    tavily_tool = json.loads(json.dumps(TAVILY_TOOL_DEFINITION["function"]))
+                    if "strict" in tavily_tool:
+                        del tavily_tool["strict"]
+                    if "parameters" in tavily_tool and "additionalProperties" in tavily_tool["parameters"]:
+                        del tavily_tool["parameters"]["additionalProperties"]
+                    tools = [types.Tool(function_declarations=[tavily_tool])]
+                else:
+                    tools = []
+            else:
+                tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
 
             config_kwargs = dict(
                 system_instruction=system_prompt,
@@ -603,25 +616,81 @@ async def on_message(new_msg: discord.Message) -> None:
             if thinking_level:
                 config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
 
-            gemini_config = types.GenerateContentConfig(**config_kwargs)
+            active_contents = gemini_contents[::-1]
 
-            async for chunk in await client.aio.models.generate_content_stream(
-                model=model,
-                contents=gemini_contents[::-1],
-                config=gemini_config
-            ):
-                text = chunk.text or ""
-                reason = chunk.candidates[0].finish_reason if chunk.candidates else None
-                grounding_metadata = chunk.candidates[0].grounding_metadata if chunk.candidates else None
+            while True:
+                gemini_config = types.GenerateContentConfig(**config_kwargs)
+                
+                full_text = ""
+                function_calls_to_execute = []
+                captured_thought_signature = None
+                finish_reason = None
+                grounding_metadata = None
 
-                thought_signature = None
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    for part in chunk.candidates[0].content.parts:
-                        if hasattr(part, "thought_signature") and part.thought_signature:
-                            thought_signature = part.thought_signature
-                            break
+                async for chunk in await client.aio.models.generate_content_stream(
+                    model=model,
+                    contents=active_contents,
+                    config=gemini_config
+                ):
+                    text = ""
+                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                        for part in chunk.candidates[0].content.parts:
+                            if part.text:
+                                text += part.text
+                    
+                    full_text += text
+                    
+                    reason = chunk.candidates[0].finish_reason if chunk.candidates else None
+                    if reason:
+                        finish_reason = reason
+                        
+                    grounding_metadata = chunk.candidates[0].grounding_metadata if chunk.candidates else None
 
-                yield text, str(reason) if reason else None, grounding_metadata, thought_signature
+                    thought_signature = None
+                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                        for part in chunk.candidates[0].content.parts:
+                            if part.function_call:
+                                function_calls_to_execute.append(part.function_call)
+                            if hasattr(part, "thought_signature") and part.thought_signature:
+                                thought_signature = part.thought_signature
+                                captured_thought_signature = thought_signature
+
+                    yield_reason = str(reason) if reason else None
+                    if function_calls_to_execute:
+                        yield_reason = None
+
+                    yield text, yield_reason, grounding_metadata, thought_signature
+
+                if function_calls_to_execute:
+                    parts = []
+                    if full_text:
+                        parts.append(types.Part.from_text(text=full_text))
+                    
+                    for fc in function_calls_to_execute:
+                        parts.append(types.Part(function_call=fc))
+                    
+                    if captured_thought_signature and parts:
+                        parts[0].thought_signature = captured_thought_signature
+                        
+                    active_contents.append(types.Content(role="model", parts=parts))
+                    
+                    for fc in function_calls_to_execute:
+                        if fc.name == "tavily_search":
+                            try:
+                                result = await execute_tavily_search(fc.args)
+                            except Exception as e:
+                                result = f"Error executing tool: {str(e)}"
+                            
+                            function_response_part = types.Part.from_function_response(
+                                name=fc.name,
+                                response={"result": result}
+                            )
+                            
+                            active_contents.append(types.Content(role="user", parts=[function_response_part]))
+                    
+                    continue
+                
+                break
         else:
             openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
             
