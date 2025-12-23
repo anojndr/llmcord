@@ -584,8 +584,10 @@ async def on_message(new_msg: discord.Message) -> None:
 
             client = genai.Client(api_key=api_key, http_options=http_options)
             
+            has_url = re.search(r"https?://", new_msg.content)
+
             if is_preview:
-                if config.get("tavily_api_key"):
+                if config.get("tavily_api_key") and not has_url:
                     tavily_tool = json.loads(json.dumps(TAVILY_TOOL_DEFINITION["function"]))
                     if "strict" in tavily_tool:
                         del tavily_tool["strict"]
@@ -595,7 +597,10 @@ async def on_message(new_msg: discord.Message) -> None:
                 else:
                     tools = []
             else:
-                tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
+                if has_url:
+                    tools = []
+                else:
+                    tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
 
             config_kwargs = dict(
                 system_instruction=system_prompt,
