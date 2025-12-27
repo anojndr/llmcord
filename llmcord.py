@@ -550,6 +550,26 @@ async def on_message(new_msg: discord.Message) -> None:
         if accept_usernames:
             system_prompt += "\n\nUser's names are their Discord IDs and should be typed as '<@ID>'."
 
+        if config.get("tavily_api_key"):
+            system_prompt += """
+
+Use the `tavily_search` tool to access up-to-date information from the web or when responding to the user requires information about their location. Some examples of when to use the `tavily_search` tool include:
+
+* Local Information: Use the `tavily_search` tool to respond to questions that require information about the user's location, such as the weather, local businesses, or events.
+* Freshness: If up-to-date information on a topic could potentially change or enhance the answer, call the `tavily_search` tool any time you would otherwise refuse to answer a question because your knowledge might be out of date.
+* Niche Information: If the answer would benefit from detailed information not widely known or understood (which might be found on the internet), such as details about a small neighborhood, a less well-known company, or arcane regulations, use web sources directly rather than relying on the distilled knowledge from pretraining.
+* Accuracy: If the cost of a small mistake or outdated information is high (e.g., using an outdated version of a software library or not knowing the date of the next game for a sports team), then use the `tavily_search` tool.
+
+The `tavily_search` tool has the following commands:
+
+* `tavily_search(query, topic="general", search_depth="basic", max_results=5, time_range=None, include_answer=False)`: Issues a new query to a search engine and outputs the response.
+    * `query`: The search query to execute.
+    * `topic`: The category of the search. 'news' is for real-time updates, 'general' for broader searches.
+    * `search_depth`: The depth of the search. 'advanced' retrieves more relevant content but costs more.
+    * `max_results`: The maximum number of search results to return.
+    * `time_range`: The time range back from the current date to filter results. Options: "day", "week", "month", "year".
+    * `include_answer`: Include an LLM-generated answer to the query."""
+
         messages.append(dict(role="system", content=system_prompt))
 
     curr_content = finish_reason = None
