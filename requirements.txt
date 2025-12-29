@@ -7,3 +7,4 @@ twscrape
 youtube-transcript-api
 beautifulsoup4
 asyncpraw
+Pillow
