@@ -569,7 +569,7 @@ async def on_message(new_msg: discord.Message) -> None:
         if accept_usernames:
             system_prompt += "\n\nUser's names are their Discord IDs and should be typed as '<@ID>'."
 
-        if config.get("tavily_api_key"):
+        if config.get("tavily_api_key") and (provider != "gemini" or "preview" in model):
             system_prompt += """
 
 Use the `tavily_search` tool to access up-to-date information from the web or when responding to the user requires information about their location. Some examples of when to use the `tavily_search` tool include:
