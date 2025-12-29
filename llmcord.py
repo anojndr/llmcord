@@ -6,6 +6,8 @@ import os
 import re
 import logging
 from typing import Any, Literal, Optional
+import io
+from PIL import Image
 
 from aiohttp import web
 import discord
@@ -372,22 +374,39 @@ async def on_message(new_msg: discord.Message) -> None:
 
                 attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
 
+                processed_attachments = []
+                for att, resp in zip(good_attachments, attachment_responses):
+                    content = resp.content
+                    content_type = att.content_type
+
+                    if content_type == "image/gif":
+                        try:
+                            with Image.open(io.BytesIO(content)) as img:
+                                output = io.BytesIO()
+                                img.save(output, format="PNG")
+                                content = output.getvalue()
+                                content_type = "image/png"
+                        except Exception:
+                            logging.exception("Error converting GIF to PNG")
+
+                    processed_attachments.append(dict(content_type=content_type, content=content, text=resp.text if content_type.startswith("text") else None))
+
                 curr_node.text = "\n".join(
                     ([cleaned_content] if cleaned_content else [])
                     + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
                     + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
-                    + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
+                    + [att["text"] for att in processed_attachments if att["content_type"].startswith("text")]
                 )
 
                 curr_node.images = [
-                    dict(type="image_url", image_url=dict(url=f"data:{att.content_type};base64,{b64encode(resp.content).decode('utf-8')}"))
-                    for att, resp in zip(good_attachments, attachment_responses)
-                    if att.content_type.startswith("image")
+                    dict(type="image_url", image_url=dict(url=f"data:{att['content_type']};base64,{b64encode(att['content']).decode('utf-8')}"))
+                    for att in processed_attachments
+                    if att["content_type"].startswith("image")
                 ]
 
                 curr_node.raw_attachments = [
-                    dict(content_type=att.content_type, content=resp.content)
-                    for att, resp in zip(good_attachments, attachment_responses)
+                    dict(content_type=att["content_type"], content=att["content"])
+                    for att in processed_attachments
                 ]
 
                 yt_transcripts = []
