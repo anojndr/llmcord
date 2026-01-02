@@ -3,6 +3,7 @@
 bot_token: 
 client_id: 
 status_message: 
+tavily_api_key:  # For web search on non-Gemini and preview models
 
 reddit_client_id: 
 reddit_client_secret: 
