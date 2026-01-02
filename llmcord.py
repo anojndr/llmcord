@@ -52,6 +52,164 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
+# Web Search Decider and Tavily Search Functions
+SEARCH_DECIDER_SYSTEM_PROMPT = """You are a web search query optimizer. Your job is to analyze user queries and determine if they need web search for up-to-date or factual information.
+
+RESPOND ONLY with a valid JSON object. No other text, no markdown.
+
+If web search is NOT needed (e.g., creative writing, opinions, general knowledge, math, coding):
+{"needs_search": false}
+
+If web search IS needed (e.g., current events, recent news, product specs, prices, real-time info):
+{"needs_search": true, "queries": ["query1", "query2", ...]}
+
+RULES for generating queries:
+1. SINGLE SUBJECT = SINGLE QUERY. If the user asks about ONE thing, output exactly ONE search query. Do NOT split into multiple queries.
+   Example: "latest news" → ["latest news today"] (ONE query only)
+   Example: "iPhone 16 price" → ["iPhone 16 price"] (ONE query only)
+2. MULTIPLE SUBJECTS = MULTIPLE QUERIES. Only if the user asks about multiple distinct subjects/entities, create separate queries for EACH subject PLUS a comparison query.
+   Example: "iPhone 16 vs Samsung S25 specs" → ["iPhone 16 specs", "Samsung S25 specs", "iPhone 16 vs Samsung S25 specs comparison"]
+3. Make queries search-engine friendly (clear, specific keywords)
+4. Keep the total number of queries reasonable (1-5 queries max)
+5. Preserve the user's original intent
+
+Examples:
+- "What's the weather today?" → {"needs_search": true, "queries": ["weather today"]}
+- "Who won the 2024 Super Bowl?" → {"needs_search": true, "queries": ["2024 Super Bowl winner"]}
+- "latest news" → {"needs_search": true, "queries": ["latest news today"]}
+- "Write me a poem about cats" → {"needs_search": false}
+- "Compare RTX 4090 and RTX 4080 performance" → {"needs_search": true, "queries": ["RTX 4090 specs performance", "RTX 4080 specs performance", "RTX 4090 vs RTX 4080 comparison"]}
+"""
+
+
+async def decide_web_search(messages: list, gemini_api_key: str) -> dict:
+    """
+    Uses Gemini 2.0 Flash to decide if web search is needed and generates optimized queries.
+    Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
+    """
+    try:
+        client = genai.Client(api_key=gemini_api_key, http_options=dict(api_version="v1beta"))
+        
+        # Build context from chat history (mirror the main model's history)
+        search_decider_contents = []
+        for msg in messages[::-1]:  # Reverse to get chronological order
+            role = "model" if msg.get("role") == "assistant" else "user"
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Extract text from multimodal content
+                text_parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+                content = " ".join(text_parts) if text_parts else str(content)
+            if content:
+                search_decider_contents.append(types.Content(role=role, parts=[types.Part.from_text(text=str(content)[:5000])]))
+        
+        if not search_decider_contents:
+            return {"needs_search": False}
+        
+        # Add instruction to analyze the conversation
+        search_decider_contents.append(types.Content(
+            role="user",
+            parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
+        ))
+        
+        config = types.GenerateContentConfig(
+            system_instruction=SEARCH_DECIDER_SYSTEM_PROMPT,
+            temperature=0.1,
+        )
+        
+        response = await client.aio.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=search_decider_contents,
+            config=config
+        )
+        
+        response_text = response.text.strip()
+        # Try to extract JSON from the response
+        if response_text.startswith("```"):
+            # Remove markdown code blocks if present
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+            response_text = response_text.strip()
+        
+        result = json.loads(response_text)
+        return result
+    except Exception as e:
+        logging.exception(f"Error in web search decider: {e}")
+        return {"needs_search": False}
+
+
+async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, max_chars: int = 10000) -> dict:
+    """
+    Execute a single Tavily search query.
+    Returns the search results or an error dict.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "query": query,
+                    "max_results": max_results,
+                    "search_depth": "basic",
+                    "include_answer": False,
+                    "include_raw_content": False,
+                },
+                headers={
+                    "Authorization": f"Bearer {tavily_api_key}",
+                    "Content-Type": "application/json"
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as e:
+        logging.exception(f"Tavily search error for query '{query}': {e}")
+        return {"error": str(e), "query": query}
+
+
+async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max_results_per_query: int = 5, max_chars_per_query: int = 10000) -> str:
+    """
+    Perform concurrent web searches for multiple queries using Tavily.
+    Rotates through multiple API keys for load distribution.
+    Returns formatted search results as a string to be appended to the user's message.
+    """
+    if not queries or not tavily_api_keys:
+        return ""
+    
+    # Execute all searches concurrently, rotating through API keys
+    search_tasks = [
+        tavily_search(query, tavily_api_keys[i % len(tavily_api_keys)], max_results_per_query, max_chars_per_query) 
+        for i, query in enumerate(queries)
+    ]
+    results = await asyncio.gather(*search_tasks)
+    
+    formatted_results = []
+    total_chars = 0
+    
+    for i, result in enumerate(results):
+        if "error" in result:
+            continue
+        
+        query = queries[i]
+        formatted_results.append(f"\n### Search Results for: {query}")
+        
+        for item in result.get("results", []):
+            if total_chars >= max_chars_per_query * len(queries):
+                break
+                
+            title = item.get("title", "No title")
+            url = item.get("url", "")
+            content = item.get("content", "")[:2000]  # Limit content per result
+            
+            result_text = f"\n**{title}**\n{url}\n{content}\n"
+            formatted_results.append(result_text)
+            total_chars += len(result_text)
+    
+    if formatted_results:
+        return "\n\n---\n**Web Search Results:**" + "".join(formatted_results)
+    return ""
+
+
 VISION_MODEL_TAGS = ("claude", "gemini", "gemma", "gpt-4", "gpt-5", "grok-4", "llama", "llava", "mistral", "o3", "o4", "vision", "vl")
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
@@ -482,6 +640,65 @@ async def on_message(new_msg: discord.Message) -> None:
 
 
         messages.append(dict(role="system", content=system_prompt))
+
+    # Web Search Integration for non-Gemini models and Gemini preview models
+    tavily_api_keys = config.get("tavily_api_key")
+    if isinstance(tavily_api_keys, str):
+        tavily_api_keys = [tavily_api_keys]
+    elif not tavily_api_keys:
+        tavily_api_keys = []
+    
+    is_preview_model = "preview" in model.lower()
+    is_non_gemini = provider != "gemini"
+    is_googlelens_query = new_msg.content.lower().removeprefix(discord_bot.user.mention).strip().lower().startswith("googlelens")
+    
+    if tavily_api_keys and (is_non_gemini or is_preview_model) and not is_googlelens_query:
+        # Get a Gemini API key for the search decider
+        gemini_api_keys = config.get("providers", {}).get("gemini", {}).get("api_key", [])
+        if isinstance(gemini_api_keys, str):
+            gemini_api_keys = [gemini_api_keys]
+        
+        if gemini_api_keys:
+            decider_api_key = gemini_api_keys[0]  # Use first Gemini key for decider
+            
+            # Run the search decider with chat history
+            search_decision = await decide_web_search(messages, decider_api_key)
+            
+            if search_decision.get("needs_search") and search_decision.get("queries"):
+                queries = search_decision["queries"]
+                logging.info(f"Web search triggered. Queries: {queries}")
+                
+                # Perform concurrent Tavily searches (5 results per query, max 10k chars)
+                search_results = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_query=10000)
+                
+                if search_results:
+                    # Append search results to the first (most recent) user message
+                    for i, msg in enumerate(messages):
+                        if msg.get("role") == "user":
+                            original_content = msg.get("content", "")
+                            if isinstance(original_content, list):
+                                # For multimodal content, append to the text part
+                                for part in original_content:
+                                    if isinstance(part, dict) and part.get("type") == "text":
+                                        part["text"] = part["text"] + "\n\n" + search_results
+                                        break
+                            else:
+                                msg["content"] = str(original_content) + "\n\n" + search_results
+                            
+                            # Also update gemini_contents if it's a Gemini preview model
+                            if provider == "gemini" and gemini_contents:
+                                # Find the corresponding user content and update it  
+                                for j, gc in enumerate(gemini_contents):
+                                    if gc.role == "user":
+                                        if gc.parts and gc.parts[0].text:
+                                            # Create new parts with updated text
+                                            new_text = gc.parts[0].text + "\n\n" + search_results
+                                            new_parts = [types.Part.from_text(text=new_text)] + list(gc.parts[1:])
+                                            gemini_contents[j] = types.Content(role="user", parts=new_parts)
+                                        break
+                            
+                            logging.info(f"Web search results appended to user message")
+                            break
 
     curr_content = finish_reason = None
     response_msgs = []
