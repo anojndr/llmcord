@@ -3,7 +3,6 @@
 bot_token: 
 client_id: 
 status_message: 
-tavily_api_key: 
 
 reddit_client_id: 
 reddit_client_secret: 
