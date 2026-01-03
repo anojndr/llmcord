@@ -50,10 +50,14 @@ Or run local models with:
 ---
 
 ### And more:
+- **Web Search**: Automatic web search with Tavily (for non-Gemini models) or native Gemini grounding. Uses an LLM to intelligently decide when search is needed.
+- **"View Response Better" button**: Upload long responses to text.is for easier reading
+- **"Show Sources" button**: View search queries and source URLs when web search was used
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
 - Supports Reverse Image Search (powered by Yandex) (start your message with "googlelens" and attach an image)
 - Supports YouTube video transcripts (just paste a YouTube link)
 - Supports Twitter/X link expansion (automatically fetches tweet content and replies)
+- Supports Reddit link expansion (automatically fetches post content and comments)
 - Supports text file attachments (.txt, .py, .c, etc.)
 - Supports audio, video, and PDF attachments (Gemini only)
 - Customizable personality (aka system prompt)
@@ -63,7 +67,7 @@ Or run local models with:
 - Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded)
 - Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
 - Fully asynchronous
-- 1 Python file, ~300 lines of code
+- Modular codebase for easy customization
 
 ## Instructions
 
@@ -82,6 +86,11 @@ Or run local models with:
 | **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
+| **tavily_api_key** | Optional. API key(s) for [Tavily Search](https://tavily.com/) to enable web search for non-Gemini models. Can be a single key or a list of keys for rotation. |
+| **web_search_decider_model** | The model used to decide if a query needs web search. Format: `provider/model`. (Default: `gemini/gemini-3-flash-preview`) |
+| **reddit_client_id** | Optional. Reddit API client ID for expanding Reddit links. |
+| **reddit_client_secret** | Optional. Reddit API client secret. |
+| **reddit_user_agent** | Optional. User agent string for Reddit API requests. |
 | **twitter_accounts** | Optional. A list of Twitter/X accounts to use for tweet extraction. Each account requires a `username`, `password`, `email`, `email_password`, and `cookies` entry. |
 | **twitter_proxy** | Optional. A proxy URL (e.g., `http://user:pass@host:port`) to use for Twitter/X requests. |
 | **max_tweet_replies** | The maximum number of tweet replies to fetch when a Twitter/X link is detected.<br /><br />Default: `50` |
@@ -101,16 +110,9 @@ Or run local models with:
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
 
 3. Run the bot:
-
-   **No Docker:**
    ```bash
    python -m pip install -U -r requirements.txt
    python llmcord.py
-   ```
-
-   **With Docker:**
-   ```bash
-   docker compose up
    ```
 
 ## Notes
