@@ -460,9 +460,10 @@ def get_config(filename: str = "config.yaml") -> dict[str, Any]:
 
 config = get_config()
 curr_model = next(iter(config["models"]))
+curr_model_lock = asyncio.Lock()  # Lock for thread-safe model switching
 
 msg_nodes = {}
-last_task_time = 0
+msg_nodes_lock = asyncio.Lock()  # Lock for thread-safe msg_nodes access
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -508,12 +509,13 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
         await interaction.response.send_message(f"Model `{model}` is not a valid model.", ephemeral=True)
         return
 
-    if model == curr_model:
-        output = f"Current model: `{curr_model}`"
-    else:
-        curr_model = model
-        output = f"Model switched to: `{model}`"
-        logging.info(output)
+    async with curr_model_lock:
+        if model == curr_model:
+            output = f"Current model: `{curr_model}`"
+        else:
+            curr_model = model
+            output = f"Model switched to: `{model}`"
+            logging.info(output)
 
     await interaction.response.send_message(output, ephemeral=(interaction.channel.type == discord.ChannelType.private))
 
@@ -554,7 +556,8 @@ async def on_ready() -> None:
 
 @discord_bot.event
 async def on_message(new_msg: discord.Message) -> None:
-    global last_task_time
+    # Per-request edit timing to avoid interference between concurrent requests
+    last_edit_time = 0
 
     is_dm = new_msg.channel.type == discord.ChannelType.private
 
@@ -587,7 +590,9 @@ async def on_message(new_msg: discord.Message) -> None:
     if is_bad_user or is_bad_channel:
         return
 
-    provider_slash_model = curr_model
+    # Thread-safe read of current model
+    async with curr_model_lock:
+        provider_slash_model = curr_model
     provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
 
     provider_config = config["providers"][provider]
@@ -1159,7 +1164,7 @@ async def on_message(new_msg: discord.Message) -> None:
                     response_contents[-1] += new_content
 
                     if not use_plain_responses:
-                        time_delta = datetime.now().timestamp() - last_task_time
+                        time_delta = datetime.now().timestamp() - last_edit_time
 
                         ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
                         msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
@@ -1182,7 +1187,7 @@ async def on_message(new_msg: discord.Message) -> None:
                                 await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
                                 await response_msgs[msg_index].edit(embed=embed, view=view)
 
-                            last_task_time = datetime.now().timestamp()
+                            last_edit_time = datetime.now().timestamp()
 
             if not response_contents:
                 raise Exception("Response stream ended with no content")
