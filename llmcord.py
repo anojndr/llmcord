@@ -1342,7 +1342,7 @@ class ResponseView(discord.ui.View):
         if metadata and metadata.web_search_queries:
             self.add_item(SourceButton(metadata))
 
-    @discord.ui.button(label="View Response Better", style=discord.ButtonStyle.primary, emoji="📄")
+    @discord.ui.button(label="View Response Better", style=discord.ButtonStyle.secondary, emoji="📄")
     async def view_response_better(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         
