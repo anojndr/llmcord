@@ -384,20 +384,23 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5) -
         return {"error": str(e), "query": query}
 
 
-async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max_results_per_query: int = 5, max_chars_per_url: int = 2000) -> str:
+async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max_results_per_query: int = 5, max_chars_per_url: int = 2000) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
     Rotates through multiple API keys for load distribution.
-    Returns formatted search results as a string to be appended to the user's message.
+    Returns a tuple of (formatted_results, metadata).
     
     Args:
         queries: List of search queries
         tavily_api_keys: List of Tavily API keys for rotation
         max_results_per_query: Maximum number of URLs per query (default: 5)
         max_chars_per_url: Maximum characters per URL content (default: 2000)
+    
+    Returns:
+        tuple: (formatted_results_string, {"queries": [...], "urls": [{"title": ..., "url": ...}, ...]})
     """
     if not queries or not tavily_api_keys:
-        return ""
+        return "", {}
     
     # Execute all searches concurrently, rotating through API keys
     search_tasks = [
@@ -407,6 +410,7 @@ async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max
     results = await asyncio.gather(*search_tasks)
     
     formatted_results = []
+    all_urls = []  # Track all URLs used for the "Show Sources" button
     
     for i, result in enumerate(results):
         if "error" in result:
@@ -418,6 +422,10 @@ async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max
         for item in result.get("results", []):
             title = item.get("title", "No title")
             url = item.get("url", "")
+            
+            # Track URL for sources
+            if url:
+                all_urls.append({"title": title, "url": url})
             
             # Prefer raw_content (full page content) over content (snippet)
             raw_content = item.get("raw_content", "")
@@ -431,9 +439,14 @@ async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max
             result_text = f"\n**{title}**\n{url}\n{page_content}\n"
             formatted_results.append(result_text)
     
+    metadata = {
+        "queries": queries,
+        "urls": all_urls
+    }
+    
     if formatted_results:
-        return "\n\n---\n**Web Search Results:**" + "".join(formatted_results)
-    return ""
+        return "\n\n---\n**Web Search Results:**" + "".join(formatted_results), metadata
+    return "", metadata
 
 
 VISION_MODEL_TAGS = ("claude", "gemini", "gemma", "gpt-4", "gpt-5", "grok-4", "llama", "llava", "mistral", "o3", "o4", "vision", "vl")
@@ -910,7 +923,7 @@ async def on_message(new_msg: discord.Message) -> None:
                 logging.info(f"Web search triggered. Queries: {queries}")
                 
                 # Perform concurrent Tavily searches (5 URLs per query, 2k chars per URL)
-                search_results = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_url=2000)
+                search_results, tavily_metadata = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_url=2000)
                 
                 if search_results:
                     # Append search results to the first (most recent) user message
@@ -940,6 +953,12 @@ async def on_message(new_msg: discord.Message) -> None:
                             
                             logging.info(f"Web search results appended to user message")
                             break
+            else:
+                tavily_metadata = None
+        else:
+            tavily_metadata = None
+    else:
+        tavily_metadata = None
 
     curr_content = finish_reason = None
     response_msgs = []
@@ -1250,7 +1269,7 @@ async def on_message(new_msg: discord.Message) -> None:
     # Update the last message with ResponseView for "View Response Better" button
     if not use_plain_responses and response_msgs and response_contents:
         full_response = "".join(response_contents)
-        response_view = ResponseView(full_response, grounding_metadata)
+        response_view = ResponseView(full_response, grounding_metadata, tavily_metadata)
         
         # Update the last message with the final view
         last_msg_index = len(response_msgs) - 1
@@ -1333,14 +1352,19 @@ async def upload_to_textis(text: str) -> Optional[str]:
 class ResponseView(discord.ui.View):
     """View with 'View Response Better' button that uploads to text.is"""
     
-    def __init__(self, full_response: str, metadata: Optional[types.GroundingMetadata] = None):
+    def __init__(self, full_response: str, metadata: Optional[types.GroundingMetadata] = None, tavily_metadata: Optional[dict] = None):
         super().__init__(timeout=None)
         self.full_response = full_response
         self.metadata = metadata
+        self.tavily_metadata = tavily_metadata
         
-        # Only add sources button if we have metadata with search queries
+        # Add Gemini grounding sources button if we have metadata with search queries
         if metadata and metadata.web_search_queries:
             self.add_item(SourceButton(metadata))
+        
+        # Add Tavily sources button if we have tavily metadata with URLs
+        if tavily_metadata and tavily_metadata.get("urls"):
+            self.add_item(TavilySourceButton(tavily_metadata))
 
     @discord.ui.button(label="View Response Better", style=discord.ButtonStyle.secondary, emoji="📄")
     async def view_response_better(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1396,6 +1420,57 @@ class SourceButton(discord.ui.Button):
                 if current_chunk:
                     embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
 
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class TavilySourceButton(discord.ui.Button):
+    """Button to show sources from Tavily web search"""
+    
+    def __init__(self, tavily_metadata: dict):
+        super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary, emoji="🔍")
+        self.tavily_metadata = tavily_metadata
+    
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="Web Search Sources", color=discord.Color.blue())
+        
+        # Display search queries
+        queries = self.tavily_metadata.get("queries", [])
+        if queries:
+            queries_text = "\n".join(f"• {q}" for q in queries)
+            embed.add_field(name="Search Queries", value=queries_text[:1024], inline=False)
+        
+        # Display URLs
+        urls = self.tavily_metadata.get("urls", [])
+        if urls:
+            sources = []
+            for i, url_info in enumerate(urls):
+                title = url_info.get("title", "No title")[:50]  # Truncate long titles
+                url = url_info.get("url", "")
+                sources.append(f"{i+1}. [{title}]({url})")
+            
+            # Split into multiple fields if needed (Discord field limit is 1024 chars)
+            current_chunk = ""
+            field_count = 1
+            for source in sources:
+                if len(current_chunk) + len(source) + 1 > 1024:
+                    embed.add_field(
+                        name=f"URLs Used ({field_count})" if field_count > 1 else "URLs Used", 
+                        value=current_chunk, 
+                        inline=False
+                    )
+                    current_chunk = source
+                    field_count += 1
+                else:
+                    current_chunk = (current_chunk + "\n" + source) if current_chunk else source
+            
+            if current_chunk:
+                embed.add_field(
+                    name=f"URLs Used ({field_count})" if field_count > 1 else "URLs Used", 
+                    value=current_chunk, 
+                    inline=False
+                )
+        
+        embed.set_footer(text="Powered by Tavily Search")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
