@@ -5,6 +5,7 @@ from datetime import datetime
 import os
 import re
 import logging
+import sqlite3
 from typing import Any, Literal, Optional
 import io
 from PIL import Image
@@ -52,6 +53,108 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 
+
+class BadKeysDB:
+    """SQLite-based tracking of bad API keys to avoid wasting retries."""
+    
+    def __init__(self, db_path: str = "bad_keys.db"):
+        self.db_path = db_path
+        self._init_db()
+    
+    def _init_db(self):
+        """Initialize the database table if it doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS bad_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    key_hash TEXT NOT NULL,
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(provider, key_hash)
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
+    
+    def _hash_key(self, api_key: str) -> str:
+        """Create a hash of the API key to avoid storing sensitive data."""
+        import hashlib
+        return hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    
+    def is_key_bad(self, provider: str, api_key: str) -> bool:
+        """Check if an API key is marked as bad."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT 1 FROM bad_keys WHERE provider = ? AND key_hash = ?",
+                (provider, self._hash_key(api_key))
+            )
+            return cursor.fetchone() is not None
+        finally:
+            conn.close()
+    
+    def mark_key_bad(self, provider: str, api_key: str, error_message: str = None):
+        """Mark an API key as bad."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO bad_keys (provider, key_hash, error_message) VALUES (?, ?, ?)",
+                (provider, self._hash_key(api_key), error_message)
+            )
+            conn.commit()
+            logging.info(f"Marked API key as bad for provider '{provider}' (hash: {self._hash_key(api_key)[:8]}...)")
+        finally:
+            conn.close()
+    
+    def get_good_keys(self, provider: str, all_keys: list[str]) -> list[str]:
+        """Filter out bad keys from a list of API keys."""
+        return [key for key in all_keys if not self.is_key_bad(provider, key)]
+    
+    def get_bad_key_count(self, provider: str) -> int:
+        """Get the count of bad keys for a provider."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM bad_keys WHERE provider = ?",
+                (provider,)
+            )
+            return cursor.fetchone()[0]
+        finally:
+            conn.close()
+    
+    def reset_provider_keys(self, provider: str):
+        """Reset all bad keys for a specific provider."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM bad_keys WHERE provider = ?", (provider,))
+            conn.commit()
+            logging.info(f"Reset all bad keys for provider '{provider}'")
+        finally:
+            conn.close()
+    
+    def reset_all(self):
+        """Reset all bad keys for all providers."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM bad_keys")
+            conn.commit()
+            logging.info("Reset all bad keys database")
+        finally:
+            conn.close()
+
+
+# Global instance of the bad keys database
+bad_keys_db = BadKeysDB()
+
 # Web Search Decider and Tavily Search Functions
 SEARCH_DECIDER_SYSTEM_PROMPT = """You are a web search query optimizer. Your job is to analyze user queries and determine if they need web search for up-to-date or factual information.
 
@@ -86,7 +189,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     """
     Uses a configurable model to decide if web search is needed and generates optimized queries.
     Supports both Gemini and OpenAI-compatible APIs.
-    Implements retry mechanism with API key rotation similar to main model.
+    Implements retry mechanism with API key rotation and bad key tracking.
     Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
     
     decider_config should contain:
@@ -103,13 +206,23 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     if not api_keys:
         return {"needs_search": False}
     
-    # Retry mechanism with API key rotation (retry through all available keys)
-    attempt_count = 0
-    max_attempts = len(api_keys)
+    # Use a prefixed provider name to separate decider keys from main model keys
+    decider_provider = f"decider_{provider}"
     
-    while attempt_count < max_attempts:
+    # Get good keys (filter out known bad ones)
+    good_keys = bad_keys_db.get_good_keys(decider_provider, api_keys)
+    
+    # If all keys are bad, reset and try again with all keys
+    if not good_keys:
+        logging.warning(f"All API keys for '{decider_provider}' are marked as bad. Resetting...")
+        bad_keys_db.reset_provider_keys(decider_provider)
+        good_keys = api_keys.copy()
+    
+    attempt_count = 0
+    
+    while good_keys:
         attempt_count += 1
-        current_api_key = api_keys[(attempt_count - 1) % len(api_keys)]
+        current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
         
         try:
             if provider == "gemini":
@@ -219,10 +332,25 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
             result = json.loads(response_text)
             return result
         except Exception as e:
-            logging.exception(f"Error in web search decider (attempt {attempt_count}/{max_attempts}): {e}")
-            if attempt_count >= max_attempts:
-                logging.error("Web search decider failed after max attempts, skipping web search")
-                return {"needs_search": False}
+            logging.exception(f"Error in web search decider (attempt {attempt_count}): {e}")
+            
+            # Mark the current key as bad
+            error_msg = str(e)[:200] if e else "Unknown error"
+            bad_keys_db.mark_key_bad(decider_provider, current_api_key, error_msg)
+            
+            # Remove the bad key from good_keys list for this session
+            if current_api_key in good_keys:
+                good_keys.remove(current_api_key)
+            
+            # If all keys are exhausted, try resetting once
+            if not good_keys:
+                if attempt_count >= len(api_keys) * 2:
+                    logging.error("Web search decider failed after exhausting all keys, skipping web search")
+                    return {"needs_search": False}
+                else:
+                    logging.warning(f"All decider keys exhausted. Resetting for retry...")
+                    bad_keys_db.reset_provider_keys(decider_provider)
+                    good_keys = api_keys.copy()
     
     return {"needs_search": False}
 
@@ -978,12 +1106,29 @@ async def on_message(new_msg: discord.Message) -> None:
 
     grounding_metadata = None
     attempt_count = 0
+    
+    # Get good keys (filter out known bad ones)
+    good_keys = bad_keys_db.get_good_keys(provider, api_keys)
+    
+    # If all keys are bad, reset and try again with all keys
+    if not good_keys:
+        logging.warning(f"All API keys for provider '{provider}' are marked as bad. Resetting...")
+        bad_keys_db.reset_provider_keys(provider)
+        good_keys = api_keys.copy()
 
     while True:
         curr_content = finish_reason = None
         response_contents = []
         attempt_count += 1
-        current_api_key = api_keys[(attempt_count - 1) % len(api_keys)]
+        
+        # Get the next good key to try
+        if not good_keys:
+            # All good keys exhausted in this session, reset and try again
+            logging.warning(f"All available keys exhausted for provider '{provider}'. Resetting bad keys database...")
+            bad_keys_db.reset_provider_keys(provider)
+            good_keys = api_keys.copy()
+        
+        current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
 
         try:
             async with new_msg.channel.typing():
@@ -1048,23 +1193,40 @@ async def on_message(new_msg: discord.Message) -> None:
 
             break
 
-        except Exception:
+        except Exception as e:
             logging.exception("Error while generating response")
-            if attempt_count >= 10:
-                error_text = "I encountered too many errors and couldn't generate a response. Please try again later."
+            
+            # Mark the current key as bad
+            error_msg = str(e)[:200] if e else "Unknown error"
+            bad_keys_db.mark_key_bad(provider, current_api_key, error_msg)
+            
+            # Remove the bad key from good_keys list for this session
+            if current_api_key in good_keys:
+                good_keys.remove(current_api_key)
+            
+            # Check if we've exhausted all keys after reset
+            if not good_keys:
+                # Check if we've already tried resetting once in this run
+                if attempt_count >= len(api_keys) * 2:  # Tried all keys at least twice
+                    error_text = "I encountered too many errors with all available API keys. Please try again later."
 
-                if use_plain_responses:
-                    await reply_helper(content=error_text)
-                    response_contents = [error_text]
-                else:
-                    embed.description = error_text
-                    embed.color = EMBED_COLOR_INCOMPLETE
-                    if response_msgs:
-                        await response_msgs[-1].edit(embed=embed, view=None)
+                    if use_plain_responses:
+                        await reply_helper(content=error_text)
+                        response_contents = [error_text]
                     else:
-                        await reply_helper(embed=embed)
-                    response_contents = [error_text]
-                break
+                        embed.description = error_text
+                        embed.color = EMBED_COLOR_INCOMPLETE
+                        if response_msgs:
+                            await response_msgs[-1].edit(embed=embed, view=None)
+                        else:
+                            await reply_helper(embed=embed)
+                        response_contents = [error_text]
+                    break
+                else:
+                    # Reset and try again with all keys
+                    logging.warning(f"All keys exhausted for provider '{provider}'. Resetting for retry...")
+                    bad_keys_db.reset_provider_keys(provider)
+                    good_keys = api_keys.copy()
 
     if not use_plain_responses and len(response_msgs) > len(response_contents):
         for msg in response_msgs[len(response_contents):]:
