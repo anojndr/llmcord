@@ -227,10 +227,10 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     return {"needs_search": False}
 
 
-async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, max_chars: int = 10000) -> dict:
+async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5) -> dict:
     """
     Execute a single Tavily search query.
-    Returns the search results or an error dict.
+    Returns the search results with page content or an error dict.
     """
     try:
         async with httpx.AsyncClient() as client:
@@ -241,7 +241,7 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, m
                     "max_results": max_results,
                     "search_depth": "basic",
                     "include_answer": False,
-                    "include_raw_content": False,
+                    "include_raw_content": "markdown",  # Get full page content in markdown format
                 },
                 headers={
                     "Authorization": f"Bearer {tavily_api_key}",
@@ -256,24 +256,29 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, m
         return {"error": str(e), "query": query}
 
 
-async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max_results_per_query: int = 5, max_chars_per_query: int = 10000) -> str:
+async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max_results_per_query: int = 5, max_chars_per_url: int = 2000) -> str:
     """
     Perform concurrent web searches for multiple queries using Tavily.
     Rotates through multiple API keys for load distribution.
     Returns formatted search results as a string to be appended to the user's message.
+    
+    Args:
+        queries: List of search queries
+        tavily_api_keys: List of Tavily API keys for rotation
+        max_results_per_query: Maximum number of URLs per query (default: 5)
+        max_chars_per_url: Maximum characters per URL content (default: 2000)
     """
     if not queries or not tavily_api_keys:
         return ""
     
     # Execute all searches concurrently, rotating through API keys
     search_tasks = [
-        tavily_search(query, tavily_api_keys[i % len(tavily_api_keys)], max_results_per_query, max_chars_per_query) 
+        tavily_search(query, tavily_api_keys[i % len(tavily_api_keys)], max_results_per_query) 
         for i, query in enumerate(queries)
     ]
     results = await asyncio.gather(*search_tasks)
     
     formatted_results = []
-    total_chars = 0
     
     for i, result in enumerate(results):
         if "error" in result:
@@ -283,16 +288,20 @@ async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max
         formatted_results.append(f"\n### Search Results for: {query}")
         
         for item in result.get("results", []):
-            if total_chars >= max_chars_per_query * len(queries):
-                break
-                
             title = item.get("title", "No title")
             url = item.get("url", "")
-            content = item.get("content", "")[:2000]  # Limit content per result
             
-            result_text = f"\n**{title}**\n{url}\n{content}\n"
+            # Prefer raw_content (full page content) over content (snippet)
+            raw_content = item.get("raw_content", "")
+            content = item.get("content", "")
+            
+            # Use raw_content if available, otherwise fall back to content snippet
+            page_content = raw_content if raw_content else content
+            # Limit to max_chars_per_url (default 2000 chars per URL)
+            page_content = page_content[:max_chars_per_url] if page_content else ""
+            
+            result_text = f"\n**{title}**\n{url}\n{page_content}\n"
             formatted_results.append(result_text)
-            total_chars += len(result_text)
     
     if formatted_results:
         return "\n\n---\n**Web Search Results:**" + "".join(formatted_results)
@@ -767,8 +776,8 @@ async def on_message(new_msg: discord.Message) -> None:
                 queries = search_decision["queries"]
                 logging.info(f"Web search triggered. Queries: {queries}")
                 
-                # Perform concurrent Tavily searches (5 results per query, max 10k chars)
-                search_results = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_query=10000)
+                # Perform concurrent Tavily searches (5 URLs per query, 2k chars per URL)
+                search_results = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_url=2000)
                 
                 if search_results:
                     # Append search results to the first (most recent) user message
