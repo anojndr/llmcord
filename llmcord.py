@@ -1247,13 +1247,160 @@ async def on_message(new_msg: discord.Message) -> None:
             msg_nodes[response_msg.id].thought_signature = thought_signature
         msg_nodes[response_msg.id].lock.release()
 
+    # Update the last message with ResponseView for "View Response Better" button
+    if not use_plain_responses and response_msgs and response_contents:
+        full_response = "".join(response_contents)
+        response_view = ResponseView(full_response, grounding_metadata)
+        
+        # Update the last message with the final view
+        last_msg_index = len(response_msgs) - 1
+        if last_msg_index < len(response_contents):
+            embed.description = response_contents[last_msg_index]
+            embed.color = EMBED_COLOR_COMPLETE
+            await response_msgs[last_msg_index].edit(embed=embed, view=response_view)
+
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
         for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
             async with msg_nodes.setdefault(msg_id, MsgNode()).lock:
                 msg_nodes.pop(msg_id, None)
 
 
+async def upload_to_textis(text: str) -> Optional[str]:
+    """
+    Upload text to text.is and return the paste URL.
+    Returns None if upload fails.
+    """
+    try:
+        async with httpx.AsyncClient(follow_redirects=False) as client:
+            # Get the CSRF token from the main page
+            response = await client.get("https://text.is/", timeout=30)
+            
+            # Extract CSRF token from the form
+            soup = BeautifulSoup(response.text, "html.parser")
+            csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
+            if not csrf_input:
+                logging.error("Could not find CSRF token on text.is")
+                return None
+            
+            csrf_token = csrf_input.get("value")
+            
+            # Get cookies from the response
+            cookies = response.cookies
+            
+            # POST the text content
+            form_data = {
+                "csrfmiddlewaretoken": csrf_token,
+                "text": text,
+            }
+            
+            headers = {
+                "Referer": "https://text.is/",
+                "Origin": "https://text.is",
+            }
+            
+            post_response = await client.post(
+                "https://text.is/",
+                data=form_data,
+                headers=headers,
+                cookies=cookies,
+                timeout=30
+            )
+            
+            # The response should be a redirect (302) to the paste URL
+            if post_response.status_code in (301, 302, 303, 307, 308):
+                paste_url = post_response.headers.get("Location")
+                if paste_url:
+                    # Handle relative URLs
+                    if paste_url.startswith("/"):
+                        paste_url = f"https://text.is{paste_url}"
+                    return paste_url
+            
+            # If we got a 200, the paste might have been created and we're on the page
+            if post_response.status_code == 200:
+                # Check if the URL changed (we might be on the paste page)
+                final_url = str(post_response.url)
+                if final_url != "https://text.is/" and "text.is/" in final_url:
+                    return final_url
+            
+            logging.error(f"Unexpected response from text.is: {post_response.status_code}")
+            return None
+            
+    except Exception as e:
+        logging.exception(f"Error uploading to text.is: {e}")
+        return None
+
+
+class ResponseView(discord.ui.View):
+    """View with 'View Response Better' button that uploads to text.is"""
+    
+    def __init__(self, full_response: str, metadata: Optional[types.GroundingMetadata] = None):
+        super().__init__(timeout=None)
+        self.full_response = full_response
+        self.metadata = metadata
+        
+        # Only add sources button if we have metadata with search queries
+        if metadata and metadata.web_search_queries:
+            self.add_item(SourceButton(metadata))
+
+    @discord.ui.button(label="View Response Better", style=discord.ButtonStyle.primary, emoji="📄")
+    async def view_response_better(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        
+        paste_url = await upload_to_textis(self.full_response)
+        
+        if paste_url:
+            embed = discord.Embed(
+                title="View Response",
+                description=f"Your response has been uploaded for better viewing:\n\n**[Click here to view]({paste_url})**",
+                color=discord.Color.green()
+            )
+            embed.set_footer(text="Powered by text.is")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "❌ Failed to upload response to text.is. Please try again later.",
+                ephemeral=True
+            )
+
+
+class SourceButton(discord.ui.Button):
+    """Button to show sources from grounding metadata"""
+    
+    def __init__(self, metadata: types.GroundingMetadata):
+        super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary)
+        self.metadata = metadata
+    
+    async def callback(self, interaction: discord.Interaction):
+        embed = discord.Embed(title="Sources", color=discord.Color.blue())
+
+        if self.metadata.web_search_queries:
+            embed.add_field(name="Search Queries", value="\n".join(f"• {q}" for q in self.metadata.web_search_queries), inline=False)
+
+        if self.metadata.grounding_chunks:
+            sources = []
+            for i, chunk in enumerate(self.metadata.grounding_chunks):
+                if chunk.web:
+                    sources.append(f"{i+1}. [{chunk.web.title}]({chunk.web.uri})")
+
+            if sources:
+                current_chunk = ""
+                field_count = 1
+                for source in sources:
+                    if len(current_chunk) + len(source) + 1 > 1024:
+                        embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
+                        current_chunk = source
+                        field_count += 1
+                    else:
+                        current_chunk = (current_chunk + "\n" + source) if current_chunk else source
+
+                if current_chunk:
+                    embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 class SourceView(discord.ui.View):
+    """Legacy view for backwards compatibility - now using ResponseView instead"""
     def __init__(self, metadata: types.GroundingMetadata):
         super().__init__(timeout=None)
         self.metadata = metadata
