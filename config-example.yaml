@@ -5,6 +5,8 @@ client_id:
 status_message: 
 tavily_api_key:  # For web search on non-Gemini and preview models
 
+web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if web search is needed (provider/model format)
+
 reddit_client_id: 
 reddit_client_secret: 
 reddit_user_agent: 
