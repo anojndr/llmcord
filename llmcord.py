@@ -170,21 +170,17 @@ RULES for generating queries:
 1. SINGLE SUBJECT = SINGLE QUERY. If the user asks about ONE thing, output exactly ONE search query. Do NOT split into multiple queries.
    Example: "latest news" → ["latest news today"] (ONE query only)
    Example: "iPhone 16 price" → ["iPhone 16 price"] (ONE query only)
-2. MULTIPLE SUBJECTS = MULTIPLE QUERIES. Only if the user asks about multiple distinct subjects/entities, create:
-   - One query for EACH individual subject
-   - Plus ONE query that is the original user query optimized for search engines
-   Example: "iPhone 16 vs Samsung S25 specs" → ["iPhone 16 specs", "Samsung S25 specs", "iPhone 16 vs Samsung S25 specs"]
-   Example: "compare Tesla Model 3 and BMW i4" → ["Tesla Model 3 specs", "BMW i4 specs", "Tesla Model 3 vs BMW i4"]
+2. MULTIPLE SUBJECTS = MULTIPLE QUERIES. Only if the user asks about multiple distinct subjects/entities, create separate queries for EACH subject PLUS a query containing all subjects.
+   Example: "which is the best? B&K 5128 Diffuse Field Target, VDSF 5128 Demo Target Response On-Ear, VDSF 5128 Demo Target Response In-Ear, 5128 Harman In-Ear 2024 Beta, or 4128/4195 VDSF Target Response?" → ["B&K 5128 Diffuse Field Target", "VDSF 5128 Demo Target Response On-Ear", "VDSF 5128 Demo Target Response In-Ear", "5128 Harman In-Ear 2024 Beta", "4128/4195 VDSF Target Response", "B&K 5128 Diffuse Field Target vs VDSF 5128 Demo Target Response On-Ear vs VDSF 5128 Demo Target Response In-Ear vs 5128 Harman In-Ear 2024 Beta vs 4128/4195 VDSF Target Response"]
 3. Make queries search-engine friendly (clear, specific keywords)
-4. Keep the total number of queries reasonable (1-5 queries max)
-5. Preserve the user's original intent
+4. Preserve the user's original intent
 
 Examples:
 - "What's the weather today?" → {"needs_search": true, "queries": ["weather today"]}
 - "Who won the 2024 Super Bowl?" → {"needs_search": true, "queries": ["2024 Super Bowl winner"]}
 - "latest news" → {"needs_search": true, "queries": ["latest news today"]}
 - "Write me a poem about cats" → {"needs_search": false}
-- "Compare RTX 4090 and RTX 4080 performance" → {"needs_search": true, "queries": ["RTX 4090 specs performance", "RTX 4080 specs performance", "RTX 4090 vs RTX 4080 performance"]}
+- "Compare RTX 4090 and RTX 4080" → {"needs_search": true, "queries": ["RTX 4090", "RTX 4080", "RTX 4090 vs RTX 4080"]}
 """
 
 
