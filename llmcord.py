@@ -82,60 +82,97 @@ Examples:
 """
 
 
-async def decide_web_search(messages: list, gemini_api_key: str) -> dict:
+async def decide_web_search(messages: list, gemini_api_keys: list[str]) -> dict:
     """
-    Uses Gemini 2.0 Flash to decide if web search is needed and generates optimized queries.
+    Uses Gemini 3 Flash Preview to decide if web search is needed and generates optimized queries.
+    Implements retry mechanism with API key rotation similar to main model.
     Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
     """
-    try:
-        client = genai.Client(api_key=gemini_api_key, http_options=dict(api_version="v1beta"))
-        
-        # Build context from chat history (mirror the main model's history)
-        search_decider_contents = []
-        for msg in messages[::-1]:  # Reverse to get chronological order
-            role = "model" if msg.get("role") == "assistant" else "user"
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                # Extract text from multimodal content
-                text_parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
-                content = " ".join(text_parts) if text_parts else str(content)
-            if content:
-                search_decider_contents.append(types.Content(role=role, parts=[types.Part.from_text(text=str(content)[:5000])]))
-        
-        if not search_decider_contents:
-            return {"needs_search": False}
-        
-        # Add instruction to analyze the conversation
-        search_decider_contents.append(types.Content(
-            role="user",
-            parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
-        ))
-        
-        config = types.GenerateContentConfig(
-            system_instruction=SEARCH_DECIDER_SYSTEM_PROMPT,
-            temperature=0.1,
-        )
-        
-        response = await client.aio.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=search_decider_contents,
-            config=config
-        )
-        
-        response_text = response.text.strip()
-        # Try to extract JSON from the response
-        if response_text.startswith("```"):
-            # Remove markdown code blocks if present
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-            response_text = response_text.strip()
-        
-        result = json.loads(response_text)
-        return result
-    except Exception as e:
-        logging.exception(f"Error in web search decider: {e}")
+    if not gemini_api_keys:
         return {"needs_search": False}
+    
+    # Build context from chat history (mirror the main model's history)
+    search_decider_contents = []
+    for msg in messages[::-1]:  # Reverse to get chronological order
+        role = "model" if msg.get("role") == "assistant" else "user"
+        content = msg.get("content", "")
+        parts = []
+        
+        if isinstance(content, list):
+            # Handle multimodal content (text + images)
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text" and part.get("text"):
+                        parts.append(types.Part.from_text(text=str(part["text"])[:5000]))
+                    elif part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
+                        # Extract base64 image data
+                        image_url = part["image_url"]["url"]
+                        if image_url.startswith("data:"):
+                            # Parse data URI: data:mime_type;base64,data
+                            try:
+                                header, b64_data = image_url.split(",", 1)
+                                mime_type = header.split(":")[1].split(";")[0]
+                                import base64
+                                image_bytes = base64.b64decode(b64_data)
+                                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                            except Exception:
+                                pass  # Skip malformed image data
+        elif content:
+            parts.append(types.Part.from_text(text=str(content)[:5000]))
+        
+        if parts:
+            search_decider_contents.append(types.Content(role=role, parts=parts))
+    
+    if not search_decider_contents:
+        return {"needs_search": False}
+    
+    # Add instruction to analyze the conversation
+    search_decider_contents.append(types.Content(
+        role="user",
+        parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
+    ))
+    
+    config = types.GenerateContentConfig(
+        system_instruction=SEARCH_DECIDER_SYSTEM_PROMPT,
+        temperature=0.1,
+        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
+    )
+    
+    # Retry mechanism with API key rotation
+    attempt_count = 0
+    max_attempts = 10
+    
+    while attempt_count < max_attempts:
+        attempt_count += 1
+        current_api_key = gemini_api_keys[(attempt_count - 1) % len(gemini_api_keys)]
+        
+        try:
+            client = genai.Client(api_key=current_api_key, http_options=dict(api_version="v1beta"))
+            
+            response = await client.aio.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=search_decider_contents,
+                config=config
+            )
+            
+            response_text = response.text.strip()
+            # Try to extract JSON from the response
+            if response_text.startswith("```"):
+                # Remove markdown code blocks if present
+                response_text = response_text.split("```")[1]
+                if response_text.startswith("json"):
+                    response_text = response_text[4:]
+                response_text = response_text.strip()
+            
+            result = json.loads(response_text)
+            return result
+        except Exception as e:
+            logging.exception(f"Error in web search decider (attempt {attempt_count}/{max_attempts}): {e}")
+            if attempt_count >= max_attempts:
+                logging.error("Web search decider failed after max attempts, skipping web search")
+                return {"needs_search": False}
+    
+    return {"needs_search": False}
 
 
 async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, max_chars: int = 10000) -> dict:
@@ -659,10 +696,8 @@ async def on_message(new_msg: discord.Message) -> None:
             gemini_api_keys = [gemini_api_keys]
         
         if gemini_api_keys:
-            decider_api_key = gemini_api_keys[0]  # Use first Gemini key for decider
-            
-            # Run the search decider with chat history
-            search_decision = await decide_web_search(messages, decider_api_key)
+            # Run the search decider with chat history (uses all keys with rotation)
+            search_decision = await decide_web_search(messages, gemini_api_keys)
             
             if search_decision.get("needs_search") and search_decision.get("queries"):
                 queries = search_decision["queries"]
