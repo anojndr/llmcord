@@ -25,13 +25,14 @@ If web search IS needed (e.g., current events, recent news, product specs, price
 {"needs_search": true, "queries": ["query1", "query2", ...]}
 
 RULES for generating queries:
-1. SINGLE SUBJECT = SINGLE QUERY. If the user asks about ONE thing, output exactly ONE search query. Do NOT split into multiple queries.
+1. Keep queries concise—under 400 characters. Think of it as a query for an agent performing web search, not long-form prompts.
+2. SINGLE SUBJECT = SINGLE QUERY. If the user asks about ONE thing, output exactly ONE search query. Do NOT split into multiple queries.
    Example: "latest news" → ["latest news today"] (ONE query only)
    Example: "iPhone 16 price" → ["iPhone 16 price"] (ONE query only)
-2. MULTIPLE SUBJECTS = MULTIPLE QUERIES. Only if the user asks about multiple distinct subjects/entities, create separate queries for EACH subject PLUS a query containing all subjects.
+3. MULTIPLE SUBJECTS = MULTIPLE QUERIES. Only if the user asks about multiple distinct subjects/entities, create separate queries for EACH subject PLUS a query containing all subjects.
    Example: "which is the best? B&K 5128 Diffuse Field Target, VDSF 5128 Demo Target Response On-Ear, VDSF 5128 Demo Target Response In-Ear, 5128 Harman In-Ear 2024 Beta, or 4128/4195 VDSF Target Response?" → ["B&K 5128 Diffuse Field Target", "VDSF 5128 Demo Target Response On-Ear", "VDSF 5128 Demo Target Response In-Ear", "5128 Harman In-Ear 2024 Beta", "4128/4195 VDSF Target Response", "B&K 5128 Diffuse Field Target vs VDSF 5128 Demo Target Response On-Ear vs VDSF 5128 Demo Target Response In-Ear vs 5128 Harman In-Ear 2024 Beta vs 4128/4195 VDSF Target Response"]
-3. Make queries search-engine friendly (clear, specific keywords)
-4. Preserve the user's original intent
+4. Make queries search-engine friendly (clear, specific keywords)
+5. Preserve the user's original intent
 
 Examples:
 - "What's the weather today?" → {"needs_search": true, "queries": ["weather today"]}
@@ -212,10 +213,14 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     return {"needs_search": False}
 
 
-async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5) -> dict:
+async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, search_depth: str = "basic") -> dict:
     """
     Execute a single Tavily search query.
     Returns the search results with page content or an error dict.
+    
+    Best practices applied:
+    - auto_parameters enabled for automatic query optimization
+    - search_depth configurable (basic/advanced/fast/ultra-fast)
     """
     try:
         async with httpx.AsyncClient() as client:
@@ -224,9 +229,10 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5) -
                 json={
                     "query": query,
                     "max_results": max_results,
-                    "search_depth": "basic",
+                    "search_depth": search_depth,
                     "include_answer": False,
                     "include_raw_content": "markdown",  # Get full page content in markdown format
+                    "auto_parameters": True,  # Let Tavily automatically optimize parameters based on query intent
                 },
                 headers={
                     "Authorization": f"Bearer {tavily_api_key}",
@@ -241,27 +247,43 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5) -
         return {"error": str(e), "query": query}
 
 
-async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max_results_per_query: int = 5, max_chars_per_url: int = 2000) -> tuple[str, dict]:
+async def perform_web_search(
+    queries: list[str], 
+    tavily_api_keys: list[str], 
+    max_results_per_query: int = 5, 
+    max_chars_per_url: int = 2000,
+    search_depth: str = "basic",
+    min_score: float = 0.5
+) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
     Rotates through multiple API keys for load distribution.
     Returns a tuple of (formatted_results, metadata).
+    
+    Best practices applied:
+    - Concurrent requests with asyncio.gather()
+    - API key rotation for load distribution
+    - Score-based filtering (min_score) for relevance
+    - Configurable search_depth (basic/advanced/fast/ultra-fast)
     
     Args:
         queries: List of search queries
         tavily_api_keys: List of Tavily API keys for rotation
         max_results_per_query: Maximum number of URLs per query (default: 5)
         max_chars_per_url: Maximum characters per URL content (default: 2000)
+        search_depth: Tavily search depth - "basic" (balanced), "advanced" (highest relevance), 
+                      "fast" (low latency), or "ultra-fast" (lowest latency)
+        min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.5)
     
     Returns:
-        tuple: (formatted_results_string, {"queries": [...], "urls": [{"title": ..., "url": ...}, ...]})
+        tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...]})
     """
     if not queries or not tavily_api_keys:
         return "", {}
     
     # Execute all searches concurrently, rotating through API keys
     search_tasks = [
-        tavily_search(query, tavily_api_keys[i % len(tavily_api_keys)], max_results_per_query) 
+        tavily_search(query, tavily_api_keys[i % len(tavily_api_keys)], max_results_per_query, search_depth) 
         for i, query in enumerate(queries)
     ]
     results = await asyncio.gather(*search_tasks)
@@ -274,15 +296,21 @@ async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max
             continue
         
         query = queries[i]
-        formatted_results.append(f"\n### Search Results for: {query}")
+        query_results = []
         
         for item in result.get("results", []):
+            # Best practice: Score-based filtering for relevance
+            score = item.get("score", 0)
+            if score < min_score:
+                logging.debug(f"Skipping low-score result (score={score:.2f}): {item.get('title', 'No title')}")
+                continue
+            
             title = item.get("title", "No title")
             url = item.get("url", "")
             
-            # Track URL for sources
+            # Track URL for sources (with score for reference)
             if url:
-                all_urls.append({"title": title, "url": url})
+                all_urls.append({"title": title, "url": url, "score": score})
             
             # Prefer raw_content (full page content) over content (snippet)
             raw_content = item.get("raw_content", "")
@@ -293,8 +321,12 @@ async def perform_web_search(queries: list[str], tavily_api_keys: list[str], max
             # Limit to max_chars_per_url (default 2000 chars per URL)
             page_content = page_content[:max_chars_per_url] if page_content else ""
             
-            result_text = f"\n**{title}**\n{url}\n{page_content}\n"
-            formatted_results.append(result_text)
+            result_text = f"\n**{title}** (relevance: {score:.2f})\n{url}\n{page_content}\n"
+            query_results.append(result_text)
+        
+        if query_results:
+            formatted_results.append(f"\n### Search Results for: {query}")
+            formatted_results.extend(query_results)
     
     metadata = {
         "queries": queries,
