@@ -82,61 +82,26 @@ Examples:
 """
 
 
-async def decide_web_search(messages: list, gemini_api_keys: list[str]) -> dict:
+async def decide_web_search(messages: list, decider_config: dict) -> dict:
     """
-    Uses Gemini 3 Flash Preview to decide if web search is needed and generates optimized queries.
+    Uses a configurable model to decide if web search is needed and generates optimized queries.
+    Supports both Gemini and OpenAI-compatible APIs.
     Implements retry mechanism with API key rotation similar to main model.
     Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
+    
+    decider_config should contain:
+        - provider: "gemini" or other (OpenAI-compatible)
+        - model: model name
+        - api_keys: list of API keys
+        - base_url: (optional) for OpenAI-compatible providers
     """
-    if not gemini_api_keys:
+    provider = decider_config.get("provider", "gemini")
+    model = decider_config.get("model", "gemini-3-flash-preview")
+    api_keys = decider_config.get("api_keys", [])
+    base_url = decider_config.get("base_url")
+    
+    if not api_keys:
         return {"needs_search": False}
-    
-    # Build context from chat history (mirror the main model's history)
-    search_decider_contents = []
-    for msg in messages[::-1]:  # Reverse to get chronological order
-        role = "model" if msg.get("role") == "assistant" else "user"
-        content = msg.get("content", "")
-        parts = []
-        
-        if isinstance(content, list):
-            # Handle multimodal content (text + images)
-            for part in content:
-                if isinstance(part, dict):
-                    if part.get("type") == "text" and part.get("text"):
-                        parts.append(types.Part.from_text(text=str(part["text"])[:5000]))
-                    elif part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
-                        # Extract base64 image data
-                        image_url = part["image_url"]["url"]
-                        if image_url.startswith("data:"):
-                            # Parse data URI: data:mime_type;base64,data
-                            try:
-                                header, b64_data = image_url.split(",", 1)
-                                mime_type = header.split(":")[1].split(";")[0]
-                                import base64
-                                image_bytes = base64.b64decode(b64_data)
-                                parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-                            except Exception:
-                                pass  # Skip malformed image data
-        elif content:
-            parts.append(types.Part.from_text(text=str(content)[:5000]))
-        
-        if parts:
-            search_decider_contents.append(types.Content(role=role, parts=parts))
-    
-    if not search_decider_contents:
-        return {"needs_search": False}
-    
-    # Add instruction to analyze the conversation
-    search_decider_contents.append(types.Content(
-        role="user",
-        parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
-    ))
-    
-    config = types.GenerateContentConfig(
-        system_instruction=SEARCH_DECIDER_SYSTEM_PROMPT,
-        temperature=0.1,
-        thinking_config=types.ThinkingConfig(thinking_level="MINIMAL"),
-    )
     
     # Retry mechanism with API key rotation
     attempt_count = 0
@@ -144,19 +109,106 @@ async def decide_web_search(messages: list, gemini_api_keys: list[str]) -> dict:
     
     while attempt_count < max_attempts:
         attempt_count += 1
-        current_api_key = gemini_api_keys[(attempt_count - 1) % len(gemini_api_keys)]
+        current_api_key = api_keys[(attempt_count - 1) % len(api_keys)]
         
         try:
-            client = genai.Client(api_key=current_api_key, http_options=dict(api_version="v1beta"))
+            if provider == "gemini":
+                # Build Gemini-format contents
+                search_decider_contents = []
+                for msg in messages[::-1]:  # Reverse to get chronological order
+                    role = "model" if msg.get("role") == "assistant" else "user"
+                    content = msg.get("content", "")
+                    parts = []
+                    
+                    if isinstance(content, list):
+                        # Handle multimodal content (text + images)
+                        for part in content:
+                            if isinstance(part, dict):
+                                if part.get("type") == "text" and part.get("text"):
+                                    parts.append(types.Part.from_text(text=str(part["text"])[:5000]))
+                                elif part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
+                                    # Extract base64 image data
+                                    image_url = part["image_url"]["url"]
+                                    if image_url.startswith("data:"):
+                                        try:
+                                            header, b64_data = image_url.split(",", 1)
+                                            mime_type = header.split(":")[1].split(";")[0]
+                                            import base64
+                                            image_bytes = base64.b64decode(b64_data)
+                                            parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                                        except Exception:
+                                            pass
+                    elif content:
+                        parts.append(types.Part.from_text(text=str(content)[:5000]))
+                    
+                    if parts:
+                        search_decider_contents.append(types.Content(role=role, parts=parts))
+                
+                if not search_decider_contents:
+                    return {"needs_search": False}
+                
+                # Add instruction to analyze the conversation
+                search_decider_contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
+                ))
+                
+                config_kwargs = dict(
+                    system_instruction=SEARCH_DECIDER_SYSTEM_PROMPT,
+                    temperature=0.1,
+                )
+                
+                # Add thinking config for Gemini 3 models
+                if "gemini-3" in model:
+                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="MINIMAL")
+                
+                gemini_config = types.GenerateContentConfig(**config_kwargs)
+                
+                client = genai.Client(api_key=current_api_key, http_options=dict(api_version="v1beta"))
+                
+                response = await client.aio.models.generate_content(
+                    model=model,
+                    contents=search_decider_contents,
+                    config=gemini_config
+                )
+                
+                response_text = response.text.strip()
+            else:
+                # OpenAI-compatible API
+                openai_messages = [{"role": "system", "content": SEARCH_DECIDER_SYSTEM_PROMPT}]
+                
+                for msg in messages[::-1]:  # Reverse to get chronological order
+                    role = msg.get("role", "user")
+                    if role == "system":
+                        continue  # Skip system messages from chat history
+                    
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        # Keep multimodal format for OpenAI
+                        openai_messages.append({"role": role, "content": content})
+                    elif content:
+                        openai_messages.append({"role": role, "content": str(content)[:5000]})
+                
+                if len(openai_messages) <= 1:  # Only system prompt
+                    return {"needs_search": False}
+                
+                # Add instruction to analyze the conversation
+                openai_messages.append({
+                    "role": "user",
+                    "content": "Based on the conversation above, analyze the last user query and respond with your JSON decision."
+                })
+                
+                openai_client = AsyncOpenAI(base_url=base_url, api_key=current_api_key)
+                
+                response = await openai_client.chat.completions.create(
+                    model=model,
+                    messages=openai_messages,
+                    temperature=0.1,
+                )
+                
+                response_text = response.choices[0].message.content.strip()
             
-            response = await client.aio.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=search_decider_contents,
-                config=config
-            )
-            
-            response_text = response.text.strip()
-            # Try to extract JSON from the response
+            # Parse response (common for both providers)
             if response_text.startswith("```"):
                 # Remove markdown code blocks if present
                 response_text = response_text.split("```")[1]
@@ -690,14 +742,26 @@ async def on_message(new_msg: discord.Message) -> None:
     is_googlelens_query = new_msg.content.lower().removeprefix(discord_bot.user.mention).strip().lower().startswith("googlelens")
     
     if tavily_api_keys and (is_non_gemini or is_preview_model) and not is_googlelens_query:
-        # Get a Gemini API key for the search decider
-        gemini_api_keys = config.get("providers", {}).get("gemini", {}).get("api_key", [])
-        if isinstance(gemini_api_keys, str):
-            gemini_api_keys = [gemini_api_keys]
+        # Get web search decider model from config (default: gemini/gemini-3-flash-preview)
+        decider_model_str = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+        decider_provider, decider_model = decider_model_str.split("/", 1) if "/" in decider_model_str else ("gemini", decider_model_str)
         
-        if gemini_api_keys:
+        # Get provider config for the decider
+        decider_provider_config = config.get("providers", {}).get(decider_provider, {})
+        decider_api_keys = decider_provider_config.get("api_key", [])
+        if isinstance(decider_api_keys, str):
+            decider_api_keys = [decider_api_keys]
+        
+        decider_config = {
+            "provider": decider_provider,
+            "model": decider_model,
+            "api_keys": decider_api_keys,
+            "base_url": decider_provider_config.get("base_url"),
+        }
+        
+        if decider_api_keys:
             # Run the search decider with chat history (uses all keys with rotation)
-            search_decision = await decide_web_search(messages, gemini_api_keys)
+            search_decision = await decide_web_search(messages, decider_config)
             
             if search_decision.get("needs_search") and search_decision.get("queries"):
                 queries = search_decision["queries"]
