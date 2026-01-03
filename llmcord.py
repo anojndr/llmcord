@@ -103,9 +103,9 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     if not api_keys:
         return {"needs_search": False}
     
-    # Retry mechanism with API key rotation
+    # Retry mechanism with API key rotation (retry through all available keys)
     attempt_count = 0
-    max_attempts = 10
+    max_attempts = len(api_keys)
     
     while attempt_count < max_attempts:
         attempt_count += 1
