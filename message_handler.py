@@ -29,6 +29,7 @@ from config import (
     EMBED_COLOR_COMPLETE,
     EMBED_COLOR_INCOMPLETE,
     STREAMING_INDICATOR,
+    PROCESSING_MESSAGE,
     EDIT_DELAY_SECONDS,
     MAX_MESSAGE_NODES,
 )
@@ -73,6 +74,15 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
     if is_bad_user or is_bad_channel:
         return
+
+    # Send processing message immediately after confirming bot should respond
+    use_plain_responses = config.get("use_plain_responses", False)
+    
+    if use_plain_responses:
+        processing_msg = await new_msg.reply(view=LayoutView().add_item(TextDisplay(content=PROCESSING_MESSAGE)))
+    else:
+        processing_embed = discord.Embed(description=PROCESSING_MESSAGE, color=EMBED_COLOR_INCOMPLETE)
+        processing_msg = await new_msg.reply(embed=processing_embed, silent=True)
 
     # Thread-safe read of current model
     async with curr_model_lock:
@@ -448,6 +458,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         max_text=max_text,
         tavily_metadata=tavily_metadata,
         last_edit_time=last_edit_time,
+        processing_msg=processing_msg,
     )
 
 
@@ -455,11 +466,14 @@ async def generate_response(
     new_msg, discord_bot, msg_nodes, messages, gemini_contents, user_warnings,
     provider, model, provider_slash_model, base_url, api_keys, model_parameters,
     extra_headers, extra_query, extra_body, system_prompt, config, max_text,
-    tavily_metadata, last_edit_time
+    tavily_metadata, last_edit_time, processing_msg
 ):
     """Generate and stream the LLM response."""
     curr_content = finish_reason = None
-    response_msgs = []
+    # Initialize with the pre-created processing message
+    response_msgs = [processing_msg]
+    msg_nodes[processing_msg.id] = MsgNode(parent_msg=new_msg)
+    await msg_nodes[processing_msg.id].lock.acquire()
     response_contents = []
 
     openai_kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
@@ -710,8 +724,13 @@ async def generate_response(
                 raise Exception("Response stream ended with no content")
 
             if use_plain_responses:
-                for content in response_contents:
-                    await reply_helper(view=LayoutView().add_item(TextDisplay(content=content)))
+                for i, content in enumerate(response_contents):
+                    if i < len(response_msgs):
+                        # Edit existing message (first one is the processing message)
+                        await response_msgs[i].edit(view=LayoutView().add_item(TextDisplay(content=content)))
+                    else:
+                        # Create new message for overflow content
+                        await reply_helper(view=LayoutView().add_item(TextDisplay(content=content)))
 
             break
 

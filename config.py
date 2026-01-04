@@ -18,6 +18,7 @@ EMBED_COLOR_INCOMPLETE = discord.Color.orange()
 
 # Streaming and editing constants
 STREAMING_INDICATOR = " ⚪"
+PROCESSING_MESSAGE = "⏳ Processing request..."
 EDIT_DELAY_SECONDS = 1
 
 # Message node limits
