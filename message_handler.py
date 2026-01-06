@@ -166,7 +166,20 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in allowed_types)]
 
-                attachment_responses = await asyncio.gather(*[httpx_client.get(att.url) for att in good_attachments])
+                # Download attachments with timeout and error handling
+                async def download_attachment(att):
+                    try:
+                        return await httpx_client.get(att.url, timeout=60)
+                    except Exception as e:
+                        logging.warning(f"Failed to download attachment {att.filename}: {e}")
+                        return None
+
+                attachment_responses = await asyncio.gather(*[download_attachment(att) for att in good_attachments])
+
+                # Filter out failed downloads
+                successful_pairs = [(att, resp) for att, resp in zip(good_attachments, attachment_responses) if resp is not None]
+                good_attachments = [pair[0] for pair in successful_pairs]
+                attachment_responses = [pair[1] for pair in successful_pairs]
 
                 processed_attachments = []
                 for att, resp in zip(good_attachments, attachment_responses):
@@ -210,7 +223,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
                         transcript = transcript_obj.to_raw_data()
 
-                        response = await httpx_client.get(f"https://www.youtube.com/watch?v={video_id}", follow_redirects=True)
+                        response = await httpx_client.get(f"https://www.youtube.com/watch?v={video_id}", follow_redirects=True, timeout=30)
                         html = response.text
                         title_match = re.search(r'<meta name="title" content="(.*?)">', html)
                         title = title_match.group(1) if title_match else "Unknown Title"
