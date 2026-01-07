@@ -106,6 +106,61 @@ class BadKeysDB:
         """Filter out bad keys from a list of API keys."""
         return [key for key in all_keys if not self.is_key_bad(provider, key)]
     
+    def is_key_bad_synced(self, provider: str, api_key: str) -> bool:
+        """
+        Check if an API key is marked as bad for EITHER the main provider or its decider variant.
+        This ensures keys marked bad by main model are also recognized by decider and vice versa.
+        """
+        base_provider = provider.removeprefix("decider_")
+        decider_provider = f"decider_{base_provider}"
+        return self.is_key_bad(base_provider, api_key) or self.is_key_bad(decider_provider, api_key)
+    
+    def mark_key_bad_synced(self, provider: str, api_key: str, error_message: str = None):
+        """
+        Mark an API key as bad for BOTH the main provider and its decider variant.
+        This ensures a bad key is recognized by both main model and search decider.
+        """
+        base_provider = provider.removeprefix("decider_")
+        decider_provider = f"decider_{base_provider}"
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        key_hash = self._hash_key(api_key)
+        
+        # Mark for both base provider and decider provider
+        cursor.execute(
+            "INSERT OR REPLACE INTO bad_keys (provider, key_hash, error_message) VALUES (?, ?, ?)",
+            (base_provider, key_hash, error_message)
+        )
+        cursor.execute(
+            "INSERT OR REPLACE INTO bad_keys (provider, key_hash, error_message) VALUES (?, ?, ?)",
+            (decider_provider, key_hash, error_message)
+        )
+        conn.commit()
+        self._sync()
+        logging.info(f"Marked API key as bad for '{base_provider}' and '{decider_provider}' (hash: {key_hash[:8]}...)")
+    
+    def get_good_keys_synced(self, provider: str, all_keys: list[str]) -> list[str]:
+        """
+        Filter out bad keys from a list of API keys, checking both main and decider providers.
+        This ensures keys marked bad by either are filtered out for both.
+        """
+        return [key for key in all_keys if not self.is_key_bad_synced(provider, key)]
+    
+    def reset_provider_keys_synced(self, provider: str):
+        """
+        Reset all bad keys for BOTH the main provider and its decider variant.
+        """
+        base_provider = provider.removeprefix("decider_")
+        decider_provider = f"decider_{base_provider}"
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM bad_keys WHERE provider = ? OR provider = ?", (base_provider, decider_provider))
+        conn.commit()
+        self._sync()
+        logging.info(f"Reset all bad keys for '{base_provider}' and '{decider_provider}'")
+    
     def get_bad_key_count(self, provider: str) -> int:
         """Get the count of bad keys for a provider."""
         conn = self._get_connection()
