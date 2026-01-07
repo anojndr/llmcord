@@ -16,7 +16,17 @@ async def upload_to_textis(text: str) -> Optional[str]:
     Returns None if upload fails.
     """
     try:
-        async with httpx.AsyncClient(follow_redirects=False) as client:
+        # Browser-like headers to avoid being blocked
+        browser_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        }
+        
+        async with httpx.AsyncClient(follow_redirects=False, headers=browser_headers) as client:
             # Get the CSRF token from the main page
             response = await client.get("https://text.is/", timeout=30)
             
@@ -24,7 +34,9 @@ async def upload_to_textis(text: str) -> Optional[str]:
             soup = BeautifulSoup(response.text, "html.parser")
             csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
             if not csrf_input:
+                # Debug: log a snippet of the response to help diagnose
                 logging.error("Could not find CSRF token on text.is")
+                logging.debug(f"Response status: {response.status_code}, Content preview: {response.text[:500]}")
                 return None
             
             csrf_token = csrf_input.get("value")
