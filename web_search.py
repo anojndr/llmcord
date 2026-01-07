@@ -64,16 +64,16 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     if not api_keys:
         return {"needs_search": False}
     
-    # Use a prefixed provider name to separate decider keys from main model keys
-    decider_provider = f"decider_{provider}"
+    # Use synced bad key tracking so keys marked bad by main model are also recognized here
+    # and keys marked bad here are recognized by main model
     
-    # Get good keys (filter out known bad ones)
-    good_keys = get_bad_keys_db().get_good_keys(decider_provider, api_keys)
+    # Get good keys (filter out known bad ones from BOTH main and decider)
+    good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
     
     # If all keys are bad, reset and try again with all keys
     if not good_keys:
-        logging.warning(f"All API keys for '{decider_provider}' are marked as bad. Resetting...")
-        get_bad_keys_db().reset_provider_keys(decider_provider)
+        logging.warning(f"All API keys for '{provider}' (synced) are marked as bad. Resetting...")
+        get_bad_keys_db().reset_provider_keys_synced(provider)
         good_keys = api_keys.copy()
     
     attempt_count = 0
@@ -192,9 +192,9 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
         except Exception as e:
             logging.exception(f"Error in web search decider (attempt {attempt_count}): {e}")
             
-            # Mark the current key as bad
+            # Mark the current key as bad (synced for both main and decider)
             error_msg = str(e)[:200] if e else "Unknown error"
-            get_bad_keys_db().mark_key_bad(decider_provider, current_api_key, error_msg)
+            get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
             
             # Remove the bad key from good_keys list for this session
             if current_api_key in good_keys:
@@ -206,8 +206,8 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                     logging.error("Web search decider failed after exhausting all keys, skipping web search")
                     return {"needs_search": False}
                 else:
-                    logging.warning(f"All decider keys exhausted. Resetting for retry...")
-                    get_bad_keys_db().reset_provider_keys(decider_provider)
+                    logging.warning(f"All decider keys exhausted. Resetting synced keys for retry...")
+                    get_bad_keys_db().reset_provider_keys_synced(provider)
                     good_keys = api_keys.copy()
     
     return {"needs_search": False}

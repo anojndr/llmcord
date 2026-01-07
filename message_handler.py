@@ -656,13 +656,13 @@ async def generate_response(
     grounding_metadata = None
     attempt_count = 0
     
-    # Get good keys (filter out known bad ones)
-    good_keys = get_bad_keys_db().get_good_keys(provider, api_keys)
+    # Get good keys (filter out known bad ones - synced with search decider)
+    good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
     
     # If all keys are bad, reset and try again with all keys
     if not good_keys:
-        logging.warning(f"All API keys for provider '{provider}' are marked as bad. Resetting...")
-        get_bad_keys_db().reset_provider_keys(provider)
+        logging.warning(f"All API keys for provider '{provider}' (synced) are marked as bad. Resetting...")
+        get_bad_keys_db().reset_provider_keys_synced(provider)
         good_keys = api_keys.copy()
 
     while True:
@@ -673,8 +673,8 @@ async def generate_response(
         # Get the next good key to try
         if not good_keys:
             # All good keys exhausted in this session, reset and try again
-            logging.warning(f"All available keys exhausted for provider '{provider}'. Resetting bad keys database...")
-            get_bad_keys_db().reset_provider_keys(provider)
+            logging.warning(f"All available keys exhausted for provider '{provider}'. Resetting synced bad keys database...")
+            get_bad_keys_db().reset_provider_keys_synced(provider)
             good_keys = api_keys.copy()
         
         current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
@@ -750,9 +750,9 @@ async def generate_response(
         except Exception as e:
             logging.exception("Error while generating response")
             
-            # Mark the current key as bad
+            # Mark the current key as bad (synced with search decider)
             error_msg = str(e)[:200] if e else "Unknown error"
-            get_bad_keys_db().mark_key_bad(provider, current_api_key, error_msg)
+            get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
             
             # Remove the bad key from good_keys list for this session
             if current_api_key in good_keys:
@@ -778,8 +778,8 @@ async def generate_response(
                     break
                 else:
                     # Reset and try again with all keys
-                    logging.warning(f"All keys exhausted for provider '{provider}'. Resetting for retry...")
-                    get_bad_keys_db().reset_provider_keys(provider)
+                    logging.warning(f"All keys exhausted for provider '{provider}'. Resetting synced keys for retry...")
+                    get_bad_keys_db().reset_provider_keys_synced(provider)
                     good_keys = api_keys.copy()
 
     if not use_plain_responses and len(response_msgs) > len(response_contents):
