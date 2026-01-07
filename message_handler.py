@@ -34,7 +34,7 @@ from config import (
     MAX_MESSAGE_NODES,
 )
 from models import MsgNode
-from views import ResponseView, SourceView
+from views import ResponseView, SourceView, SourceButton, TavilySourceButton
 from web_search import decide_web_search, perform_web_search
 
 
@@ -738,12 +738,24 @@ async def generate_response(
 
             if use_plain_responses:
                 for i, content in enumerate(response_contents):
+                    # Build the LayoutView with text content
+                    layout = LayoutView().add_item(TextDisplay(content=content))
+                    
+                    # Add buttons only to the last message
+                    if i == len(response_contents) - 1:
+                        # Add Gemini grounding sources button if available
+                        if grounding_metadata and grounding_metadata.web_search_queries:
+                            layout.add_item(SourceButton(grounding_metadata))
+                        # Add Tavily sources button if available
+                        if tavily_metadata and (tavily_metadata.get("urls") or tavily_metadata.get("queries")):
+                            layout.add_item(TavilySourceButton(tavily_metadata))
+                    
                     if i < len(response_msgs):
                         # Edit existing message (first one is the processing message)
-                        await response_msgs[i].edit(view=LayoutView().add_item(TextDisplay(content=content)))
+                        await response_msgs[i].edit(view=layout)
                     else:
                         # Create new message for overflow content
-                        await reply_helper(view=LayoutView().add_item(TextDisplay(content=content)))
+                        await reply_helper(view=layout)
 
             break
 

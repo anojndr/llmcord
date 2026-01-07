@@ -100,8 +100,8 @@ class ResponseView(discord.ui.View):
         if metadata and metadata.web_search_queries:
             self.add_item(SourceButton(metadata))
         
-        # Add Tavily sources button if we have tavily metadata with URLs
-        if tavily_metadata and tavily_metadata.get("urls"):
+        # Add Tavily sources button if we have tavily metadata with URLs or queries
+        if tavily_metadata and (tavily_metadata.get("urls") or tavily_metadata.get("queries")):
             self.add_item(TavilySourceButton(tavily_metadata))
 
     @discord.ui.button(label="View Response Better", style=discord.ButtonStyle.secondary, emoji="📄")
