@@ -5,6 +5,10 @@ client_id:
 status_message: 
 tavily_api_key:  # For web search on non-Gemini and preview models
 
+# Turso database settings (for persistent bad API keys tracking):
+turso_database_url:  # e.g., libsql://your-db.turso.io
+turso_auth_token:    # Your Turso authentication token
+
 web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if web search is needed (provider/model format)
 
 reddit_client_id: 

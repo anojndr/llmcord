@@ -24,7 +24,7 @@ from PIL import Image
 from twscrape import API, gather
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from bad_keys import bad_keys_db
+from bad_keys import get_bad_keys_db, init_bad_keys_db
 from config import (
     get_config,
     VISION_MODEL_TAGS,
@@ -162,4 +162,10 @@ async def start_server():
 
 
 async def main() -> None:
+    # Initialize Turso database with credentials from config
+    turso_url = config.get("turso_database_url")
+    turso_token = config.get("turso_auth_token")
+    init_bad_keys_db(db_url=turso_url, auth_token=turso_token)
+    
     await asyncio.gather(start_server(), discord_bot.start(config["bot_token"]))
+

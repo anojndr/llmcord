@@ -21,7 +21,7 @@ from PIL import Image
 from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from bad_keys import bad_keys_db
+from bad_keys import get_bad_keys_db
 from config import (
     get_config,
     VISION_MODEL_TAGS,
@@ -657,12 +657,12 @@ async def generate_response(
     attempt_count = 0
     
     # Get good keys (filter out known bad ones)
-    good_keys = bad_keys_db.get_good_keys(provider, api_keys)
+    good_keys = get_bad_keys_db().get_good_keys(provider, api_keys)
     
     # If all keys are bad, reset and try again with all keys
     if not good_keys:
         logging.warning(f"All API keys for provider '{provider}' are marked as bad. Resetting...")
-        bad_keys_db.reset_provider_keys(provider)
+        get_bad_keys_db().reset_provider_keys(provider)
         good_keys = api_keys.copy()
 
     while True:
@@ -674,7 +674,7 @@ async def generate_response(
         if not good_keys:
             # All good keys exhausted in this session, reset and try again
             logging.warning(f"All available keys exhausted for provider '{provider}'. Resetting bad keys database...")
-            bad_keys_db.reset_provider_keys(provider)
+            get_bad_keys_db().reset_provider_keys(provider)
             good_keys = api_keys.copy()
         
         current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
@@ -752,7 +752,7 @@ async def generate_response(
             
             # Mark the current key as bad
             error_msg = str(e)[:200] if e else "Unknown error"
-            bad_keys_db.mark_key_bad(provider, current_api_key, error_msg)
+            get_bad_keys_db().mark_key_bad(provider, current_api_key, error_msg)
             
             # Remove the bad key from good_keys list for this session
             if current_api_key in good_keys:
@@ -779,7 +779,7 @@ async def generate_response(
                 else:
                     # Reset and try again with all keys
                     logging.warning(f"All keys exhausted for provider '{provider}'. Resetting for retry...")
-                    bad_keys_db.reset_provider_keys(provider)
+                    get_bad_keys_db().reset_provider_keys(provider)
                     good_keys = api_keys.copy()
 
     if not use_plain_responses and len(response_msgs) > len(response_contents):

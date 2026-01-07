@@ -10,7 +10,7 @@ from google import genai
 from google.genai import types
 from openai import AsyncOpenAI
 
-from bad_keys import bad_keys_db
+from bad_keys import get_bad_keys_db
 
 
 # Web Search Decider and Tavily Search Functions
@@ -68,12 +68,12 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     decider_provider = f"decider_{provider}"
     
     # Get good keys (filter out known bad ones)
-    good_keys = bad_keys_db.get_good_keys(decider_provider, api_keys)
+    good_keys = get_bad_keys_db().get_good_keys(decider_provider, api_keys)
     
     # If all keys are bad, reset and try again with all keys
     if not good_keys:
         logging.warning(f"All API keys for '{decider_provider}' are marked as bad. Resetting...")
-        bad_keys_db.reset_provider_keys(decider_provider)
+        get_bad_keys_db().reset_provider_keys(decider_provider)
         good_keys = api_keys.copy()
     
     attempt_count = 0
@@ -194,7 +194,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
             
             # Mark the current key as bad
             error_msg = str(e)[:200] if e else "Unknown error"
-            bad_keys_db.mark_key_bad(decider_provider, current_api_key, error_msg)
+            get_bad_keys_db().mark_key_bad(decider_provider, current_api_key, error_msg)
             
             # Remove the bad key from good_keys list for this session
             if current_api_key in good_keys:
@@ -207,7 +207,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                     return {"needs_search": False}
                 else:
                     logging.warning(f"All decider keys exhausted. Resetting for retry...")
-                    bad_keys_db.reset_provider_keys(decider_provider)
+                    get_bad_keys_db().reset_provider_keys(decider_provider)
                     good_keys = api_keys.copy()
     
     return {"needs_search": False}
