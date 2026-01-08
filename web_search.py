@@ -213,6 +213,21 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     return {"needs_search": False}
 
 
+# Shared httpx client for Tavily API calls - reuses connections for better performance
+_tavily_client: httpx.AsyncClient | None = None
+
+
+def _get_tavily_client() -> httpx.AsyncClient:
+    """Get or create the shared Tavily httpx client."""
+    global _tavily_client
+    if _tavily_client is None or _tavily_client.is_closed:
+        _tavily_client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        )
+    return _tavily_client
+
+
 async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, search_depth: str = "basic") -> dict:
     """
     Execute a single Tavily search query.
@@ -221,27 +236,27 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, s
     Best practices applied:
     - auto_parameters enabled for automatic query optimization
     - search_depth configurable (basic/advanced/fast/ultra-fast)
+    - Reuses shared httpx client for connection pooling
     """
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.tavily.com/search",
-                json={
-                    "query": query,
-                    "max_results": max_results,
-                    "search_depth": search_depth,
-                    "include_answer": False,
-                    "include_raw_content": "markdown",  # Get full page content in markdown format
-                    "auto_parameters": True,  # Let Tavily automatically optimize parameters based on query intent
-                },
-                headers={
-                    "Authorization": f"Bearer {tavily_api_key}",
-                    "Content-Type": "application/json"
-                },
-                timeout=30.0
-            )
-            response.raise_for_status()
-            return response.json()
+        client = _get_tavily_client()
+        response = await client.post(
+            "https://api.tavily.com/search",
+            json={
+                "query": query,
+                "max_results": max_results,
+                "search_depth": search_depth,
+                "include_answer": False,
+                "include_raw_content": "markdown",  # Get full page content in markdown format
+                "auto_parameters": True,  # Let Tavily automatically optimize parameters based on query intent
+            },
+            headers={
+                "Authorization": f"Bearer {tavily_api_key}",
+                "Content-Type": "application/json"
+            },
+        )
+        response.raise_for_status()
+        return response.json()
     except Exception as e:
         logging.exception(f"Tavily search error for query '{query}': {e}")
         return {"error": str(e), "query": query}
