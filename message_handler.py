@@ -102,6 +102,10 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
     model_parameters = config["models"].get(provider_slash_model, None)
 
+    # Support model aliasing: if config specifies a different actual model name, use it
+    # This allows e.g. "gemini-3-flash-minimal" to map to "gemini-3-flash-preview"
+    actual_model = model_parameters.get("model", model) if model_parameters else model
+
     extra_headers = provider_config.get("extra_headers")
     extra_query = provider_config.get("extra_query")
     extra_body = (provider_config.get("extra_body") or {}) | (model_parameters or {}) or None
@@ -470,6 +474,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         user_warnings=user_warnings,
         provider=provider,
         model=model,
+        actual_model=actual_model,
         provider_slash_model=provider_slash_model,
         base_url=base_url,
         api_keys=api_keys,
@@ -488,7 +493,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
 async def generate_response(
     new_msg, discord_bot, msg_nodes, messages, gemini_contents, user_warnings,
-    provider, model, provider_slash_model, base_url, api_keys, model_parameters,
+    provider, model, actual_model, provider_slash_model, base_url, api_keys, model_parameters,
     extra_headers, extra_query, extra_body, system_prompt, config, max_text,
     tavily_metadata, last_edit_time, processing_msg
 ):
@@ -500,7 +505,7 @@ async def generate_response(
     await msg_nodes[processing_msg.id].lock.acquire()
     response_contents = []
 
-    openai_kwargs = dict(model=model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
+    openai_kwargs = dict(model=actual_model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
 
     if use_plain_responses := config.get("use_plain_responses", False):
         max_message_length = 4000
@@ -519,8 +524,8 @@ async def generate_response(
 
     async def get_stream(api_key):
         if provider == "gemini":
-            is_gemini_3 = "gemini-3" in model
-            is_preview = "preview" in model
+            is_gemini_3 = "gemini-3" in actual_model
+            is_preview = "preview" in actual_model
 
             http_options = dict(api_version="v1beta")
             if model_parameters and model_parameters.get("media_resolution"):
@@ -549,9 +554,9 @@ async def generate_response(
             thinking_level = model_parameters.get("thinking_level") if model_parameters else None
 
             if not thinking_level:
-                if "gemini-3-flash" in model:
+                if "gemini-3-flash" in actual_model:
                     thinking_level = "MINIMAL"
-                elif "gemini-3-pro" in model:
+                elif "gemini-3-pro" in actual_model:
                     thinking_level = "LOW"
 
             if thinking_level:
@@ -569,7 +574,7 @@ async def generate_response(
                 grounding_metadata = None
 
                 async for chunk in await client.aio.models.generate_content_stream(
-                    model=model,
+                    model=actual_model,
                     contents=active_contents,
                     config=gemini_config
                 ):
