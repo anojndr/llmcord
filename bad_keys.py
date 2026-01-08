@@ -110,10 +110,19 @@ class BadKeysDB:
         """
         Check if an API key is marked as bad for EITHER the main provider or its decider variant.
         This ensures keys marked bad by main model are also recognized by decider and vice versa.
+        Uses a single optimized query instead of two separate calls.
         """
         base_provider = provider.removeprefix("decider_")
         decider_provider = f"decider_{base_provider}"
-        return self.is_key_bad(base_provider, api_key) or self.is_key_bad(decider_provider, api_key)
+        key_hash = self._hash_key(api_key)
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM bad_keys WHERE (provider = ? OR provider = ?) AND key_hash = ? LIMIT 1",
+            (base_provider, decider_provider, key_hash)
+        )
+        return cursor.fetchone() is not None
     
     def mark_key_bad_synced(self, provider: str, api_key: str, error_message: str = None):
         """
@@ -144,8 +153,25 @@ class BadKeysDB:
         """
         Filter out bad keys from a list of API keys, checking both main and decider providers.
         This ensures keys marked bad by either are filtered out for both.
+        Uses a single bulk query for efficiency instead of checking each key individually.
         """
-        return [key for key in all_keys if not self.is_key_bad_synced(provider, key)]
+        if not all_keys:
+            return []
+        
+        base_provider = provider.removeprefix("decider_")
+        decider_provider = f"decider_{base_provider}"
+        
+        # Get all bad key hashes for both providers in a single query
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT key_hash FROM bad_keys WHERE provider = ? OR provider = ?",
+            (base_provider, decider_provider)
+        )
+        bad_hashes = {row[0] for row in cursor.fetchall()}
+        
+        # Filter keys locally using the pre-fetched bad hashes
+        return [key for key in all_keys if self._hash_key(key) not in bad_hashes]
     
     def reset_provider_keys_synced(self, provider: str):
         """

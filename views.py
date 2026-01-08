@@ -31,7 +31,7 @@ async def upload_to_textis(text: str) -> Optional[str]:
             response = await client.get("https://text.is/", timeout=30)
             
             # Extract CSRF token from the form
-            soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(response.text, "lxml")  # lxml is faster than html.parser
             csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
             if not csrf_input:
                 # Debug: log a snippet of the response to help diagnose

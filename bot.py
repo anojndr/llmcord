@@ -98,8 +98,9 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
 async def model_autocomplete(interaction: discord.Interaction, curr_str: str) -> list[Choice[str]]:
     global config
 
+    # Refresh config from cache (will reload if file changed)
     if curr_str == "":
-        config = await asyncio.to_thread(get_config)
+        config = get_config()
 
     choices = [Choice(name=f"◉ {curr_model} (current)", value=curr_model)] if curr_str.lower() in curr_model.lower() else []
     choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != curr_model and curr_str.lower() in model.lower()]

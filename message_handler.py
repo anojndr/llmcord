@@ -52,7 +52,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     role_ids = set(role.id for role in getattr(new_msg.author, "roles", ()))
     channel_ids = set(filter(None, (new_msg.channel.id, getattr(new_msg.channel, "parent_id", None), getattr(new_msg.channel, "category_id", None))))
 
-    config = await asyncio.to_thread(get_config)
+    config = get_config()  # Now cached, no need for to_thread
 
     allow_dms = config.get("allow_dms", True)
 
@@ -60,17 +60,21 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
     user_is_admin = new_msg.author.id in permissions["users"]["admin_ids"]
 
-    (allowed_user_ids, blocked_user_ids), (allowed_role_ids, blocked_role_ids), (allowed_channel_ids, blocked_channel_ids) = (
-        (perm["allowed_ids"], perm["blocked_ids"]) for perm in (permissions["users"], permissions["roles"], permissions["channels"])
-    )
+    # Pre-convert to sets once for efficient lookups
+    allowed_user_ids = set(permissions["users"]["allowed_ids"])
+    blocked_user_ids = set(permissions["users"]["blocked_ids"])
+    allowed_role_ids = set(permissions["roles"]["allowed_ids"])
+    blocked_role_ids = set(permissions["roles"]["blocked_ids"])
+    allowed_channel_ids = set(permissions["channels"]["allowed_ids"])
+    blocked_channel_ids = set(permissions["channels"]["blocked_ids"])
 
     allow_all_users = not allowed_user_ids if is_dm else not allowed_user_ids and not allowed_role_ids
-    is_good_user = user_is_admin or allow_all_users or new_msg.author.id in allowed_user_ids or any(id in allowed_role_ids for id in role_ids)
-    is_bad_user = not is_good_user or new_msg.author.id in blocked_user_ids or any(id in blocked_role_ids for id in role_ids)
+    is_good_user = user_is_admin or allow_all_users or new_msg.author.id in allowed_user_ids or bool(role_ids & allowed_role_ids)
+    is_bad_user = not is_good_user or new_msg.author.id in blocked_user_ids or bool(role_ids & blocked_role_ids)
 
     allow_all_channels = not allowed_channel_ids
-    is_good_channel = user_is_admin or allow_dms if is_dm else allow_all_channels or any(id in allowed_channel_ids for id in channel_ids)
-    is_bad_channel = not is_good_channel or any(id in blocked_channel_ids for id in channel_ids)
+    is_good_channel = user_is_admin or allow_dms if is_dm else allow_all_channels or bool(channel_ids & allowed_channel_ids)
+    is_bad_channel = not is_good_channel or bool(channel_ids & blocked_channel_ids)
 
     if is_bad_user or is_bad_channel:
         return
@@ -137,7 +141,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             }
                             
                             yandex_resp = await httpx_client.get("https://yandex.com/images/search", params=params, headers=headers, follow_redirects=True, timeout=60)
-                            soup = BeautifulSoup(yandex_resp.text, "html.parser")
+                            soup = BeautifulSoup(yandex_resp.text, "lxml")  # lxml is faster than html.parser
                             
                             lens_results = []
                             sites_items = soup.select(".CbirSites-Item")
@@ -216,8 +220,8 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                     for att in processed_attachments
                 ]
 
-                yt_transcripts = []
-                for video_id in re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})", cleaned_content):
+                # Fetch YouTube transcripts in parallel for better performance
+                async def fetch_yt_transcript(video_id: str) -> str | None:
                     try:
                         ytt_api = YouTubeTranscriptApi()
                         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
@@ -230,9 +234,16 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         channel_match = re.search(r'<link itemprop="name" content="(.*?)">', html)
                         channel = channel_match.group(1) if channel_match else "Unknown Channel"
 
-                        yt_transcripts.append(f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\nTranscript:\n" + " ".join(x["text"] for x in transcript))
+                        return f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\nTranscript:\n" + " ".join(x["text"] for x in transcript)
                     except Exception:
-                        pass
+                        return None
+                
+                video_ids = re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})", cleaned_content)
+                if video_ids:
+                    yt_results = await asyncio.gather(*[fetch_yt_transcript(vid) for vid in video_ids])
+                    yt_transcripts = [t for t in yt_results if t is not None]
+                else:
+                    yt_transcripts = []
 
                 tweets = []
                 for tweet_id in re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
