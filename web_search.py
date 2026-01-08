@@ -26,12 +26,12 @@ If web search IS needed (e.g., current events, recent news, product specs, price
 
 RULES for generating queries:
 1. Keep queries concise—under 400 characters. Think of it as a query for an agent performing web search, not long-form prompts.
-2. SINGLE SUBJECT = SINGLE QUERY. If the user asks about ONE thing, output exactly ONE search query. Do NOT split into multiple queries.
+2. SINGLE ENTITY = SINGLE QUERY. If the user asks about ONE entity, output exactly ONE search query. Do NOT split into multiple queries.
    Example: "latest news" → ["latest news today"] (ONE query only)
    Example: "iPhone 16 price" → ["iPhone 16 price"] (ONE query only)
-3. MULTIPLE SUBJECTS = MULTIPLE QUERIES. Only if the user asks about multiple distinct subjects/entities, create separate queries for EACH subject PLUS a query containing all subjects.
+3. MULTIPLE ENTITIES = MULTIPLE QUERIES. Only if the user asks about multiple entities, create separate queries for EACH entity PLUS a query containing all entities.
    Example: "which is the best? B&K 5128 Diffuse Field Target, VDSF 5128 Demo Target Response On-Ear, VDSF 5128 Demo Target Response In-Ear, 5128 Harman In-Ear 2024 Beta, or 4128/4195 VDSF Target Response?" → ["B&K 5128 Diffuse Field Target", "VDSF 5128 Demo Target Response On-Ear", "VDSF 5128 Demo Target Response In-Ear", "5128 Harman In-Ear 2024 Beta", "4128/4195 VDSF Target Response", "B&K 5128 Diffuse Field Target vs VDSF 5128 Demo Target Response On-Ear vs VDSF 5128 Demo Target Response In-Ear vs 5128 Harman In-Ear 2024 Beta vs 4128/4195 VDSF Target Response"]
-4. Make queries search-engine friendly (clear, specific keywords)
+4. Make queries search-engine friendly
 5. Preserve the user's original intent
 
 Examples:
