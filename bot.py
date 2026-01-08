@@ -50,8 +50,7 @@ logging.basicConfig(
 
 # Global state
 config = get_config()
-curr_model = next(iter(config["models"]))
-curr_model_lock = asyncio.Lock()
+curr_model_lock = asyncio.Lock()  # Lock for thread-safe model operations
 
 msg_nodes = {}
 msg_nodes_lock = asyncio.Lock()
@@ -75,21 +74,26 @@ else:
     reddit_client = None
 
 
-@discord_bot.tree.command(name="model", description="View or switch the current model")
+@discord_bot.tree.command(name="model", description="View or switch your current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
-    global curr_model
+    user_id = str(interaction.user.id)
+    db = get_bad_keys_db()
 
     if model not in config["models"]:
         await interaction.response.send_message(f"Model `{model}` is not a valid model.", ephemeral=True)
         return
 
-    async with curr_model_lock:
-        if model == curr_model:
-            output = f"Current model: `{curr_model}`"
-        else:
-            curr_model = model
-            output = f"Model switched to: `{model}`"
-            logging.info(output)
+    # Get user's current model preference (or default)
+    current_user_model = db.get_user_model(user_id)
+    if current_user_model is None:
+        current_user_model = next(iter(config["models"]))  # Default model
+
+    if model == current_user_model:
+        output = f"Your current model: `{current_user_model}`"
+    else:
+        db.set_user_model(user_id, model)
+        output = f"Your model switched to: `{model}`"
+        logging.info(f"User {user_id} switched model to: {model}")
 
     await interaction.response.send_message(output, ephemeral=(interaction.channel.type == discord.ChannelType.private))
 
@@ -102,8 +106,19 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
     if curr_str == "":
         config = get_config()
 
-    choices = [Choice(name=f"◉ {curr_model} (current)", value=curr_model)] if curr_str.lower() in curr_model.lower() else []
-    choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != curr_model and curr_str.lower() in model.lower()]
+    # Get user's current model preference (or default)
+    user_id = str(interaction.user.id)
+    db = get_bad_keys_db()
+    user_model = db.get_user_model(user_id)
+    if user_model is None:
+        user_model = next(iter(config["models"]))  # Default model
+    
+    # Validate that user's saved model still exists in config
+    if user_model not in config["models"]:
+        user_model = next(iter(config["models"]))
+
+    choices = [Choice(name=f"◉ {user_model} (current)", value=user_model)] if curr_str.lower() in user_model.lower() else []
+    choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != user_model and curr_str.lower() in model.lower()]
 
     return choices[:25]
 
@@ -133,8 +148,18 @@ async def on_ready() -> None:
 async def on_message(new_msg: discord.Message) -> None:
     from message_handler import process_message
     
-    # Create a reference list to pass curr_model by reference
-    curr_model_ref = [curr_model]
+    # Get user's model preference from database (or use default)
+    user_id = str(new_msg.author.id)
+    db = get_bad_keys_db()
+    user_model = db.get_user_model(user_id)
+    
+    # Fall back to default model if user hasn't set a preference or if their saved model is no longer valid
+    default_model = next(iter(config["models"]))
+    if user_model is None or user_model not in config["models"]:
+        user_model = default_model
+    
+    # Create a reference list to pass user's model by reference
+    curr_model_ref = [user_model]
     
     await process_message(
         new_msg=new_msg,

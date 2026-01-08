@@ -52,7 +52,7 @@ class BadKeysDB:
         return self._conn
     
     def _init_db(self):
-        """Initialize the database table if it doesn't exist."""
+        """Initialize the database tables if they don't exist."""
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -63,6 +63,14 @@ class BadKeysDB:
                 error_message TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(provider, key_hash)
+            )
+        """)
+        # User model preferences table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_model_preferences (
+                user_id TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.commit()
@@ -214,6 +222,32 @@ class BadKeysDB:
         conn.commit()
         self._sync()
         logging.info("Reset all bad keys database")
+    
+    # User model preferences methods
+    def get_user_model(self, user_id: str) -> str | None:
+        """Get the preferred model for a user. Returns None if not set."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT model FROM user_model_preferences WHERE user_id = ?",
+            (str(user_id),)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def set_user_model(self, user_id: str, model: str) -> None:
+        """Set the preferred model for a user."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO user_model_preferences (user_id, model, updated_at) 
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET model = ?, updated_at = CURRENT_TIMESTAMP""",
+            (str(user_id), model, model)
+        )
+        conn.commit()
+        self._sync()
+        logging.info(f"Set model preference for user {user_id}: {model}")
 
 
 # Global instance will be initialized with config values
