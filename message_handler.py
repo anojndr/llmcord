@@ -401,7 +401,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     elif not tavily_api_keys:
         tavily_api_keys = []
     
-    is_preview_model = "preview" in model.lower()
+    is_preview_model = "preview" in actual_model.lower()
     is_non_gemini = provider != "gemini"
     is_googlelens_query = new_msg.content.lower().removeprefix(discord_bot.user.mention).strip().lower().startswith("googlelens")
     
