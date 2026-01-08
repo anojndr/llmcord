@@ -169,47 +169,177 @@ class TavilySourceButton(discord.ui.Button):
         self.tavily_metadata = tavily_metadata
     
     async def callback(self, interaction: discord.Interaction):
+        view = TavilySourcesView(self.tavily_metadata)
+        embed = view.build_embed()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+
+class TavilySourcesView(discord.ui.View):
+    """Paginated view for displaying Tavily search sources"""
+    
+    # Limits for embed content
+    MAX_EMBED_SIZE = 5500  # Leave buffer below 6000
+    FIELD_LIMIT = 1024
+    SOURCES_PER_PAGE = 10  # Reasonable default
+    
+    def __init__(self, tavily_metadata: dict):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.tavily_metadata = tavily_metadata
+        self.current_page = 0
+        
+        # Prepare source entries
+        self.queries = tavily_metadata.get("queries", [])
+        self.urls = tavily_metadata.get("urls", [])
+        self.sources = self._prepare_sources()
+        self.pages = self._paginate_sources()
+        self.total_pages = len(self.pages)
+        
+        # Update button states
+        self._update_buttons()
+    
+    def _prepare_sources(self) -> list[str]:
+        """Prepare formatted source strings"""
+        sources = []
+        for i, url_info in enumerate(self.urls):
+            title = url_info.get("title", "No title")[:80]  # Truncate long titles
+            url = url_info.get("url", "")
+            # Truncate very long URLs
+            if len(url) > 150:
+                url = url[:150] + "..."
+            sources.append(f"{i+1}. [{title}]({url})")
+        return sources
+    
+    def _paginate_sources(self) -> list[list[str]]:
+        """Split sources into pages that fit within embed limits"""
+        if not self.sources:
+            return [[]]
+        
+        pages = []
+        current_page = []
+        current_size = 0
+        
+        # Account for queries field size (on every page)
+        queries_size = 0
+        if self.queries:
+            queries_text = "\n".join(f"• {q}" for q in self.queries)[:self.FIELD_LIMIT]
+            queries_size = len("Search Queries") + len(queries_text) + 50  # field overhead
+        
+        base_size = len("Web Search Sources") + queries_size + 100  # title + queries + buffer
+        
+        for source in self.sources:
+            source_size = len(source) + 2  # +2 for newline
+            
+            # Check if adding this source would exceed limits
+            if current_size + source_size > self.MAX_EMBED_SIZE - base_size or len(current_page) >= self.SOURCES_PER_PAGE:
+                if current_page:
+                    pages.append(current_page)
+                current_page = [source]
+                current_size = source_size
+            else:
+                current_page.append(source)
+                current_size += source_size
+        
+        if current_page:
+            pages.append(current_page)
+        
+        return pages if pages else [[]]
+    
+    def _update_buttons(self):
+        """Update button disabled states based on current page"""
+        self.prev_button.disabled = self.current_page <= 0
+        self.next_button.disabled = self.current_page >= self.total_pages - 1
+    
+    def build_embed(self) -> discord.Embed:
+        """Build the embed for the current page"""
         embed = discord.Embed(title="Web Search Sources", color=discord.Color.blue())
         
-        # Display search queries
-        queries = self.tavily_metadata.get("queries", [])
-        if queries:
-            queries_text = "\n".join(f"• {q}" for q in queries)
-            embed.add_field(name="Search Queries", value=queries_text[:1024], inline=False)
+        # Display search queries (on every page)
+        if self.queries:
+            queries_text = "\n".join(f"• {q}" for q in self.queries)[:self.FIELD_LIMIT]
+            embed.add_field(name="Search Queries", value=queries_text, inline=False)
         
-        # Display URLs
-        urls = self.tavily_metadata.get("urls", [])
-        if urls:
-            sources = []
-            for i, url_info in enumerate(urls):
-                title = url_info.get("title", "No title")[:50]  # Truncate long titles
-                url = url_info.get("url", "")
-                sources.append(f"{i+1}. [{title}]({url})")
+        # Display sources for current page
+        if self.pages and self.pages[self.current_page]:
+            page_sources = self.pages[self.current_page]
             
-            # Split into multiple fields if needed (Discord field limit is 1024 chars)
+            # Split into multiple fields if needed
             current_chunk = ""
             field_count = 1
-            for source in sources:
-                if len(current_chunk) + len(source) + 1 > 1024:
-                    embed.add_field(
-                        name=f"URLs Used ({field_count})" if field_count > 1 else "URLs Used", 
-                        value=current_chunk, 
-                        inline=False
-                    )
+            for source in page_sources:
+                if len(current_chunk) + len(source) + 1 > self.FIELD_LIMIT:
+                    field_name = f"Sources ({field_count})" if field_count > 1 else "Sources"
+                    embed.add_field(name=field_name, value=current_chunk, inline=False)
                     current_chunk = source
                     field_count += 1
                 else:
                     current_chunk = (current_chunk + "\n" + source) if current_chunk else source
             
             if current_chunk:
-                embed.add_field(
-                    name=f"URLs Used ({field_count})" if field_count > 1 else "URLs Used", 
-                    value=current_chunk, 
-                    inline=False
-                )
+                field_name = f"Sources ({field_count})" if field_count > 1 else "Sources"
+                embed.add_field(name=field_name, value=current_chunk, inline=False)
+        elif not self.urls:
+            embed.add_field(name="Sources", value="No URLs available", inline=False)
         
-        embed.set_footer(text="Powered by Tavily Search")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # Footer with pagination info
+        footer_text = f"Page {self.current_page + 1}/{self.total_pages} • {len(self.urls)} total sources • Powered by Tavily Search"
+        embed.set_footer(text=footer_text)
+        
+        return embed
+    
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, emoji="◀️", disabled=True)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = max(0, self.current_page - 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+    
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, emoji="▶️")
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = min(self.total_pages - 1, self.current_page + 1)
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+    
+    @discord.ui.button(label="Go to Page", style=discord.ButtonStyle.primary, emoji="🔢")
+    async def goto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        modal = GoToPageModal(self)
+        await interaction.response.send_modal(modal)
+
+
+class GoToPageModal(discord.ui.Modal, title="Go to Page"):
+    """Modal for entering a specific page number"""
+    
+    page_input = discord.ui.TextInput(
+        label="Page Number",
+        placeholder="Enter page number...",
+        required=True,
+        min_length=1,
+        max_length=5
+    )
+    
+    def __init__(self, sources_view: TavilySourcesView):
+        super().__init__()
+        self.sources_view = sources_view
+        self.page_input.placeholder = f"Enter 1-{sources_view.total_pages}"
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            page_num = int(self.page_input.value)
+            if 1 <= page_num <= self.sources_view.total_pages:
+                self.sources_view.current_page = page_num - 1  # Convert to 0-indexed
+                self.sources_view._update_buttons()
+                await interaction.response.edit_message(
+                    embed=self.sources_view.build_embed(), 
+                    view=self.sources_view
+                )
+            else:
+                await interaction.response.send_message(
+                    f"❌ Invalid page number. Please enter a number between 1 and {self.sources_view.total_pages}.",
+                    ephemeral=True
+                )
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Please enter a valid number.",
+                ephemeral=True
+            )
 
 
 class SourceView(discord.ui.View):
