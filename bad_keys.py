@@ -73,6 +73,14 @@ class BadKeysDB:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # User search decider model preferences table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_search_decider_preferences (
+                user_id TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
         self._sync()
     
@@ -248,6 +256,32 @@ class BadKeysDB:
         conn.commit()
         self._sync()
         logging.info(f"Set model preference for user {user_id}: {model}")
+    
+    # User search decider model preferences methods
+    def get_user_search_decider_model(self, user_id: str) -> str | None:
+        """Get the preferred search decider model for a user. Returns None if not set."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT model FROM user_search_decider_preferences WHERE user_id = ?",
+            (str(user_id),)
+        )
+        result = cursor.fetchone()
+        return result[0] if result else None
+    
+    def set_user_search_decider_model(self, user_id: str, model: str) -> None:
+        """Set the preferred search decider model for a user."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO user_search_decider_preferences (user_id, model, updated_at) 
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(user_id) DO UPDATE SET model = ?, updated_at = CURRENT_TIMESTAMP""",
+            (str(user_id), model, model)
+        )
+        conn.commit()
+        self._sync()
+        logging.info(f"Set search decider model preference for user {user_id}: {model}")
 
 
 # Global instance will be initialized with config values
