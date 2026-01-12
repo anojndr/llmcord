@@ -148,6 +148,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             soup = BeautifulSoup(yandex_resp.text, "lxml")  # lxml is faster than html.parser
                             
                             lens_results = []
+                            twitter_urls_found = []
                             sites_items = soup.select(".CbirSites-Item")
                             
                             if sites_items:
@@ -162,9 +163,38 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                     desc = desc_el.get_text(strip=True) if desc_el else ""
                                     
                                     lens_results.append(f"- [{title}]({link}) ({domain}) - {desc}")
+                                    
+                                    # Check if the link is a Twitter/X URL and extract for later processing
+                                    if re.search(r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+", link):
+                                        twitter_urls_found.append(link)
+                            
+                            # Extract tweet content from Twitter/X URLs found in Yandex results
+                            twitter_content = []
+                            if twitter_urls_found:
+                                for twitter_url in twitter_urls_found:
+                                    tweet_id_match = re.search(r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/([0-9]+)", twitter_url)
+                                    if tweet_id_match:
+                                        tweet_id = tweet_id_match.group(1)
+                                        try:
+                                            tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
+                                            tweet_text = f"\n--- Tweet from @{tweet.user.username} ({twitter_url}) ---\n{tweet.rawContent}"
+                                            
+                                            if max_tweet_replies > 0:
+                                                replies = await asyncio.wait_for(gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies)), timeout=10)
+                                                if replies:
+                                                    tweet_text += "\n\nReplies:"
+                                                    for reply in replies:
+                                                        tweet_text += f"\n- @{reply.user.username}: {reply.rawContent}"
+                                            
+                                            twitter_content.append(tweet_text)
+                                        except Exception:
+                                            logging.debug(f"Failed to fetch tweet {tweet_id}")
                             
                             if lens_results:
-                                cleaned_content = (cleaned_content + "\n\nanswer the user's query based on the yandex reverse image results:\n" + "\n".join(lens_results))
+                                result_text = "\n\nanswer the user's query based on the yandex reverse image results:\n" + "\n".join(lens_results)
+                                if twitter_content:
+                                    result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(twitter_content)
+                                cleaned_content = cleaned_content + result_text
                         except Exception:
                             logging.exception("Error fetching Yandex results")
 
