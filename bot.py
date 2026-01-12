@@ -125,8 +125,10 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
 
 @discord_bot.event
 async def on_ready() -> None:
-    if client_id := config.get("client_id"):
-        logging.info(f"\n\nBOT INVITE URL:\nhttps://discord.com/oauth2/authorize?client_id={client_id}&permissions=412317191168&scope=bot\n")
+    # Generate bot invite link using the bot's application ID
+    client_id = discord_bot.user.id
+    invite_url = f"https://discord.com/oauth2/authorize?client_id={client_id}&permissions=412317191168&scope=bot"
+    logging.info(f"\n\nBOT INVITE URL:\n{invite_url}\n")
 
     await discord_bot.tree.sync()
 
