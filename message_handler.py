@@ -437,8 +437,18 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     
     tavily_metadata = None
     if tavily_api_keys and (is_non_gemini or is_preview_model) and not is_googlelens_query:
-        # Get web search decider model from config (default: gemini/gemini-3-flash-preview)
-        decider_model_str = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+        # Get web search decider model - first check user preference, then config default
+        db = get_bad_keys_db()
+        user_id = str(new_msg.author.id)
+        user_decider_model = db.get_user_search_decider_model(user_id)
+        default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+        
+        # Use user preference if set and valid, otherwise use config default
+        if user_decider_model and user_decider_model in config.get("models", {}):
+            decider_model_str = user_decider_model
+        else:
+            decider_model_str = default_decider
+        
         decider_provider, decider_model = decider_model_str.split("/", 1) if "/" in decider_model_str else ("gemini", decider_model_str)
         
         # Get provider config for the decider

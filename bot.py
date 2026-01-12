@@ -123,6 +123,57 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
     return choices[:25]
 
 
+@discord_bot.tree.command(name="searchdecidermodel", description="View or switch your search decider model")
+async def search_decider_model_command(interaction: discord.Interaction, model: str) -> None:
+    user_id = str(interaction.user.id)
+    db = get_bad_keys_db()
+
+    if model not in config["models"]:
+        await interaction.response.send_message(f"Model `{model}` is not a valid model.", ephemeral=True)
+        return
+
+    # Get user's current search decider model preference (or default from config)
+    current_user_model = db.get_user_search_decider_model(user_id)
+    default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+    if current_user_model is None:
+        current_user_model = default_decider
+
+    if model == current_user_model:
+        output = f"Your current search decider model: `{current_user_model}`"
+    else:
+        db.set_user_search_decider_model(user_id, model)
+        output = f"Your search decider model switched to: `{model}`"
+        logging.info(f"User {user_id} switched search decider model to: {model}")
+
+    await interaction.response.send_message(output, ephemeral=(interaction.channel.type == discord.ChannelType.private))
+
+
+@search_decider_model_command.autocomplete("model")
+async def search_decider_model_autocomplete(interaction: discord.Interaction, curr_str: str) -> list[Choice[str]]:
+    global config
+
+    # Refresh config from cache (will reload if file changed)
+    if curr_str == "":
+        config = get_config()
+
+    # Get user's current search decider model preference (or default from config)
+    user_id = str(interaction.user.id)
+    db = get_bad_keys_db()
+    user_model = db.get_user_search_decider_model(user_id)
+    default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+    if user_model is None:
+        user_model = default_decider
+    
+    # Validate that user's saved model still exists in config
+    if user_model not in config["models"]:
+        user_model = default_decider if default_decider in config["models"] else next(iter(config["models"]))
+
+    choices = [Choice(name=f"◉ {user_model} (current)", value=user_model)] if curr_str.lower() in user_model.lower() else []
+    choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != user_model and curr_str.lower() in model.lower()]
+
+    return choices[:25]
+
+
 @discord_bot.event
 async def on_ready() -> None:
     # Generate bot invite link using the bot's application ID
