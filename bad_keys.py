@@ -5,8 +5,32 @@ Uses Turso cloud database for persistent storage across deployments.
 import hashlib
 import logging
 import os
+import functools
 
 import libsql
+
+
+def _with_reconnect(method):
+    """Decorator to handle stale Turso connections by reconnecting and retrying."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                return method(self, *args, **kwargs)
+            except (ValueError, Exception) as e:
+                error_str = str(e)
+                # Check for Hrana stream errors (stale connection)
+                if "stream not found" in error_str or "Hrana" in error_str:
+                    if attempt < max_retries - 1:
+                        logging.warning(f"Turso connection error, reconnecting (attempt {attempt + 1}): {e}")
+                        self._reconnect()
+                    else:
+                        logging.error(f"Failed to reconnect to Turso after {max_retries} attempts: {e}")
+                        raise
+                else:
+                    raise
+    return wrapper
 
 
 class BadKeysDB:
@@ -31,6 +55,16 @@ class BadKeysDB:
         self.local_db_path = local_db_path
         self._conn = None
         self._init_db()
+    
+    def _reconnect(self):
+        """Force reconnection to the database."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+        self._get_connection()
     
     def _get_connection(self):
         """Get or create the database connection."""
@@ -96,6 +130,7 @@ class BadKeysDB:
         """Create a hash of the API key to avoid storing sensitive data."""
         return hashlib.sha256(api_key.encode()).hexdigest()[:16]
     
+    @_with_reconnect
     def is_key_bad(self, provider: str, api_key: str) -> bool:
         """Check if an API key is marked as bad."""
         conn = self._get_connection()
@@ -106,6 +141,7 @@ class BadKeysDB:
         )
         return cursor.fetchone() is not None
     
+    @_with_reconnect
     def mark_key_bad(self, provider: str, api_key: str, error_message: str = None):
         """Mark an API key as bad."""
         conn = self._get_connection()
@@ -122,6 +158,7 @@ class BadKeysDB:
         """Filter out bad keys from a list of API keys."""
         return [key for key in all_keys if not self.is_key_bad(provider, key)]
     
+    @_with_reconnect
     def is_key_bad_synced(self, provider: str, api_key: str) -> bool:
         """
         Check if an API key is marked as bad for EITHER the main provider or its decider variant.
@@ -140,6 +177,7 @@ class BadKeysDB:
         )
         return cursor.fetchone() is not None
     
+    @_with_reconnect
     def mark_key_bad_synced(self, provider: str, api_key: str, error_message: str = None):
         """
         Mark an API key as bad for BOTH the main provider and its decider variant.
@@ -165,6 +203,7 @@ class BadKeysDB:
         self._sync()
         logging.info(f"Marked API key as bad for '{base_provider}' and '{decider_provider}' (hash: {key_hash[:8]}...)")
     
+    @_with_reconnect
     def get_good_keys_synced(self, provider: str, all_keys: list[str]) -> list[str]:
         """
         Filter out bad keys from a list of API keys, checking both main and decider providers.
@@ -189,6 +228,7 @@ class BadKeysDB:
         # Filter keys locally using the pre-fetched bad hashes
         return [key for key in all_keys if self._hash_key(key) not in bad_hashes]
     
+    @_with_reconnect
     def reset_provider_keys_synced(self, provider: str):
         """
         Reset all bad keys for BOTH the main provider and its decider variant.
@@ -203,6 +243,7 @@ class BadKeysDB:
         self._sync()
         logging.info(f"Reset all bad keys for '{base_provider}' and '{decider_provider}'")
     
+    @_with_reconnect
     def get_bad_key_count(self, provider: str) -> int:
         """Get the count of bad keys for a provider."""
         conn = self._get_connection()
@@ -213,6 +254,7 @@ class BadKeysDB:
         )
         return cursor.fetchone()[0]
     
+    @_with_reconnect
     def reset_provider_keys(self, provider: str):
         """Reset all bad keys for a specific provider."""
         conn = self._get_connection()
@@ -222,6 +264,7 @@ class BadKeysDB:
         self._sync()
         logging.info(f"Reset all bad keys for provider '{provider}'")
     
+    @_with_reconnect
     def reset_all(self):
         """Reset all bad keys for all providers."""
         conn = self._get_connection()
@@ -232,6 +275,7 @@ class BadKeysDB:
         logging.info("Reset all bad keys database")
     
     # User model preferences methods
+    @_with_reconnect
     def get_user_model(self, user_id: str) -> str | None:
         """Get the preferred model for a user. Returns None if not set."""
         conn = self._get_connection()
@@ -243,6 +287,7 @@ class BadKeysDB:
         result = cursor.fetchone()
         return result[0] if result else None
     
+    @_with_reconnect
     def set_user_model(self, user_id: str, model: str) -> None:
         """Set the preferred model for a user."""
         conn = self._get_connection()
@@ -258,6 +303,7 @@ class BadKeysDB:
         logging.info(f"Set model preference for user {user_id}: {model}")
     
     # User search decider model preferences methods
+    @_with_reconnect
     def get_user_search_decider_model(self, user_id: str) -> str | None:
         """Get the preferred search decider model for a user. Returns None if not set."""
         conn = self._get_connection()
@@ -269,6 +315,7 @@ class BadKeysDB:
         result = cursor.fetchone()
         return result[0] if result else None
     
+    @_with_reconnect
     def set_user_search_decider_model(self, user_id: str, model: str) -> None:
         """Set the preferred search decider model for a user."""
         conn = self._get_connection()
