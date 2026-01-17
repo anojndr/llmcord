@@ -27,6 +27,9 @@ class MsgNode:
     # Web search data for persisting in chat history
     search_results: Optional[str] = None
     tavily_metadata: Optional[dict] = None
+    
+    # Google Lens / Yandex reverse image search results
+    lens_results: Optional[str] = None
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 

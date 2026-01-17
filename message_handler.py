@@ -135,7 +135,14 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 if cleaned_content.lower().startswith("googlelens"):
                     cleaned_content = cleaned_content[10:].strip()
 
-                    if image_url := next((att.url for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")), None):
+                    # Check for cached lens results first
+                    _, _, cached_lens_results = get_bad_keys_db().get_message_search_data(curr_msg.id)
+                    if cached_lens_results:
+                        # Use cached lens results
+                        cleaned_content = cleaned_content + cached_lens_results
+                        curr_node.lens_results = cached_lens_results
+                        logging.debug(f"Using cached lens results for message {curr_msg.id}")
+                    elif image_url := next((att.url for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")), None):
                         try:
                             headers = {
                                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -196,6 +203,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                 if twitter_content:
                                     result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(twitter_content)
                                 cleaned_content = cleaned_content + result_text
+                                
+                                # Store lens results for persistence
+                                curr_node.lens_results = result_text
+                                
+                                # Save lens results to database for persistence in chat history
+                                get_bad_keys_db().save_message_search_data(curr_msg.id, lens_results=result_text)
+                                logging.info(f"Saved lens results for message {curr_msg.id}")
                         except Exception:
                             logging.exception("Error fetching Yandex results")
 
@@ -369,12 +383,15 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
             # Load stored search data from database if not already cached
             # This is outside the text==None block so it runs even for cached nodes
-            if curr_node.search_results is None:
-                stored_search_results, stored_tavily_metadata = get_bad_keys_db().get_message_search_data(curr_msg.id)
+            if curr_node.search_results is None and curr_node.lens_results is None:
+                stored_search_results, stored_tavily_metadata, stored_lens_results = get_bad_keys_db().get_message_search_data(curr_msg.id)
                 if stored_search_results:
                     curr_node.search_results = stored_search_results
                     curr_node.tavily_metadata = stored_tavily_metadata
                     logging.debug(f"Loaded stored search data for message {curr_msg.id}")
+                if stored_lens_results:
+                    curr_node.lens_results = stored_lens_results
+                    logging.debug(f"Loaded stored lens results for message {curr_msg.id}")
 
             if provider == "gemini":
                 parts = []
