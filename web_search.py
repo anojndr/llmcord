@@ -228,7 +228,14 @@ def _get_tavily_client() -> httpx.AsyncClient:
     return _tavily_client
 
 
-async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, search_depth: str = "basic") -> dict:
+async def tavily_search(
+    query: str, 
+    tavily_api_key: str, 
+    max_results: int = 5, 
+    search_depth: str = "basic",
+    topic: str | None = None,
+    time_range: str | None = None
+) -> dict:
     """
     Execute a single Tavily search query.
     Returns the search results with page content or an error dict.
@@ -237,23 +244,47 @@ async def tavily_search(query: str, tavily_api_key: str, max_results: int = 5, s
     - auto_parameters enabled for automatic query optimization
     - search_depth configurable (basic/advanced/fast/ultra-fast)
     - Reuses shared httpx client for connection pooling
+    - topic filter for news/general/finance
+    - time_range filter for recent results
+    
+    Args:
+        query: Search query (keep under 400 characters)
+        tavily_api_key: Tavily API key
+        max_results: Maximum results to return (1-20)
+        search_depth: "basic", "advanced", "fast", or "ultra-fast"
+        topic: Optional - "general", "news", or "finance"
+        time_range: Optional - "day", "week", "month", or "year"
     """
     try:
         client = _get_tavily_client()
+        
+        # Build request payload
+        payload = {
+            "query": query[:400],  # Best practice: keep under 400 chars
+            "max_results": max_results,
+            "search_depth": search_depth,
+            "include_answer": False,
+            "include_raw_content": "markdown",  # Get full page content in markdown format
+            "auto_parameters": True,  # Let Tavily automatically optimize parameters based on query intent
+        }
+        
+        # Add optional parameters only when set (Tavily prefers them unset vs null)
+        if topic:
+            payload["topic"] = topic
+        if time_range:
+            payload["time_range"] = time_range
+        
+        # Increase timeout for advanced depth which takes longer
+        timeout = 45.0 if search_depth == "advanced" else 30.0
+        
         response = await client.post(
             "https://api.tavily.com/search",
-            json={
-                "query": query,
-                "max_results": max_results,
-                "search_depth": search_depth,
-                "include_answer": False,
-                "include_raw_content": "markdown",  # Get full page content in markdown format
-                "auto_parameters": True,  # Let Tavily automatically optimize parameters based on query intent
-            },
+            json=payload,
             headers={
                 "Authorization": f"Bearer {tavily_api_key}",
                 "Content-Type": "application/json"
             },
+            timeout=timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -268,7 +299,11 @@ async def perform_web_search(
     max_results_per_query: int = 5, 
     max_chars_per_url: int = 2000,
     search_depth: str = "basic",
-    min_score: float = 0.5
+    min_score: float = 0.3,
+    topic: str | None = None,
+    time_range: str | None = None,
+    retry_on_low_results: bool = True,
+    min_total_results: int = 2
 ) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
@@ -280,6 +315,7 @@ async def perform_web_search(
     - API key rotation for load distribution
     - Score-based filtering (min_score) for relevance
     - Configurable search_depth (basic/advanced/fast/ultra-fast)
+    - Retry with advanced depth when results are insufficient
     
     Args:
         queries: List of search queries
@@ -288,7 +324,11 @@ async def perform_web_search(
         max_chars_per_url: Maximum characters per URL content (default: 2000)
         search_depth: Tavily search depth - "basic" (balanced), "advanced" (highest relevance), 
                       "fast" (low latency), or "ultra-fast" (lowest latency)
-        min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.5)
+        min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.3)
+        topic: Optional topic filter - "general", "news", or "finance"
+        time_range: Optional time filter - "day", "week", "month", or "year"
+        retry_on_low_results: If True, retry with advanced depth when results < min_total_results
+        min_total_results: Minimum results needed before triggering retry (default: 2)
     
     Returns:
         tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...]})
@@ -296,52 +336,74 @@ async def perform_web_search(
     if not queries or not tavily_api_keys:
         return "", {}
     
-    # Execute all searches concurrently, rotating through API keys
-    search_tasks = [
-        tavily_search(query, tavily_api_keys[i % len(tavily_api_keys)], max_results_per_query, search_depth) 
-        for i, query in enumerate(queries)
-    ]
-    results = await asyncio.gather(*search_tasks)
-    
-    formatted_results = []
-    all_urls = []  # Track all URLs used for the "Show Sources" button
-    
-    for i, result in enumerate(results):
-        if "error" in result:
-            continue
+    async def execute_searches(depth: str, score_threshold: float) -> tuple[list, list]:
+        """Execute searches with given parameters and return results and URLs."""
+        search_tasks = [
+            tavily_search(
+                query, 
+                tavily_api_keys[i % len(tavily_api_keys)], 
+                max_results_per_query, 
+                depth,
+                topic,
+                time_range
+            ) 
+            for i, query in enumerate(queries)
+        ]
+        results = await asyncio.gather(*search_tasks)
         
-        query = queries[i]
-        query_results = []
+        formatted = []
+        urls = []
         
-        for item in result.get("results", []):
-            # Best practice: Score-based filtering for relevance
-            score = item.get("score", 0)
-            if score < min_score:
-                logging.debug(f"Skipping low-score result (score={score:.2f}): {item.get('title', 'No title')}")
+        for i, result in enumerate(results):
+            if "error" in result:
                 continue
             
-            title = item.get("title", "No title")
-            url = item.get("url", "")
+            query = queries[i]
+            query_results = []
             
-            # Track URL for sources (with score for reference)
-            if url:
-                all_urls.append({"title": title, "url": url, "score": score})
+            for item in result.get("results", []):
+                score = item.get("score", 0)
+                # Apply score filtering
+                if score < score_threshold:
+                    logging.debug(f"Skipping low-score result (score={score:.2f}): {item.get('title', 'No title')}")
+                    continue
+                
+                title = item.get("title", "No title")
+                url = item.get("url", "")
+                
+                if url:
+                    urls.append({"title": title, "url": url, "score": score})
+                
+                # Prefer raw_content (full page content) over content (snippet)
+                raw_content = item.get("raw_content", "")
+                content = item.get("content", "")
+                
+                page_content = raw_content if raw_content else content
+                page_content = page_content[:max_chars_per_url] if page_content else ""
+                
+                result_text = f"\n**{title}** (relevance: {score:.2f})\n{url}\n{page_content}\n"
+                query_results.append(result_text)
             
-            # Prefer raw_content (full page content) over content (snippet)
-            raw_content = item.get("raw_content", "")
-            content = item.get("content", "")
-            
-            # Use raw_content if available, otherwise fall back to content snippet
-            page_content = raw_content if raw_content else content
-            # Limit to max_chars_per_url (default 2000 chars per URL)
-            page_content = page_content[:max_chars_per_url] if page_content else ""
-            
-            result_text = f"\n**{title}** (relevance: {score:.2f})\n{url}\n{page_content}\n"
-            query_results.append(result_text)
+            if query_results:
+                formatted.append(f"\n### Search Results for: {query}")
+                formatted.extend(query_results)
         
-        if query_results:
-            formatted_results.append(f"\n### Search Results for: {query}")
-            formatted_results.extend(query_results)
+        return formatted, urls
+    
+    # First attempt with specified parameters
+    formatted_results, all_urls = await execute_searches(search_depth, min_score)
+    
+    # Retry logic: if results are insufficient and retry is enabled
+    if retry_on_low_results and len(all_urls) < min_total_results and search_depth != "advanced":
+        logging.info(f"Low results ({len(all_urls)}), retrying with advanced depth and lower score threshold...")
+        
+        # Retry with advanced depth and lower score threshold
+        retry_formatted, retry_urls = await execute_searches("advanced", min_score * 0.5)
+        
+        # If retry got more results, use those instead
+        if len(retry_urls) > len(all_urls):
+            formatted_results, all_urls = retry_formatted, retry_urls
+            logging.info(f"Retry successful: got {len(all_urls)} results with advanced depth")
     
     metadata = {
         "queries": queries,
@@ -351,3 +413,4 @@ async def perform_web_search(
     if formatted_results:
         return "\n\n---\n**Web Search Results:**" + "".join(formatted_results), metadata
     return "", metadata
+
