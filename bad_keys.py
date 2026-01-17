@@ -115,6 +115,15 @@ class BadKeysDB:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Message search data table - stores web search results and extracted URL content
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS message_search_data (
+                message_id TEXT PRIMARY KEY,
+                search_results TEXT,
+                tavily_metadata TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         conn.commit()
         self._sync()
     
@@ -329,6 +338,47 @@ class BadKeysDB:
         conn.commit()
         self._sync()
         logging.info(f"Set search decider model preference for user {user_id}: {model}")
+    
+    # Message search data methods for persisting web search results in chat history
+    @_with_reconnect
+    def save_message_search_data(self, message_id: str, search_results: str, tavily_metadata: dict | None = None) -> None:
+        """
+        Save web search results and metadata associated with a Discord message.
+        This allows search results to persist in chat history when conversations are rebuilt.
+        """
+        import json
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO message_search_data (message_id, search_results, tavily_metadata) 
+               VALUES (?, ?, ?)
+               ON CONFLICT(message_id) DO UPDATE SET search_results = ?, tavily_metadata = ?""",
+            (str(message_id), search_results, json.dumps(tavily_metadata) if tavily_metadata else None, 
+             search_results, json.dumps(tavily_metadata) if tavily_metadata else None)
+        )
+        conn.commit()
+        self._sync()
+        logging.info(f"Saved search data for message {message_id}")
+    
+    @_with_reconnect
+    def get_message_search_data(self, message_id: str) -> tuple[str | None, dict | None]:
+        """
+        Get web search results and metadata associated with a Discord message.
+        Returns a tuple of (search_results, tavily_metadata) or (None, None) if not found.
+        """
+        import json
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT search_results, tavily_metadata FROM message_search_data WHERE message_id = ?",
+            (str(message_id),)
+        )
+        result = cursor.fetchone()
+        if result:
+            search_results = result[0]
+            tavily_metadata = json.loads(result[1]) if result[1] else None
+            return search_results, tavily_metadata
+        return None, None
 
 
 # Global instance will be initialized with config values

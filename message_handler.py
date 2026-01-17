@@ -342,6 +342,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 curr_node.has_bad_attachments = len(curr_msg.attachments) > len(good_attachments)
 
+                # Load stored search data from database if available
+                stored_search_results, stored_tavily_metadata = get_bad_keys_db().get_message_search_data(curr_msg.id)
+                if stored_search_results:
+                    curr_node.search_results = stored_search_results
+                    curr_node.tavily_metadata = stored_tavily_metadata
+                    logging.debug(f"Loaded stored search data for message {curr_msg.id}")
+
                 try:
                     if (
                         curr_msg.reference == None
@@ -368,8 +375,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
             if provider == "gemini":
                 parts = []
-                if curr_node.text:
-                    part = types.Part.from_text(text=curr_node.text[:max_text])
+                # Build text content, including stored search results for user messages
+                text_content = curr_node.text[:max_text] if curr_node.text else ""
+                if curr_node.search_results and curr_node.role == "user" and text_content:
+                    text_content = text_content + "\n\n" + curr_node.search_results
+                
+                if text_content:
+                    part = types.Part.from_text(text=text_content)
                     if curr_node.thought_signature:
                         part.thought_signature = curr_node.thought_signature
                     parts.append(part)
@@ -391,6 +403,17 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
             else:
                 content = curr_node.text[:max_text]
+
+            # Include stored search results from history messages
+            if curr_node.search_results and curr_node.role == "user":
+                if isinstance(content, list):
+                    # For multimodal content, append to the text part
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            part["text"] = part["text"] + "\n\n" + curr_node.search_results
+                            break
+                elif content:
+                    content = str(content) + "\n\n" + curr_node.search_results
 
             if content != "":
                 message = dict(content=content, role=curr_node.role)
@@ -502,6 +525,9 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                         break
                             
                             logging.info(f"Web search results appended to user message")
+                            
+                            # Save search results to database for persistence in chat history
+                            get_bad_keys_db().save_message_search_data(new_msg.id, search_results, tavily_metadata)
                             break
 
     # Continue with response generation

@@ -23,5 +23,10 @@ class MsgNode:
     fetch_parent_failed: bool = False
 
     parent_msg: Optional[discord.Message] = None
+    
+    # Web search data for persisting in chat history
+    search_results: Optional[str] = None
+    tavily_metadata: Optional[dict] = None
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
