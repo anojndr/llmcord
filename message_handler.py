@@ -343,13 +343,6 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 curr_node.has_bad_attachments = len(curr_msg.attachments) > len(good_attachments)
 
-                # Load stored search data from database if available
-                stored_search_results, stored_tavily_metadata = get_bad_keys_db().get_message_search_data(curr_msg.id)
-                if stored_search_results:
-                    curr_node.search_results = stored_search_results
-                    curr_node.tavily_metadata = stored_tavily_metadata
-                    logging.debug(f"Loaded stored search data for message {curr_msg.id}")
-
                 try:
                     if (
                         curr_msg.reference == None
@@ -373,6 +366,15 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 except (discord.NotFound, discord.HTTPException):
                     logging.exception("Error fetching next message in the chain")
                     curr_node.fetch_parent_failed = True
+
+            # Load stored search data from database if not already cached
+            # This is outside the text==None block so it runs even for cached nodes
+            if curr_node.search_results is None:
+                stored_search_results, stored_tavily_metadata = get_bad_keys_db().get_message_search_data(curr_msg.id)
+                if stored_search_results:
+                    curr_node.search_results = stored_search_results
+                    curr_node.tavily_metadata = stored_tavily_metadata
+                    logging.debug(f"Loaded stored search data for message {curr_msg.id}")
 
             if provider == "gemini":
                 parts = []
@@ -529,6 +531,11 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             
                             # Save search results to database for persistence in chat history
                             get_bad_keys_db().save_message_search_data(new_msg.id, search_results, tavily_metadata)
+                            
+                            # Also update the cached MsgNode so follow-up requests in the same session get the data
+                            if new_msg.id in msg_nodes:
+                                msg_nodes[new_msg.id].search_results = search_results
+                                msg_nodes[new_msg.id].tavily_metadata = tavily_metadata
                             break
 
     # Continue with response generation
