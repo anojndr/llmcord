@@ -121,9 +121,16 @@ class BadKeysDB:
                 message_id TEXT PRIMARY KEY,
                 search_results TEXT,
                 tavily_metadata TEXT,
+                lens_results TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migration: Add lens_results column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE message_search_data ADD COLUMN lens_results TEXT")
+            conn.commit()
+        except Exception:
+            pass  # Column already exists
         conn.commit()
         self._sync()
     
@@ -341,44 +348,48 @@ class BadKeysDB:
     
     # Message search data methods for persisting web search results in chat history
     @_with_reconnect
-    def save_message_search_data(self, message_id: str, search_results: str, tavily_metadata: dict | None = None) -> None:
+    def save_message_search_data(self, message_id: str, search_results: str = None, tavily_metadata: dict | None = None, lens_results: str = None) -> None:
         """
-        Save web search results and metadata associated with a Discord message.
+        Save web search results, lens results, and metadata associated with a Discord message.
         This allows search results to persist in chat history when conversations are rebuilt.
         """
         import json
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO message_search_data (message_id, search_results, tavily_metadata) 
-               VALUES (?, ?, ?)
-               ON CONFLICT(message_id) DO UPDATE SET search_results = ?, tavily_metadata = ?""",
-            (str(message_id), search_results, json.dumps(tavily_metadata) if tavily_metadata else None, 
-             search_results, json.dumps(tavily_metadata) if tavily_metadata else None)
+            """INSERT INTO message_search_data (message_id, search_results, tavily_metadata, lens_results) 
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(message_id) DO UPDATE SET 
+                   search_results = COALESCE(?, search_results), 
+                   tavily_metadata = COALESCE(?, tavily_metadata),
+                   lens_results = COALESCE(?, lens_results)""",
+            (str(message_id), search_results, json.dumps(tavily_metadata) if tavily_metadata else None, lens_results,
+             search_results, json.dumps(tavily_metadata) if tavily_metadata else None, lens_results)
         )
         conn.commit()
         self._sync()
         logging.info(f"Saved search data for message {message_id}")
     
     @_with_reconnect
-    def get_message_search_data(self, message_id: str) -> tuple[str | None, dict | None]:
+    def get_message_search_data(self, message_id: str) -> tuple[str | None, dict | None, str | None]:
         """
-        Get web search results and metadata associated with a Discord message.
-        Returns a tuple of (search_results, tavily_metadata) or (None, None) if not found.
+        Get web search results, metadata, and lens results associated with a Discord message.
+        Returns a tuple of (search_results, tavily_metadata, lens_results) or (None, None, None) if not found.
         """
         import json
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT search_results, tavily_metadata FROM message_search_data WHERE message_id = ?",
+            "SELECT search_results, tavily_metadata, lens_results FROM message_search_data WHERE message_id = ?",
             (str(message_id),)
         )
         result = cursor.fetchone()
         if result:
             search_results = result[0]
             tavily_metadata = json.loads(result[1]) if result[1] else None
-            return search_results, tavily_metadata
-        return None, None
+            lens_results = result[2]
+            return search_results, tavily_metadata, lens_results
+        return None, None, None
 
 
 # Global instance will be initialized with config values
