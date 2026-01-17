@@ -18,6 +18,7 @@ from google.genai import types
 import httpx
 from openai import AsyncOpenAI
 from PIL import Image
+import tiktoken
 from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -557,6 +558,40 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     )
 
 
+def count_conversation_tokens(messages: list) -> int:
+    """Count tokens in the entire conversation using tiktoken."""
+    try:
+        # Use o200k_base encoding (used by GPT-4o and modern models)
+        enc = tiktoken.get_encoding("o200k_base")
+        total_tokens = 0
+        
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # For multimodal content, count tokens in text parts only
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        total_tokens += len(enc.encode(part.get("text", "")))
+            elif isinstance(content, str):
+                total_tokens += len(enc.encode(content))
+            
+            # Count role tokens (approximation)
+            total_tokens += len(enc.encode(msg.get("role", "")))
+        
+        return total_tokens
+    except Exception:
+        return 0
+
+
+def count_text_tokens(text: str) -> int:
+    """Count tokens in a text string using tiktoken."""
+    try:
+        enc = tiktoken.get_encoding("o200k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return 0
+
+
 async def generate_response(
     new_msg, discord_bot, msg_nodes, messages, gemini_contents, user_warnings,
     provider, model, actual_model, provider_slash_model, base_url, api_keys, model_parameters,
@@ -570,6 +605,9 @@ async def generate_response(
     msg_nodes[processing_msg.id] = MsgNode(parent_msg=new_msg)
     await msg_nodes[processing_msg.id].lock.acquire()
     response_contents = []
+    
+    # Count input tokens (chat history + latest query)
+    input_tokens = count_conversation_tokens(messages)
 
     openai_kwargs = dict(model=actual_model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
 
@@ -578,7 +616,7 @@ async def generate_response(
     else:
         max_message_length = 4096 - len(STREAMING_INDICATOR)
         embed = discord.Embed.from_dict(dict(fields=[dict(name=warning, value="", inline=False) for warning in sorted(user_warnings)]))
-        embed.set_footer(text=f"Model: {provider_slash_model}")
+        embed.set_footer(text=f"{provider_slash_model} | In: {input_tokens:,}")
 
     async def reply_helper(**reply_kwargs) -> None:
         reply_target = new_msg if not response_msgs else response_msgs[-1]
@@ -895,11 +933,16 @@ async def generate_response(
         full_response = "".join(response_contents)
         response_view = ResponseView(full_response, grounding_metadata, tavily_metadata)
         
+        # Count output tokens and update footer with total
+        output_tokens = count_text_tokens(full_response)
+        total_tokens = input_tokens + output_tokens
+        
         # Update the last message with the final view
         last_msg_index = len(response_msgs) - 1
         if last_msg_index < len(response_contents):
             embed.description = response_contents[last_msg_index]
             embed.color = EMBED_COLOR_COMPLETE
+            embed.set_footer(text=f"{provider_slash_model} | In: {input_tokens:,} Out: {output_tokens:,} Total: {total_tokens:,}")
             await response_msgs[last_msg_index].edit(embed=embed, view=response_view)
 
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
