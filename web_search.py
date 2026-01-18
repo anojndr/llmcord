@@ -265,7 +265,7 @@ async def tavily_search(
             "search_depth": search_depth,
             "include_answer": False,
             "include_raw_content": "markdown",  # Get full page content in markdown format
-            "auto_parameters": True,  # Let Tavily automatically optimize parameters based on query intent
+            "auto_parameters": False,  # Disabled - was causing Tavily to misinterpret queries and return irrelevant results
         }
         
         # Add optional parameters only when set (Tavily prefers them unset vs null)
