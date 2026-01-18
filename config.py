@@ -51,17 +51,31 @@ def get_config(filename: str = "config.yaml") -> dict[str, Any]:
             if not os.path.exists(filepath):
                 filepath = os.path.join("/etc/secrets", filename)
             
+            if not os.path.exists(filepath):
+                raise FileNotFoundError(f"Config file not found: {filename}")
+            
             file_mtime = os.path.getmtime(filepath)
             
             # Only reload if file was modified
             if file_mtime != _config_mtime or not _config_cache:
                 _config_mtime = file_mtime
                 with open(filepath, encoding="utf-8") as file:
-                    _config_cache = yaml.safe_load(file)
-        except FileNotFoundError:
+                    loaded_config = yaml.safe_load(file)
+                    # Handle empty/corrupted YAML that returns None
+                    if loaded_config is None:
+                        raise ValueError(f"Config file is empty or corrupted: {filepath}")
+                    _config_cache = loaded_config
+        except FileNotFoundError as e:
             # Fallback for edge cases
-            with open(os.path.join("/etc/secrets", filename), encoding="utf-8") as file:
-                _config_cache = yaml.safe_load(file)
+            fallback_path = os.path.join("/etc/secrets", filename)
+            try:
+                with open(fallback_path, encoding="utf-8") as file:
+                    loaded_config = yaml.safe_load(file)
+                    if loaded_config is None:
+                        raise ValueError(f"Config file is empty or corrupted: {fallback_path}")
+                    _config_cache = loaded_config
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Config file '{filename}' not found in current directory or /etc/secrets/") from e
     
     return _config_cache
 

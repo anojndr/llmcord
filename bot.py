@@ -86,6 +86,9 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
     # Get user's current model preference (or default)
     current_user_model = db.get_user_model(user_id)
     if current_user_model is None:
+        if not config.get("models"):
+            await interaction.response.send_message("No models are configured. Please contact an administrator.", ephemeral=True)
+            return
         current_user_model = next(iter(config["models"]))  # Default model
 
     if model == current_user_model:
@@ -111,6 +114,8 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
     db = get_bad_keys_db()
     user_model = db.get_user_model(user_id)
     if user_model is None:
+        if not config.get("models"):
+            return []
         user_model = next(iter(config["models"]))  # Default model
     
     # Validate that user's saved model still exists in config
@@ -136,7 +141,11 @@ async def search_decider_model_command(interaction: discord.Interaction, model: 
     current_user_model = db.get_user_search_decider_model(user_id)
     default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
     if current_user_model is None:
-        current_user_model = default_decider
+        current_user_model = default_decider if default_decider in config.get("models", {}) else None
+    
+    if current_user_model is None:
+        await interaction.response.send_message("No valid search decider model configured.", ephemeral=True)
+        return
 
     if model == current_user_model:
         output = f"Your current search decider model: `{current_user_model}`"
@@ -165,8 +174,8 @@ async def search_decider_model_autocomplete(interaction: discord.Interaction, cu
         user_model = default_decider
     
     # Validate that user's saved model still exists in config
-    if user_model not in config["models"]:
-        user_model = default_decider if default_decider in config["models"] else next(iter(config["models"]))
+    if user_model not in config.get("models", {}):
+        user_model = default_decider if default_decider in config.get("models", {}) else (next(iter(config.get("models", {})), None) or "")
 
     choices = [Choice(name=f"◉ {user_model} (current)", value=user_model)] if curr_str.lower() in user_model.lower() else []
     choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != user_model and curr_str.lower() in model.lower()]
@@ -207,8 +216,12 @@ async def on_message(new_msg: discord.Message) -> None:
     user_model = db.get_user_model(user_id)
     
     # Fall back to default model if user hasn't set a preference or if their saved model is no longer valid
-    default_model = next(iter(config["models"]))
-    if user_model is None or user_model not in config["models"]:
+    default_model = next(iter(config.get("models", {})), None)
+    if not default_model:
+        logging.error("No models configured in config.yaml")
+        return
+    
+    if user_model is None or user_model not in config.get("models", {}):
         user_model = default_model
     
     # Create a reference list to pass user's model by reference

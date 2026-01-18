@@ -386,7 +386,11 @@ class BadKeysDB:
         result = cursor.fetchone()
         if result:
             search_results = result[0]
-            tavily_metadata = json.loads(result[1]) if result[1] else None
+            try:
+                tavily_metadata = json.loads(result[1]) if result[1] else None
+            except json.JSONDecodeError:
+                logging.warning(f"Failed to decode tavily_metadata for message {message_id}, returning None")
+                tavily_metadata = None
             lens_results = result[2]
             return search_results, tavily_metadata, lens_results
         return None, None, None

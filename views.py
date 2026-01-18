@@ -135,10 +135,10 @@ class SourceButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         embed = discord.Embed(title="Sources", color=discord.Color.blue())
 
-        if self.metadata.web_search_queries:
+        if self.metadata and self.metadata.web_search_queries:
             embed.add_field(name="Search Queries", value="\n".join(f"• {q}" for q in self.metadata.web_search_queries), inline=False)
 
-        if self.metadata.grounding_chunks:
+        if self.metadata and self.metadata.grounding_chunks:
             sources = []
             for i, chunk in enumerate(self.metadata.grounding_chunks):
                 if chunk.web:
@@ -157,6 +157,10 @@ class SourceButton(discord.ui.Button):
 
                 if current_chunk:
                     embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
+        
+        # Handle edge case where no content was added to the embed
+        if not embed.fields:
+            embed.add_field(name="Sources", value="No source information available.", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -184,12 +188,13 @@ class TavilySourcesView(discord.ui.View):
     
     def __init__(self, tavily_metadata: dict):
         super().__init__(timeout=300)  # 5 minute timeout
-        self.tavily_metadata = tavily_metadata
+        # Handle None or malformed metadata
+        self.tavily_metadata = tavily_metadata or {}
         self.current_page = 0
         
-        # Prepare source entries
-        self.queries = tavily_metadata.get("queries", [])
-        self.urls = tavily_metadata.get("urls", [])
+        # Prepare source entries with defensive defaults
+        self.queries = self.tavily_metadata.get("queries") or []
+        self.urls = self.tavily_metadata.get("urls") or []
         self.sources = self._prepare_sources()
         self.pages = self._paginate_sources()
         self.total_pages = len(self.pages)
@@ -352,10 +357,10 @@ class SourceView(discord.ui.View):
     async def show_sources(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="Sources", color=discord.Color.blue())
 
-        if self.metadata.web_search_queries:
+        if self.metadata and self.metadata.web_search_queries:
             embed.add_field(name="Search Queries", value="\n".join(f"• {q}" for q in self.metadata.web_search_queries), inline=False)
 
-        if self.metadata.grounding_chunks:
+        if self.metadata and self.metadata.grounding_chunks:
             sources = []
             for i, chunk in enumerate(self.metadata.grounding_chunks):
                 if chunk.web:
@@ -374,5 +379,9 @@ class SourceView(discord.ui.View):
 
                 if current_chunk:
                     embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
+        
+        # Handle edge case where no content was added to the embed
+        if not embed.fields:
+            embed.add_field(name="Sources", value="No source information available.", inline=False)
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
