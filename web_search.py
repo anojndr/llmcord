@@ -143,7 +143,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                     config=gemini_config
                 )
                 
-                response_text = response.text.strip()
+                response_text = (response.text or "").strip()
             else:
                 # OpenAI-compatible API
                 openai_messages = [{"role": "system", "content": SEARCH_DECIDER_SYSTEM_PROMPT}]
@@ -187,8 +187,19 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                     response_text = response_text[4:]
                 response_text = response_text.strip()
             
-            result = json.loads(response_text)
-            return result
+            try:
+                result = json.loads(response_text)
+                # Validate response structure
+                if not isinstance(result, dict):
+                    logging.warning(f"Web search decider returned non-dict response: {response_text[:100]}")
+                    return {"needs_search": False}
+                return result
+            except json.JSONDecodeError as json_err:
+                logging.warning(f"Failed to parse JSON response from search decider: {json_err}. Response: {response_text[:200]}")
+                # Attempt to extract needs_search from malformed response
+                if '"needs_search": false' in response_text.lower() or '"needs_search":false' in response_text.lower():
+                    return {"needs_search": False}
+                return {"needs_search": False}
         except Exception as e:
             logging.exception(f"Error in web search decider (attempt {attempt_count}): {e}")
             

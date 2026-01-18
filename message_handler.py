@@ -39,6 +39,15 @@ from views import ResponseView, SourceView, SourceButton, TavilySourceButton
 from web_search import decide_web_search, perform_web_search
 
 
+def _get_embed_text(embed: discord.Embed) -> str:
+    """Safely extract text content from a Discord embed, handling None values."""
+    parts = [embed.title, embed.description]
+    # Handle edge case where footer is None
+    if embed.footer:
+        parts.append(embed.footer.text)
+    return "\n".join(filter(None, parts))
+
+
 async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddit_client, 
                           msg_nodes, curr_model_lock, curr_model_ref):
     """Main message processing function."""
@@ -92,9 +101,25 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     # Thread-safe read of current model
     async with curr_model_lock:
         provider_slash_model = curr_model_ref[0]
-    provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
+    
+    # Validate provider/model format
+    try:
+        provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
+    except ValueError:
+        logging.error(f"Invalid model format: {provider_slash_model}. Expected 'provider/model'.")
+        embed = discord.Embed(description="❌ Invalid model configuration. Please contact an administrator.", color=EMBED_COLOR_INCOMPLETE)
+        await processing_msg.edit(embed=embed)
+        return
 
-    provider_config = config["providers"][provider]
+    # Validate provider exists in config
+    providers = config.get("providers", {})
+    if provider not in providers:
+        logging.error(f"Provider '{provider}' not found in config.")
+        embed = discord.Embed(description=f"❌ Provider '{provider}' is not configured. Please contact an administrator.", color=EMBED_COLOR_INCOMPLETE)
+        await processing_msg.edit(embed=embed)
+        return
+    
+    provider_config = providers[provider]
 
     base_url = provider_config.get("base_url")
     api_keys = provider_config.get("api_key", "sk-no-key-required")
@@ -185,14 +210,18 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                         tweet_id = tweet_id_match.group(1)
                                         try:
                                             tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
-                                            tweet_text = f"\n--- Tweet from @{tweet.user.username} ({twitter_url}) ---\n{tweet.rawContent}"
+                                            # Handle edge case where tweet or user is None
+                                            if not tweet or not tweet.user:
+                                                continue
+                                            tweet_text = f"\n--- Tweet from @{tweet.user.username or 'unknown'} ({twitter_url}) ---\n{tweet.rawContent or ''}"
                                             
                                             if max_tweet_replies > 0:
                                                 replies = await asyncio.wait_for(gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies)), timeout=10)
                                                 if replies:
                                                     tweet_text += "\n\nReplies:"
                                                     for reply in replies:
-                                                        tweet_text += f"\n- @{reply.user.username}: {reply.rawContent}"
+                                                        if reply and reply.user:
+                                                            tweet_text += f"\n- @{reply.user.username or 'unknown'}: {reply.rawContent or ''}"
                                             
                                             twitter_content.append(tweet_text)
                                         except Exception:
@@ -253,7 +282,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 curr_node.text = "\n".join(
                     ([cleaned_content] if cleaned_content else [])
-                    + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
+                    + [_get_embed_text(embed) for embed in curr_msg.embeds]
                     + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
                     + [att["text"] for att in processed_attachments if att["content_type"].startswith("text")]
                 )
@@ -298,38 +327,55 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 for tweet_id in re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
                     try:
                         tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
-                        tweets.append(f"Tweet from @{tweet.user.username}:\n{tweet.rawContent}")
+                        # Handle edge case where tweet or user is None
+                        if not tweet or not tweet.user:
+                            continue
+                        tweets.append(f"Tweet from @{tweet.user.username or 'unknown'}:\n{tweet.rawContent or ''}")
 
                         if max_tweet_replies > 0:
                             replies = await asyncio.wait_for(gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies)), timeout=10)
                             if replies:
                                 tweets.append("\nReplies:")
                                 for reply in replies:
-                                    tweets.append(f"- @{reply.user.username}: {reply.rawContent}")
+                                    if reply and reply.user:
+                                        tweets.append(f"- @{reply.user.username or 'unknown'}: {reply.rawContent or ''}")
                     except Exception:
                         pass
 
                 reddit_posts = []
                 if reddit_client:
-                    for post_url in re.findall(r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?=\&%]*)|redd\.it\/[a-zA-Z0-9_]+))", cleaned_content):
+                    for post_url in re.findall(r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)|redd\.it\/[a-zA-Z0-9_]+))", cleaned_content):
                         try:
                             submission = await reddit_client.submission(url=post_url)
                             
-                            post_text = f"Reddit Post: {submission.title}\nSubreddit: r/{submission.subreddit.display_name}\nAuthor: u/{submission.author.name if submission.author else '[deleted]'}\n\n{submission.selftext}"
+                            # Handle edge case where submission is missing key attributes
+                            if not submission:
+                                continue
                             
-                            if not submission.is_self and submission.url:
+                            # Safely access attributes with defaults
+                            title = getattr(submission, 'title', 'Untitled')
+                            subreddit_name = submission.subreddit.display_name if submission.subreddit else 'unknown'
+                            author_name = submission.author.name if submission.author else '[deleted]'
+                            selftext = getattr(submission, 'selftext', '') or ''
+                            
+                            post_text = f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\nAuthor: u/{author_name}\n\n{selftext}"
+                            
+                            if not getattr(submission, 'is_self', True) and getattr(submission, 'url', None):
                                 post_text += f"\nLink: {submission.url}"
 
                             submission.comment_sort = 'top'
                             await submission.comments()
-                            top_comments = submission.comments.list()[:5]
+                            comments_list = submission.comments.list() if submission.comments else []
+                            top_comments = comments_list[:5]
                             
                             if top_comments:
                                 post_text += "\n\nTop Comments:"
                                 for comment in top_comments:
                                     if isinstance(comment, asyncpraw.models.MoreComments):
                                         continue
-                                    post_text += f"\n- u/{comment.author.name if comment.author else '[deleted]'}: {comment.body}"
+                                    comment_author = comment.author.name if comment.author else '[deleted]'
+                                    comment_body = getattr(comment, 'body', '') or ''
+                                    post_text += f"\n- u/{comment_author}: {comment_body}"
                             
                             reddit_posts.append(post_text)
                         except Exception:
@@ -337,7 +383,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 curr_node.text = "\n".join(
                     ([cleaned_content] if cleaned_content else [])
-                    + ["\n".join(filter(None, (embed.title, embed.description, embed.footer.text))) for embed in curr_msg.embeds]
+                    + [_get_embed_text(embed) for embed in curr_msg.embeds]
                     + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
                     + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
                     + yt_transcripts
@@ -442,7 +488,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 messages.append(message)
 
-            if len(curr_node.text) > max_text:
+            if curr_node.text and len(curr_node.text) > max_text:
                 user_warnings.add(f"⚠️ Max {max_text:,} characters per message")
             if len(curr_node.images) > max_images:
                 user_warnings.add(f"⚠️ Max {max_images} image{'' if max_images == 1 else 's'} per message" if max_images > 0 else "⚠️ Can't see images")
@@ -454,6 +500,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
             curr_msg = curr_node.parent_msg
 
     logging.info(f"Message received (user ID: {new_msg.author.id}, attachments: {len(new_msg.attachments)}, conversation length: {len(messages)}):\n{new_msg.content}")
+
+    # Handle edge case: no valid messages could be built
+    if not messages:
+        logging.warning("No valid messages could be built from the conversation.")
+        embed = discord.Embed(description="❌ Could not process your message. Please try again.", color=EMBED_COLOR_INCOMPLETE)
+        await processing_msg.edit(embed=embed)
+        return
 
     system_prompt = config.get("system_prompt")
 
