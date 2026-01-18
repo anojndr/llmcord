@@ -363,10 +363,6 @@ async def perform_web_search(
             
             for item in result.get("results", []):
                 score = item.get("score", 0)
-                # Apply score filtering
-                if score < score_threshold:
-                    logging.debug(f"Skipping low-score result (score={score:.2f}): {item.get('title', 'No title')}")
-                    continue
                 
                 title = item.get("title", "No title")
                 url = item.get("url", "")
