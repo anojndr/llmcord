@@ -96,7 +96,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                         for part in content:
                             if isinstance(part, dict):
                                 if part.get("type") == "text" and part.get("text"):
-                                    parts.append(types.Part.from_text(text=str(part["text"])[:5000]))
+                                    parts.append(types.Part.from_text(text=str(part["text"])))
                                 elif part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
                                     # Extract base64 image data
                                     image_url = part["image_url"]["url"]
@@ -110,7 +110,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                                         except Exception:
                                             pass
                     elif content:
-                        parts.append(types.Part.from_text(text=str(content)[:5000]))
+                        parts.append(types.Part.from_text(text=str(content)))
                     
                     if parts:
                         search_decider_contents.append(types.Content(role=role, parts=parts))
@@ -158,7 +158,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                         # Keep multimodal format for OpenAI
                         openai_messages.append({"role": role, "content": content})
                     elif content:
-                        openai_messages.append({"role": role, "content": str(content)[:5000]})
+                        openai_messages.append({"role": role, "content": str(content)})
                 
                 if len(openai_messages) <= 1:  # Only system prompt
                     return {"needs_search": False}
@@ -271,7 +271,7 @@ async def tavily_search(
         
         # Build request payload
         payload = {
-            "query": query[:400],  # Best practice: keep under 400 chars
+            "query": query,
             "max_results": max_results,
             "search_depth": search_depth,
             "include_answer": False,
