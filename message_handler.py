@@ -640,7 +640,7 @@ async def generate_response(
     else:
         max_message_length = 4096 - len(STREAMING_INDICATOR)
         embed = discord.Embed.from_dict(dict(fields=[dict(name=warning, value="", inline=False) for warning in sorted(user_warnings)]))
-        embed.set_footer(text=f"{provider_slash_model} | In: {input_tokens:,}")
+        embed.set_footer(text=f"{provider_slash_model} | total tokens: {input_tokens:,}")
 
     async def reply_helper(**reply_kwargs) -> None:
         reply_target = new_msg if not response_msgs else response_msgs[-1]
@@ -966,7 +966,7 @@ async def generate_response(
         if last_msg_index < len(response_contents):
             embed.description = response_contents[last_msg_index]
             embed.color = EMBED_COLOR_COMPLETE
-            embed.set_footer(text=f"{provider_slash_model} | In: {input_tokens:,} Out: {output_tokens:,} Total: {total_tokens:,}")
+            embed.set_footer(text=f"{provider_slash_model} | total tokens: {total_tokens:,}")
             await response_msgs[last_msg_index].edit(embed=embed, view=response_view)
 
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
