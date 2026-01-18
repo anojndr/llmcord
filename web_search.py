@@ -298,12 +298,9 @@ async def perform_web_search(
     tavily_api_keys: list[str], 
     max_results_per_query: int = 5, 
     max_chars_per_url: int = 2000,
-    search_depth: str = "basic",
     min_score: float = 0.3,
     topic: str | None = None,
-    time_range: str | None = None,
-    retry_on_low_results: bool = True,
-    min_total_results: int = 2
+    time_range: str | None = None
 ) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
@@ -314,21 +311,16 @@ async def perform_web_search(
     - Concurrent requests with asyncio.gather()
     - API key rotation for load distribution
     - Score-based filtering (min_score) for relevance
-    - Configurable search_depth (basic/advanced/fast/ultra-fast)
-    - Retry with advanced depth when results are insufficient
+    - Always uses "advanced" search depth for highest quality results
     
     Args:
         queries: List of search queries
         tavily_api_keys: List of Tavily API keys for rotation
         max_results_per_query: Maximum number of URLs per query (default: 5)
         max_chars_per_url: Maximum characters per URL content (default: 2000)
-        search_depth: Tavily search depth - "basic" (balanced), "advanced" (highest relevance), 
-                      "fast" (low latency), or "ultra-fast" (lowest latency)
         min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.3)
         topic: Optional topic filter - "general", "news", or "finance"
         time_range: Optional time filter - "day", "week", "month", or "year"
-        retry_on_low_results: If True, retry with advanced depth when results < min_total_results
-        min_total_results: Minimum results needed before triggering retry (default: 2)
     
     Returns:
         tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...]})
@@ -386,20 +378,8 @@ async def perform_web_search(
         
         return formatted, urls
     
-    # First attempt with specified parameters
-    formatted_results, all_urls = await execute_searches(search_depth, min_score)
-    
-    # Retry logic: if results are insufficient and retry is enabled
-    if retry_on_low_results and len(all_urls) < min_total_results and search_depth != "advanced":
-        logging.info(f"Low results ({len(all_urls)}), retrying with advanced depth and lower score threshold...")
-        
-        # Retry with advanced depth and lower score threshold
-        retry_formatted, retry_urls = await execute_searches("advanced", min_score * 0.5)
-        
-        # If retry got more results, use those instead
-        if len(retry_urls) > len(all_urls):
-            formatted_results, all_urls = retry_formatted, retry_urls
-            logging.info(f"Retry successful: got {len(all_urls)} results with advanced depth")
+    # Always use advanced depth for best results
+    formatted_results, all_urls = await execute_searches("advanced", min_score)
     
     metadata = {
         "queries": queries,
