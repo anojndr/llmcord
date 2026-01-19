@@ -346,6 +346,32 @@ class BadKeysDB:
         self._sync()
         logging.info(f"Set search decider model preference for user {user_id}: {model}")
     
+    @_with_reconnect
+    def reset_all_user_model_preferences(self) -> int:
+        """Reset all user model preferences. Returns the number of preferences deleted."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM user_model_preferences")
+        count = cursor.fetchone()[0]
+        cursor.execute("DELETE FROM user_model_preferences")
+        conn.commit()
+        self._sync()
+        logging.info(f"Reset all user model preferences ({count} users affected)")
+        return count
+    
+    @_with_reconnect
+    def reset_all_user_search_decider_preferences(self) -> int:
+        """Reset all user search decider model preferences. Returns the number of preferences deleted."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM user_search_decider_preferences")
+        count = cursor.fetchone()[0]
+        cursor.execute("DELETE FROM user_search_decider_preferences")
+        conn.commit()
+        self._sync()
+        logging.info(f"Reset all user search decider model preferences ({count} users affected)")
+        return count
+    
     # Message search data methods for persisting web search results in chat history
     @_with_reconnect
     def save_message_search_data(self, message_id: str, search_results: str = None, tavily_metadata: dict | None = None, lens_results: str = None) -> None:
