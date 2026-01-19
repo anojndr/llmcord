@@ -852,7 +852,7 @@ async def generate_response(
 
     grounding_metadata = None
     attempt_count = 0
-    max_retry_attempts = 10  # Maximum number of retry attempts to prevent infinite loops
+    max_retry_attempts = config.get("max_response_retries", 10)  # Maximum number of retry attempts
     
     # Get good keys (filter out known bad ones - synced with search decider)
     good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
