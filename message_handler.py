@@ -434,10 +434,10 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 if stored_search_results and curr_node.search_results is None:
                     curr_node.search_results = stored_search_results
                     curr_node.tavily_metadata = stored_tavily_metadata
-                    logging.debug(f"Loaded stored search data for message {curr_msg.id}")
+                    logging.info(f"Loaded stored search data for message {curr_msg.id}")
                 if stored_lens_results and curr_node.lens_results is None:
                     curr_node.lens_results = stored_lens_results
-                    logging.debug(f"Loaded stored lens results for message {curr_msg.id}")
+                    logging.info(f"Loaded stored lens results for message {curr_msg.id}")
 
             if provider == "gemini":
                 parts = []
