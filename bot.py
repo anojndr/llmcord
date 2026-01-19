@@ -183,6 +183,33 @@ async def search_decider_model_autocomplete(interaction: discord.Interaction, cu
     return choices[:25]
 
 
+@discord_bot.tree.command(name="resetallpreferences", description="[Owner] Reset all users' model preferences")
+async def reset_all_preferences_command(interaction: discord.Interaction) -> None:
+    # Only allow the bot owner to use this command
+    OWNER_USER_ID = 676735636656357396
+    if interaction.user.id != OWNER_USER_ID:
+        await interaction.response.send_message(
+            "❌ This command can only be used by the bot owner.", 
+            ephemeral=True
+        )
+        return
+    
+    db = get_bad_keys_db()
+    
+    # Reset both preferences
+    model_count = db.reset_all_user_model_preferences()
+    decider_count = db.reset_all_user_search_decider_preferences()
+    
+    await interaction.response.send_message(
+        f"✅ Successfully reset all user preferences:\n"
+        f"• **Main model preferences**: {model_count} user(s) reset\n"
+        f"• **Search decider model preferences**: {decider_count} user(s) reset\n\n"
+        f"All users will now use the default models.",
+        ephemeral=True
+    )
+    logging.info(f"Admin {interaction.user.id} reset all user preferences (models: {model_count}, deciders: {decider_count})")
+
+
 @discord_bot.event
 async def on_ready() -> None:
     # Generate bot invite link using the bot's application ID
