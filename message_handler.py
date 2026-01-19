@@ -429,13 +429,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
             # Load stored search data from database if not already cached
             # This is outside the text==None block so it runs even for cached nodes
-            if curr_node.search_results is None and curr_node.lens_results is None:
+            if curr_node.search_results is None or curr_node.lens_results is None:
                 stored_search_results, stored_tavily_metadata, stored_lens_results = get_bad_keys_db().get_message_search_data(curr_msg.id)
-                if stored_search_results:
+                if stored_search_results and curr_node.search_results is None:
                     curr_node.search_results = stored_search_results
                     curr_node.tavily_metadata = stored_tavily_metadata
                     logging.debug(f"Loaded stored search data for message {curr_msg.id}")
-                if stored_lens_results:
+                if stored_lens_results and curr_node.lens_results is None:
                     curr_node.lens_results = stored_lens_results
                     logging.debug(f"Loaded stored lens results for message {curr_msg.id}")
 
