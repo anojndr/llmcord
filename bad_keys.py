@@ -403,6 +403,9 @@ class BadKeysDB:
         Returns a tuple of (search_results, tavily_metadata, lens_results) or (None, None, None) if not found.
         """
         import json
+        # Sync with Turso cloud before reading to ensure we have the latest data
+        # This is especially important after bot restarts
+        self._sync()
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -418,6 +421,7 @@ class BadKeysDB:
                 logging.warning(f"Failed to decode tavily_metadata for message {message_id}, returning None")
                 tavily_metadata = None
             lens_results = result[2]
+            logging.info(f"Retrieved search data for message {message_id}: search_results={bool(search_results)}, tavily_metadata={bool(tavily_metadata)}, lens_results={bool(lens_results)}")
             return search_results, tavily_metadata, lens_results
         return None, None, None
 
