@@ -194,20 +194,22 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
         )
         return
     
+    # Defer the response since database operations may take time
+    await interaction.response.defer(ephemeral=True)
+    
     db = get_bad_keys_db()
     
     # Reset both preferences
     model_count = db.reset_all_user_model_preferences()
     decider_count = db.reset_all_user_search_decider_preferences()
     
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"✅ Successfully reset all user preferences:\n"
         f"• **Main model preferences**: {model_count} user(s) reset\n"
         f"• **Search decider model preferences**: {decider_count} user(s) reset\n\n"
-        f"All users will now use the default models.",
-        ephemeral=True
+        f"All users will now use the default models."
     )
-    logging.info(f"Admin {interaction.user.id} reset all user preferences (models: {model_count}, deciders: {decider_count})")
+    logging.info(f"Owner {interaction.user.id} reset all user preferences (models: {model_count}, deciders: {decider_count})")
 
 
 @discord_bot.event
