@@ -852,6 +852,7 @@ async def generate_response(
 
     grounding_metadata = None
     attempt_count = 0
+    max_retry_attempts = 10  # Maximum number of retry attempts to prevent infinite loops
     
     # Get good keys (filter out known bad ones - synced with search decider)
     good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
@@ -967,29 +968,33 @@ async def generate_response(
             if current_api_key in good_keys:
                 good_keys.remove(current_api_key)
             
+            # Check if we've exceeded maximum retry attempts
+            if attempt_count >= max_retry_attempts:
+                error_text = "❌ I encountered too many errors while generating a response. Please try again later."
+
+                if use_plain_responses:
+                    layout = LayoutView().add_item(TextDisplay(content=error_text))
+                    if response_msgs:
+                        await response_msgs[-1].edit(view=layout)
+                    else:
+                        await reply_helper(view=layout)
+                    response_contents = [error_text]
+                else:
+                    embed.description = error_text
+                    embed.color = EMBED_COLOR_INCOMPLETE
+                    if response_msgs:
+                        await response_msgs[-1].edit(embed=embed, view=None)
+                    else:
+                        await reply_helper(embed=embed)
+                    response_contents = [error_text]
+                break
+            
             # Check if we've exhausted all keys after reset
             if not good_keys:
-                # Check if we've already tried resetting once in this run
-                if attempt_count >= len(api_keys) * 2:  # Tried all keys at least twice
-                    error_text = "I encountered too many errors with all available API keys. Please try again later."
-
-                    if use_plain_responses:
-                        await reply_helper(content=error_text)
-                        response_contents = [error_text]
-                    else:
-                        embed.description = error_text
-                        embed.color = EMBED_COLOR_INCOMPLETE
-                        if response_msgs:
-                            await response_msgs[-1].edit(embed=embed, view=None)
-                        else:
-                            await reply_helper(embed=embed)
-                        response_contents = [error_text]
-                    break
-                else:
-                    # Reset and try again with all keys
-                    logging.warning(f"All keys exhausted for provider '{provider}'. Resetting synced keys for retry...")
-                    get_bad_keys_db().reset_provider_keys_synced(provider)
-                    good_keys = api_keys.copy()
+                # Reset and try again with all keys (up to max_retry_attempts)
+                logging.warning(f"All keys exhausted for provider '{provider}'. Resetting synced keys for retry...")
+                get_bad_keys_db().reset_provider_keys_synced(provider)
+                good_keys = api_keys.copy()
 
     if not use_plain_responses and len(response_msgs) > len(response_contents):
         for msg in response_msgs[len(response_contents):]:
