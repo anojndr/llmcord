@@ -86,3 +86,33 @@ def clear_config_cache() -> None:
     _config_cache = {}
     _config_mtime = 0
     _config_check_time = 0
+
+
+def ensure_list(value: Any) -> list:
+    """
+    Convert a value to a list if it isn't one already.
+    
+    This is commonly needed for API keys which may be configured as either
+    a single string or a list of strings.
+    
+    Args:
+        value: A string, list, or None
+        
+    Returns:
+        - If value is None: empty list
+        - If value is a string: single-element list containing that string
+        - If value is already a list: return as-is
+    
+    Examples:
+        >>> ensure_list("key123")
+        ['key123']
+        >>> ensure_list(["key1", "key2"])
+        ['key1', 'key2']
+        >>> ensure_list(None)
+        []
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)

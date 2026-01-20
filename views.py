@@ -125,6 +125,70 @@ class ResponseView(discord.ui.View):
             )
 
 
+def add_chunked_embed_field(embed: discord.Embed, items: list[str], base_name: str, field_limit: int = 1024) -> None:
+    """
+    Add items to embed fields, splitting into multiple fields if content exceeds limit.
+    
+    Args:
+        embed: The Discord embed to add fields to
+        items: List of strings to add
+        base_name: Base name for the field (e.g., "Sources", "Search Results")
+        field_limit: Maximum characters per field (default: 1024)
+    """
+    if not items:
+        return
+    
+    current_chunk = ""
+    field_count = 1
+    
+    for item in items:
+        if len(current_chunk) + len(item) + 1 > field_limit:
+            field_name = f"{base_name} ({field_count})" if field_count > 1 else base_name
+            embed.add_field(name=field_name, value=current_chunk, inline=False)
+            current_chunk = item
+            field_count += 1
+        else:
+            current_chunk = (current_chunk + "\n" + item) if current_chunk else item
+    
+    if current_chunk:
+        field_name = f"{base_name} ({field_count})" if field_count > 1 else base_name
+        embed.add_field(name=field_name, value=current_chunk, inline=False)
+
+
+def build_grounding_sources_embed(metadata: types.GroundingMetadata) -> discord.Embed:
+    """
+    Build a Discord embed showing sources from Gemini grounding metadata.
+    
+    Args:
+        metadata: Gemini GroundingMetadata containing search queries and chunks
+    
+    Returns:
+        A Discord Embed with the formatted sources
+    """
+    embed = discord.Embed(title="Sources", color=discord.Color.blue())
+    
+    if metadata and metadata.web_search_queries:
+        embed.add_field(
+            name="Search Queries", 
+            value="\n".join(f"• {q}" for q in metadata.web_search_queries), 
+            inline=False
+        )
+    
+    if metadata and metadata.grounding_chunks:
+        sources = [
+            f"{i+1}. [{chunk.web.title}]({chunk.web.uri})"
+            for i, chunk in enumerate(metadata.grounding_chunks)
+            if chunk.web
+        ]
+        add_chunked_embed_field(embed, sources, "Search Results")
+    
+    # Handle edge case where no content was added to the embed
+    if not embed.fields:
+        embed.add_field(name="Sources", value="No source information available.", inline=False)
+    
+    return embed
+
+
 class SourceButton(discord.ui.Button):
     """Button to show sources from grounding metadata"""
     
@@ -133,35 +197,7 @@ class SourceButton(discord.ui.Button):
         self.metadata = metadata
     
     async def callback(self, interaction: discord.Interaction):
-        embed = discord.Embed(title="Sources", color=discord.Color.blue())
-
-        if self.metadata and self.metadata.web_search_queries:
-            embed.add_field(name="Search Queries", value="\n".join(f"• {q}" for q in self.metadata.web_search_queries), inline=False)
-
-        if self.metadata and self.metadata.grounding_chunks:
-            sources = []
-            for i, chunk in enumerate(self.metadata.grounding_chunks):
-                if chunk.web:
-                    sources.append(f"{i+1}. [{chunk.web.title}]({chunk.web.uri})")
-
-            if sources:
-                current_chunk = ""
-                field_count = 1
-                for source in sources:
-                    if len(current_chunk) + len(source) + 1 > 1024:
-                        embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
-                        current_chunk = source
-                        field_count += 1
-                    else:
-                        current_chunk = (current_chunk + "\n" + source) if current_chunk else source
-
-                if current_chunk:
-                    embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
-        
-        # Handle edge case where no content was added to the embed
-        if not embed.fields:
-            embed.add_field(name="Sources", value="No source information available.", inline=False)
-
+        embed = build_grounding_sources_embed(self.metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -268,20 +304,7 @@ class TavilySourcesView(discord.ui.View):
             page_sources = self.pages[self.current_page]
             
             # Split into multiple fields if needed
-            current_chunk = ""
-            field_count = 1
-            for source in page_sources:
-                if len(current_chunk) + len(source) + 1 > self.FIELD_LIMIT:
-                    field_name = f"Sources ({field_count})" if field_count > 1 else "Sources"
-                    embed.add_field(name=field_name, value=current_chunk, inline=False)
-                    current_chunk = source
-                    field_count += 1
-                else:
-                    current_chunk = (current_chunk + "\n" + source) if current_chunk else source
-            
-            if current_chunk:
-                field_name = f"Sources ({field_count})" if field_count > 1 else "Sources"
-                embed.add_field(name=field_name, value=current_chunk, inline=False)
+            add_chunked_embed_field(embed, page_sources, "Sources", self.FIELD_LIMIT)
         elif not self.urls:
             embed.add_field(name="Sources", value="No URLs available", inline=False)
         
@@ -355,33 +378,5 @@ class SourceView(discord.ui.View):
 
     @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.secondary)
     async def show_sources(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="Sources", color=discord.Color.blue())
-
-        if self.metadata and self.metadata.web_search_queries:
-            embed.add_field(name="Search Queries", value="\n".join(f"• {q}" for q in self.metadata.web_search_queries), inline=False)
-
-        if self.metadata and self.metadata.grounding_chunks:
-            sources = []
-            for i, chunk in enumerate(self.metadata.grounding_chunks):
-                if chunk.web:
-                    sources.append(f"{i+1}. [{chunk.web.title}]({chunk.web.uri})")
-
-            if sources:
-                current_chunk = ""
-                field_count = 1
-                for source in sources:
-                    if len(current_chunk) + len(source) + 1 > 1024:
-                        embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
-                        current_chunk = source
-                        field_count += 1
-                    else:
-                        current_chunk = (current_chunk + "\n" + source) if current_chunk else source
-
-                if current_chunk:
-                    embed.add_field(name=f"Search Results ({field_count})" if field_count > 1 else "Search Results", value=current_chunk, inline=False)
-        
-        # Handle edge case where no content was added to the embed
-        if not embed.fields:
-            embed.add_field(name="Sources", value="No source information available.", inline=False)
-
+        embed = build_grounding_sources_embed(self.metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)

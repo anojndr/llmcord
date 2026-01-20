@@ -25,6 +25,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from bad_keys import get_bad_keys_db, KeyRotator
 from config import (
     get_config,
+    ensure_list,
     VISION_MODEL_TAGS,
     PROVIDERS_SUPPORTING_USERNAMES,
     EMBED_COLOR_COMPLETE,
@@ -46,6 +47,32 @@ def _get_embed_text(embed: discord.Embed) -> str:
     if embed.footer:
         parts.append(embed.footer.text)
     return "\n".join(filter(None, parts))
+
+
+def append_search_to_content(content, search_results: str):
+    """
+    Append search results to message content, handling both string and multimodal formats.
+    
+    Args:
+        content: Either a string or a list of content parts (for multimodal messages)
+        search_results: The search results text to append
+    
+    Returns:
+        The modified content with search results appended
+    """
+    if not search_results:
+        return content
+    
+    if isinstance(content, list):
+        # For multimodal content, append to the text part
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                part["text"] = part["text"] + "\n\n" + search_results
+                break
+        return content
+    elif content:
+        return str(content) + "\n\n" + search_results
+    return content
 
 
 async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddit_client, 
@@ -122,9 +149,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     provider_config = providers[provider]
 
     base_url = provider_config.get("base_url")
-    api_keys = provider_config.get("api_key", "sk-no-key-required")
-    if isinstance(api_keys, str):
-        api_keys = [api_keys]
+    api_keys = ensure_list(provider_config.get("api_key")) or ["sk-no-key-required"]
 
     model_parameters = config["models"].get(provider_slash_model, None)
 
@@ -472,14 +497,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
             # Include stored search results from history messages
             if curr_node.search_results and curr_node.role == "user":
-                if isinstance(content, list):
-                    # For multimodal content, append to the text part
-                    for part in content:
-                        if isinstance(part, dict) and part.get("type") == "text":
-                            part["text"] = part["text"] + "\n\n" + curr_node.search_results
-                            break
-                elif content:
-                    content = str(content) + "\n\n" + curr_node.search_results
+                content = append_search_to_content(content, curr_node.search_results)
 
             if content != "":
                 message = dict(content=content, role=curr_node.role)
@@ -521,11 +539,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         messages.append(dict(role="system", content=system_prompt))
 
     # Web Search Integration for non-Gemini models and Gemini preview models
-    tavily_api_keys = config.get("tavily_api_key")
-    if isinstance(tavily_api_keys, str):
-        tavily_api_keys = [tavily_api_keys]
-    elif not tavily_api_keys:
-        tavily_api_keys = []
+    tavily_api_keys = ensure_list(config.get("tavily_api_key"))
     
     is_preview_model = "preview" in actual_model.lower()
     is_non_gemini = provider != "gemini"
@@ -549,9 +563,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         
         # Get provider config for the decider
         decider_provider_config = config.get("providers", {}).get(decider_provider, {})
-        decider_api_keys = decider_provider_config.get("api_key", [])
-        if isinstance(decider_api_keys, str):
-            decider_api_keys = [decider_api_keys]
+        decider_api_keys = ensure_list(decider_provider_config.get("api_key"))
         
         decider_config = {
             "provider": decider_provider,
@@ -575,15 +587,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                     # Append search results to the first (most recent) user message
                     for i, msg in enumerate(messages):
                         if msg.get("role") == "user":
-                            original_content = msg.get("content", "")
-                            if isinstance(original_content, list):
-                                # For multimodal content, append to the text part
-                                for part in original_content:
-                                    if isinstance(part, dict) and part.get("type") == "text":
-                                        part["text"] = part["text"] + "\n\n" + search_results
-                                        break
-                            else:
-                                msg["content"] = str(original_content) + "\n\n" + search_results
+                            msg["content"] = append_search_to_content(msg.get("content", ""), search_results)
                             
                             # Also update gemini_contents if it's a Gemini preview model
                             if provider == "gemini" and gemini_contents:
