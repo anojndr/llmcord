@@ -22,7 +22,7 @@ import tiktoken
 from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from bad_keys import get_bad_keys_db
+from bad_keys import get_bad_keys_db, KeyRotator
 from config import (
     get_config,
     VISION_MODEL_TAGS,

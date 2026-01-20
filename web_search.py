@@ -10,7 +10,7 @@ from google import genai
 from google.genai import types
 from openai import AsyncOpenAI
 
-from bad_keys import get_bad_keys_db
+from bad_keys import get_bad_keys_db, KeyRotator
 
 
 # Web Search Decider and Tavily Search Functions
@@ -47,7 +47,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     """
     Uses a configurable model to decide if web search is needed and generates optimized queries.
     Supports both Gemini and OpenAI-compatible APIs.
-    Implements retry mechanism with API key rotation and bad key tracking.
+    Uses KeyRotator for consistent key rotation and bad key tracking.
     Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
     
     decider_config should contain:
@@ -64,24 +64,10 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     if not api_keys:
         return {"needs_search": False}
     
-    # Use synced bad key tracking so keys marked bad by main model are also recognized here
-    # and keys marked bad here are recognized by main model
+    # Use KeyRotator for consistent key rotation with synced bad key tracking
+    rotator = KeyRotator(provider, api_keys)
     
-    # Get good keys (filter out known bad ones from BOTH main and decider)
-    good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
-    
-    # If all keys are bad, reset and try again with all keys
-    if not good_keys:
-        logging.warning(f"All API keys for '{provider}' (synced) are marked as bad. Resetting...")
-        get_bad_keys_db().reset_provider_keys_synced(provider)
-        good_keys = api_keys.copy()
-    
-    attempt_count = 0
-    
-    while good_keys:
-        attempt_count += 1
-        current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
-        
+    async for current_api_key in rotator.get_keys_async():
         try:
             if provider == "gemini":
                 # Build Gemini-format contents
@@ -201,26 +187,11 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                     return {"needs_search": False}
                 return {"needs_search": False}
         except Exception as e:
-            logging.exception(f"Error in web search decider (attempt {attempt_count}): {e}")
-            
-            # Mark the current key as bad (synced for both main and decider)
-            error_msg = str(e)[:200] if e else "Unknown error"
-            get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
-            
-            # Remove the bad key from good_keys list for this session
-            if current_api_key in good_keys:
-                good_keys.remove(current_api_key)
-            
-            # If all keys are exhausted, try resetting once
-            if not good_keys:
-                if attempt_count >= len(api_keys) * 2:
-                    logging.error("Web search decider failed after exhausting all keys, skipping web search")
-                    return {"needs_search": False}
-                else:
-                    logging.warning(f"All decider keys exhausted. Resetting synced keys for retry...")
-                    get_bad_keys_db().reset_provider_keys_synced(provider)
-                    good_keys = api_keys.copy()
+            logging.exception(f"Error in web search decider: {e}")
+            rotator.mark_current_bad(str(e))
     
+    # All keys exhausted
+    logging.error("Web search decider failed after exhausting all keys, skipping web search")
     return {"needs_search": False}
 
 
@@ -233,8 +204,9 @@ def _get_tavily_client() -> httpx.AsyncClient:
     global _tavily_client
     if _tavily_client is None or _tavily_client.is_closed:
         _tavily_client = httpx.AsyncClient(
-            timeout=30.0,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10)
+            timeout=httpx.Timeout(30.0, connect=10.0),  # 30s total, 10s connect
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            follow_redirects=True,
         )
     return _tavily_client
 
@@ -274,6 +246,8 @@ async def tavily_search(
         # Increase timeout for advanced depth which takes longer
         timeout = 45.0 if search_depth == "advanced" else 30.0
         
+        logging.info(f"Tavily API request for query '{query}': depth={search_depth}, max_results={max_results}")
+        
         response = await client.post(
             "https://api.tavily.com/search",
             json=payload,
@@ -283,8 +257,27 @@ async def tavily_search(
             },
             timeout=timeout,
         )
+        logging.info(f"Tavily API response status: {response.status_code}")
+        
+        # Log raw response for debugging (first 1000 chars)
+        raw_text = response.text[:1000] if len(response.text) > 1000 else response.text
+        logging.debug(f"Tavily API raw response: {raw_text}")
+        
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        logging.info(f"Tavily API response for query '{query}': {len(result.get('results', []))} results")
+        if not result.get("results"):
+            logging.warning(f"Tavily returned empty results for query '{query}'. Full response: {result}")
+        return result
+    except httpx.HTTPStatusError as e:
+        logging.error(f"Tavily HTTP error for query '{query}': {e.response.status_code} - {e.response.text[:500]}")
+        return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}", "query": query}
+    except httpx.TimeoutException as e:
+        logging.error(f"Tavily timeout for query '{query}': {e}")
+        return {"error": f"Timeout: {e}", "query": query}
+    except httpx.RequestError as e:
+        logging.error(f"Tavily connection error for query '{query}': {e}")
+        return {"error": f"Connection error: {e}", "query": query}
     except Exception as e:
         logging.exception(f"Tavily search error for query '{query}': {e}")
         return {"error": str(e), "query": query}
@@ -299,13 +292,12 @@ async def perform_web_search(
 ) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
-    Rotates through multiple API keys for load distribution.
+    Uses KeyRotator for consistent key rotation and bad key tracking.
     Returns a tuple of (formatted_results, metadata).
     
     Best practices applied:
     - Concurrent requests with asyncio.gather()
-    - API key rotation for load distribution
-    - Score-based filtering (min_score) for relevance
+    - KeyRotator for synced bad key tracking with database persistence
     - Always uses "advanced" search depth for highest quality results
     
     Args:
@@ -321,30 +313,51 @@ async def perform_web_search(
     if not queries or not tavily_api_keys:
         return "", {}
     
-    async def execute_searches(depth: str, score_threshold: float) -> tuple[list, list]:
+    async def search_single_query(query: str, depth: str) -> dict:
+        """
+        Search with retry logic using KeyRotator.
+        """
+        rotator = KeyRotator("tavily", tavily_api_keys)
+        
+        async for current_api_key in rotator.get_keys_async():
+            result = await tavily_search(query, current_api_key, max_results_per_query, depth)
+            
+            if "error" not in result:
+                return result
+            
+            # Mark the current key as bad
+            rotator.mark_current_bad(result.get("error", "Unknown error"))
+        
+        # All keys failed
+        logging.error(f"All Tavily API keys failed for query '{query}'")
+        return {"error": "All API keys exhausted", "query": query}
+    
+    async def execute_searches(depth: str) -> tuple[list, list]:
         """Execute searches with given parameters and return results and URLs."""
+        # Execute searches concurrently
         search_tasks = [
-            tavily_search(
-                query, 
-                tavily_api_keys[i % len(tavily_api_keys)], 
-                max_results_per_query, 
-                depth
-            ) 
-            for i, query in enumerate(queries)
+            search_single_query(query, depth)
+            for query in queries
         ]
         results = await asyncio.gather(*search_tasks)
         
         formatted = []
         urls = []
         
+        logging.info(f"Tavily search returned {len(results)} result sets for {len(queries)} queries")
+        
         for i, result in enumerate(results):
             if "error" in result:
+                logging.warning(f"Tavily search error for query '{queries[i]}': {result.get('error')}")
                 continue
             
             query = queries[i]
             query_results = []
             
-            for item in result.get("results", []):
+            result_items = result.get("results", [])
+            logging.info(f"Query '{query}' returned {len(result_items)} items")
+            
+            for item in result_items:
                 score = item.get("score", 0)
                 
                 title = item.get("title", "No title")
@@ -367,10 +380,11 @@ async def perform_web_search(
                 formatted.append(f"\n### Search Results for: {query}")
                 formatted.extend(query_results)
         
+        logging.info(f"Total URLs collected: {len(urls)}")
         return formatted, urls
     
     # Always use advanced depth for best results
-    formatted_results, all_urls = await execute_searches("advanced", min_score)
+    formatted_results, all_urls = await execute_searches("advanced")
     
     metadata = {
         "queries": queries,
