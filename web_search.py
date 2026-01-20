@@ -13,6 +13,52 @@ from openai import AsyncOpenAI
 from bad_keys import get_bad_keys_db, KeyRotator
 
 
+def convert_messages_to_openai_format(
+    messages: list, 
+    system_prompt: str = None, 
+    reverse: bool = True,
+    include_analysis_prompt: bool = False
+) -> list[dict]:
+    """
+    Convert internal message format to OpenAI-compatible message format.
+    
+    Args:
+        messages: List of message dicts with 'role' and 'content' keys
+        system_prompt: Optional system prompt to prepend
+        reverse: Whether to reverse the message order (default True for chronological)
+        include_analysis_prompt: Whether to append the analysis instruction prompt
+    
+    Returns:
+        List of OpenAI-compatible message dicts
+    """
+    openai_messages = []
+    
+    if system_prompt:
+        openai_messages.append({"role": "system", "content": system_prompt})
+    
+    message_list = messages[::-1] if reverse else messages
+    
+    for msg in message_list:
+        role = msg.get("role", "user")
+        if role == "system":
+            continue  # Skip system messages from chat history
+        
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Keep multimodal format for OpenAI
+            openai_messages.append({"role": role, "content": content})
+        elif content:
+            openai_messages.append({"role": role, "content": str(content)})
+    
+    if include_analysis_prompt:
+        openai_messages.append({
+            "role": "user",
+            "content": "Based on the conversation above, analyze the last user query and respond with your JSON decision."
+        })
+    
+    return openai_messages
+
+
 # Web Search Decider and Tavily Search Functions
 SEARCH_DECIDER_SYSTEM_PROMPT = """You are a web search query optimizer. Your job is to analyze user queries and determine if they need web search for up-to-date or factual information.
 
@@ -132,28 +178,15 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 response_text = (response.text or "").strip()
             else:
                 # OpenAI-compatible API
-                openai_messages = [{"role": "system", "content": SEARCH_DECIDER_SYSTEM_PROMPT}]
+                openai_messages = convert_messages_to_openai_format(
+                    messages, 
+                    system_prompt=SEARCH_DECIDER_SYSTEM_PROMPT,
+                    reverse=True,
+                    include_analysis_prompt=True
+                )
                 
-                for msg in messages[::-1]:  # Reverse to get chronological order
-                    role = msg.get("role", "user")
-                    if role == "system":
-                        continue  # Skip system messages from chat history
-                    
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        # Keep multimodal format for OpenAI
-                        openai_messages.append({"role": role, "content": content})
-                    elif content:
-                        openai_messages.append({"role": role, "content": str(content)})
-                
-                if len(openai_messages) <= 1:  # Only system prompt
+                if len(openai_messages) <= 2:  # Only system prompt and analysis instruction
                     return {"needs_search": False}
-                
-                # Add instruction to analyze the conversation
-                openai_messages.append({
-                    "role": "user",
-                    "content": "Based on the conversation above, analyze the last user query and respond with your JSON decision."
-                })
                 
                 openai_client = AsyncOpenAI(base_url=base_url, api_key=current_api_key)
                 

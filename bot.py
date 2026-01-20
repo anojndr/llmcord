@@ -2,42 +2,19 @@
 Discord bot setup, commands, and event handlers for llmcord.
 """
 import asyncio
-from base64 import b64encode
-from datetime import datetime
-import io
 import logging
 import os
-import re
 
 from aiohttp import web
 import asyncpraw
-from bs4 import BeautifulSoup
 import discord
 from discord.app_commands import Choice
 from discord.ext import commands
-from discord.ui import LayoutView, TextDisplay
-from google import genai
-from google.genai import types
 import httpx
-from openai import AsyncOpenAI
-from PIL import Image
-from twscrape import API, gather
-from youtube_transcript_api import YouTubeTranscriptApi
+from twscrape import API
 
 from bad_keys import get_bad_keys_db, init_bad_keys_db
-from config import (
-    get_config,
-    VISION_MODEL_TAGS,
-    PROVIDERS_SUPPORTING_USERNAMES,
-    EMBED_COLOR_COMPLETE,
-    EMBED_COLOR_INCOMPLETE,
-    STREAMING_INDICATOR,
-    EDIT_DELAY_SECONDS,
-    MAX_MESSAGE_NODES,
-)
-from models import MsgNode
-from views import ResponseView, SourceView
-from web_search import decide_web_search, perform_web_search
+from config import get_config
 
 # Import utils to apply the twscrape patch
 import utils  # noqa: F401
