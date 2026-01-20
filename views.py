@@ -9,6 +9,8 @@ import httpx
 from bs4 import BeautifulSoup
 from google.genai import types
 
+from config import get_config
+
 
 async def upload_to_textis(text: str) -> Optional[str]:
     """
@@ -17,16 +19,20 @@ async def upload_to_textis(text: str) -> Optional[str]:
     """
     try:
         # Browser-like headers to avoid being blocked
+        # Note: Don't include Accept-Encoding - let httpx handle decompression automatically
         browser_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         }
         
-        async with httpx.AsyncClient(follow_redirects=False, headers=browser_headers) as client:
+        # Proxy configuration from config (optional)
+        config = get_config()
+        proxy_url = config.get("proxy_url") or None
+        
+        async with httpx.AsyncClient(follow_redirects=False, headers=browser_headers, proxy=proxy_url) as client:
             # Get the CSRF token from the main page
             response = await client.get("https://text.is/", timeout=30)
             
