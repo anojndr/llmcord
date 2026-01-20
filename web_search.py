@@ -243,28 +243,21 @@ async def tavily_search(
     query: str, 
     tavily_api_key: str, 
     max_results: int = 5, 
-    search_depth: str = "basic",
-    topic: str | None = None,
-    time_range: str | None = None
+    search_depth: str = "basic"
 ) -> dict:
     """
     Execute a single Tavily search query.
     Returns the search results with page content or an error dict.
     
     Best practices applied:
-    - auto_parameters enabled for automatic query optimization
     - search_depth configurable (basic/advanced/fast/ultra-fast)
     - Reuses shared httpx client for connection pooling
-    - topic filter for news/general/finance
-    - time_range filter for recent results
     
     Args:
         query: Search query (keep under 400 characters)
         tavily_api_key: Tavily API key
         max_results: Maximum results to return (1-20)
         search_depth: "basic", "advanced", "fast", or "ultra-fast"
-        topic: Optional - "general", "news", or "finance"
-        time_range: Optional - "day", "week", "month", or "year"
     """
     try:
         client = _get_tavily_client()
@@ -276,14 +269,7 @@ async def tavily_search(
             "search_depth": search_depth,
             "include_answer": False,
             "include_raw_content": "markdown",  # Get full page content in markdown format
-            "auto_parameters": False,  # Disabled - was causing Tavily to misinterpret queries and return irrelevant results
         }
-        
-        # Add optional parameters only when set (Tavily prefers them unset vs null)
-        if topic:
-            payload["topic"] = topic
-        if time_range:
-            payload["time_range"] = time_range
         
         # Increase timeout for advanced depth which takes longer
         timeout = 45.0 if search_depth == "advanced" else 30.0
@@ -309,9 +295,7 @@ async def perform_web_search(
     tavily_api_keys: list[str], 
     max_results_per_query: int = 5, 
     max_chars_per_url: int = 2000,
-    min_score: float = 0.3,
-    topic: str | None = None,
-    time_range: str | None = None
+    min_score: float = 0.3
 ) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
@@ -330,8 +314,6 @@ async def perform_web_search(
         max_results_per_query: Maximum number of URLs per query (default: 5)
         max_chars_per_url: Maximum characters per URL content (default: 2000)
         min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.3)
-        topic: Optional topic filter - "general", "news", or "finance"
-        time_range: Optional time filter - "day", "week", "month", or "year"
     
     Returns:
         tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...]})
@@ -346,9 +328,7 @@ async def perform_web_search(
                 query, 
                 tavily_api_keys[i % len(tavily_api_keys)], 
                 max_results_per_query, 
-                depth,
-                topic,
-                time_range
+                depth
             ) 
             for i, query in enumerate(queries)
         ]
