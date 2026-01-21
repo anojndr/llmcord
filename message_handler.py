@@ -37,7 +37,7 @@ from config import (
 )
 from models import MsgNode
 from views import ResponseView, SourceView, SourceButton, TavilySourceButton
-from web_search import decide_web_search, perform_web_search
+from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
 
 
 def _get_embed_text(embed: discord.Embed) -> str:
@@ -529,9 +529,9 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     system_prompt = config.get("system_prompt")
 
     if system_prompt:
-        now = datetime.now().astimezone()
+        date_str, time_str = get_current_datetime_strings()
 
-        system_prompt = system_prompt.replace("{date}", now.strftime("%B %d %Y")).replace("{time}", now.strftime("%H:%M:%S %Z%z")).strip()
+        system_prompt = system_prompt.replace("{date}", date_str).replace("{time}", time_str).strip()
         if accept_usernames:
             system_prompt += "\n\nUser's names are their Discord IDs and should be typed as '<@ID>'."
 

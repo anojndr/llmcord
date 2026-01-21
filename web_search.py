@@ -4,6 +4,7 @@ Web search functionality including search decision and Tavily integration.
 import asyncio
 import json
 import logging
+from datetime import datetime
 
 import httpx
 from google import genai
@@ -11,6 +12,20 @@ from google.genai import types
 from openai import AsyncOpenAI
 
 from bad_keys import get_bad_keys_db, KeyRotator
+
+
+def get_current_datetime_strings() -> tuple[str, str]:
+    """
+    Get current date and time strings for system prompts.
+    Returns (date_str, time_str) tuple.
+    
+    Date format: "January 21 2026"
+    Time format: "20:00:00 +0800"
+    """
+    now = datetime.now().astimezone()
+    date_str = now.strftime("%B %d %Y")
+    time_str = now.strftime("%H:%M:%S %Z%z")
+    return date_str, time_str
 
 
 def convert_messages_to_openai_format(
@@ -173,8 +188,11 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                     parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
                 ))
                 
+                date_str, time_str = get_current_datetime_strings()
+                system_prompt_with_date = f"{SEARCH_DECIDER_SYSTEM_PROMPT}\n\nCurrent date: {date_str}. Current time: {time_str}."
+                
                 config_kwargs = dict(
-                    system_instruction=SEARCH_DECIDER_SYSTEM_PROMPT,
+                    system_instruction=system_prompt_with_date,
                     temperature=0.1,
                 )
                 
@@ -195,9 +213,12 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 response_text = (response.text or "").strip()
             else:
                 # OpenAI-compatible API
+                date_str, time_str = get_current_datetime_strings()
+                system_prompt_with_date = f"{SEARCH_DECIDER_SYSTEM_PROMPT}\n\nCurrent date: {date_str}. Current time: {time_str}."
+                
                 openai_messages = convert_messages_to_openai_format(
                     messages, 
-                    system_prompt=SEARCH_DECIDER_SYSTEM_PROMPT,
+                    system_prompt=system_prompt_with_date,
                     reverse=True,
                     include_analysis_prompt=True
                 )
