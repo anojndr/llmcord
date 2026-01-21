@@ -425,6 +425,6 @@ async def perform_web_search(
     }
     
     if formatted_results:
-        return "\n\n---\n**Web Search Results:**" + "".join(formatted_results), metadata
+        return "\n\n---\nHere are the web search results in case the user asked you to search the net or something:\n\n**Web Search Results:**" + "".join(formatted_results), metadata
     return "", metadata
 
