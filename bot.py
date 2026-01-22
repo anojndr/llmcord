@@ -15,6 +15,7 @@ from twscrape import API
 
 from bad_keys import get_bad_keys_db, init_bad_keys_db
 from config import get_config
+from message_handler import process_message
 
 # Import utils to apply the twscrape patch
 import utils  # noqa: F401
@@ -214,8 +215,6 @@ async def on_ready() -> None:
 
 @discord_bot.event
 async def on_message(new_msg: discord.Message) -> None:
-    from message_handler import process_message
-    
     # Get user's model preference from database (or use default)
     user_id = str(new_msg.author.id)
     db = get_bad_keys_db()
