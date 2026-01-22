@@ -2,12 +2,11 @@
 Discord UI components (Views and Buttons) for llmcord.
 """
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 import discord
 import httpx
 from bs4 import BeautifulSoup
-from google.genai import types
 
 from config import get_config
 
@@ -110,17 +109,72 @@ async def upload_to_textis(text: str) -> Optional[str]:
         return None
 
 
+def _get_grounding_queries(metadata: Any) -> list[str]:
+    """
+    Extract web search queries from grounding metadata.
+    Handles both GenAI types.GroundingMetadata and LiteLLM dict formats.
+    """
+    if metadata is None:
+        return []
+    
+    # Handle dict format (LiteLLM)
+    if isinstance(metadata, dict):
+        return metadata.get("web_search_queries", []) or metadata.get("searchQueries", []) or []
+    
+    # Handle object format (GenAI GroundingMetadata)
+    if hasattr(metadata, "web_search_queries"):
+        return metadata.web_search_queries or []
+    
+    return []
+
+
+def _get_grounding_chunks(metadata: Any) -> list[dict]:
+    """
+    Extract grounding chunks from grounding metadata.
+    Returns list of dicts with 'title' and 'uri' keys.
+    Handles both GenAI types.GroundingMetadata and LiteLLM dict formats.
+    """
+    if metadata is None:
+        return []
+    
+    # Handle dict format (LiteLLM)
+    if isinstance(metadata, dict):
+        chunks = metadata.get("grounding_chunks", []) or metadata.get("groundingChunks", []) or []
+        result = []
+        for chunk in chunks:
+            if isinstance(chunk, dict):
+                # LiteLLM format
+                web = chunk.get("web", {})
+                if web:
+                    result.append({"title": web.get("title", ""), "uri": web.get("uri", "")})
+            elif hasattr(chunk, "web") and chunk.web:
+                # Object format
+                result.append({"title": chunk.web.title, "uri": chunk.web.uri})
+        return result
+    
+    # Handle object format (GenAI GroundingMetadata)
+    if hasattr(metadata, "grounding_chunks"):
+        chunks = metadata.grounding_chunks or []
+        result = []
+        for chunk in chunks:
+            if hasattr(chunk, "web") and chunk.web:
+                result.append({"title": chunk.web.title, "uri": chunk.web.uri})
+        return result
+    
+    return []
+
+
 class ResponseView(discord.ui.View):
     """View with 'View Response Better' button that uploads to text.is"""
     
-    def __init__(self, full_response: str, metadata: Optional[types.GroundingMetadata] = None, tavily_metadata: Optional[dict] = None):
+    def __init__(self, full_response: str, metadata: Optional[Any] = None, tavily_metadata: Optional[dict] = None):
         super().__init__(timeout=None)
         self.full_response = full_response
         self.metadata = metadata
         self.tavily_metadata = tavily_metadata
         
         # Add Gemini grounding sources button if we have metadata with search queries
-        if metadata and metadata.web_search_queries:
+        if metadata and _get_grounding_queries(metadata):
             self.add_item(SourceButton(metadata))
         
         # Add Tavily sources button if we have tavily metadata with URLs or queries
@@ -178,30 +232,32 @@ def add_chunked_embed_field(embed: discord.Embed, items: list[str], base_name: s
         embed.add_field(name=field_name, value=current_chunk, inline=False)
 
 
-def build_grounding_sources_embed(metadata: types.GroundingMetadata) -> discord.Embed:
+def build_grounding_sources_embed(metadata: Any) -> discord.Embed:
     """
-    Build a Discord embed showing sources from Gemini grounding metadata.
+    Build a Discord embed showing sources from grounding metadata.
     
     Args:
-        metadata: Gemini GroundingMetadata containing search queries and chunks
+        metadata: Grounding metadata (either GenAI GroundingMetadata or LiteLLM dict)
     
     Returns:
         A Discord Embed with the formatted sources
     """
     embed = discord.Embed(title="Sources", color=discord.Color.blue())
     
-    if metadata and metadata.web_search_queries:
+    queries = _get_grounding_queries(metadata)
+    if queries:
         embed.add_field(
             name="Search Queries", 
-            value="\n".join(f"• {q}" for q in metadata.web_search_queries), 
+            value="\n".join(f"• {q}" for q in queries), 
             inline=False
         )
     
-    if metadata and metadata.grounding_chunks:
+    chunks = _get_grounding_chunks(metadata)
+    if chunks:
         sources = [
-            f"{i+1}. [{chunk.web.title}]({chunk.web.uri})"
-            for i, chunk in enumerate(metadata.grounding_chunks)
-            if chunk.web
+            f"{i+1}. [{chunk['title']}]({chunk['uri']})"
+            for i, chunk in enumerate(chunks)
+            if chunk.get('uri')
         ]
         add_chunked_embed_field(embed, sources, "Search Results")
     
@@ -215,7 +271,7 @@ def build_grounding_sources_embed(metadata: types.GroundingMetadata) -> discord.
 class SourceButton(discord.ui.Button):
     """Button to show sources from grounding metadata"""
     
-    def __init__(self, metadata: types.GroundingMetadata):
+    def __init__(self, metadata: Any):
         super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary)
         self.metadata = metadata
     
@@ -395,7 +451,7 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
 
 class SourceView(discord.ui.View):
     """Legacy view for backwards compatibility - now using ResponseView instead"""
-    def __init__(self, metadata: types.GroundingMetadata):
+    def __init__(self, metadata: Any):
         super().__init__(timeout=None)
         self.metadata = metadata
 

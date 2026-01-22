@@ -1,7 +1,6 @@
 discord.py>=2.6.0
-google-genai
+litellm
 httpx
-openai
 pyyaml
 twscrape
 youtube-transcript-api
@@ -11,3 +10,4 @@ asyncpraw
 Pillow
 libsql
 tiktoken
+requests

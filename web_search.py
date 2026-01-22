@@ -1,18 +1,88 @@
 """
 Web search functionality including search decision and Tavily integration.
+Uses LiteLLM for unified LLM API access.
 """
 import asyncio
 import base64
 import json
 import logging
+import os
 from datetime import datetime
 
 import httpx
-from google import genai
-from google.genai import types
-from openai import AsyncOpenAI
+import litellm
 
 from bad_keys import get_bad_keys_db, KeyRotator
+
+
+def _configure_github_copilot_token(access_token: str) -> None:
+    """
+    Configure a GitHub Copilot access token for LiteLLM.
+    
+    LiteLLM's GitHub Copilot provider expects tokens in a config file.
+    This function writes the access token AND exchanges it for an API key.
+    
+    Args:
+        access_token: GitHub access token (ghu_...)
+    """
+    import time
+    
+    # Get the token directory from env or use default
+    token_dir = os.environ.get(
+        "GITHUB_COPILOT_TOKEN_DIR",
+        os.path.expanduser("~/.config/litellm/github_copilot")
+    )
+    
+    # Create directory if it doesn't exist
+    os.makedirs(token_dir, exist_ok=True)
+    
+    # Write access token file (just the raw token)
+    access_token_file = os.path.join(
+        token_dir,
+        os.environ.get("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token")
+    )
+    with open(access_token_file, "w") as f:
+        f.write(access_token)
+    
+    logging.debug(f"Configured GitHub Copilot access token at {access_token_file}")
+    
+    # Also exchange the access token for a Copilot API key
+    # This replicates what LiteLLM's authenticator does
+    try:
+        import requests
+        
+        headers = {
+            "Authorization": f"token {access_token}",
+            "Accept": "application/json",
+            "Editor-Version": "vscode/1.85.1",
+            "Editor-Plugin-Version": "copilot-chat/0.22.0",
+        }
+        
+        response = requests.get(
+            "https://api.github.com/copilot_internal/v2/token",
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            token_data = response.json()
+            
+            # Write the API key file in the format LiteLLM expects
+            api_key_file = os.path.join(token_dir, "api-key.json")
+            api_key_data = {
+                "token": token_data.get("token"),
+                "expires_at": token_data.get("expires_at", int(time.time()) + 3600),
+                "endpoints": token_data.get("endpoints", {}),
+            }
+            
+            with open(api_key_file, "w") as f:
+                json.dump(api_key_data, f)
+            
+            logging.debug(f"Exchanged GitHub access token for Copilot API key at {api_key_file}")
+        else:
+            logging.warning(f"Failed to exchange GitHub token: {response.status_code} - {response.text[:200]}")
+    except Exception as e:
+        logging.warning(f"Error exchanging GitHub token for Copilot API key: {e}")
 
 
 def get_current_datetime_strings() -> tuple[str, str]:
@@ -122,15 +192,36 @@ Examples:
 """
 
 
+def _build_litellm_model_name(provider: str, model: str) -> str:
+    """
+    Build the LiteLLM model name with proper provider prefix.
+    
+    Args:
+        provider: Provider name (e.g., "gemini", "openai", "github_copilot")
+        model: Model name
+    
+    Returns:
+        LiteLLM-compatible model string (e.g., "gemini/gemini-3-flash-preview")
+    """
+    if provider == "gemini":
+        return f"gemini/{model}"
+    elif provider == "github_copilot":
+        return f"github_copilot/{model}"
+    else:
+        # For OpenAI-compatible providers, just use the model name
+        # LiteLLM will use base_url if provided
+        return model
+
+
 async def decide_web_search(messages: list, decider_config: dict) -> dict:
     """
     Uses a configurable model to decide if web search is needed and generates optimized queries.
-    Supports both Gemini and OpenAI-compatible APIs.
+    Uses LiteLLM for unified API access across all providers.
     Uses KeyRotator for consistent key rotation and bad key tracking.
     Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
     
     decider_config should contain:
-        - provider: "gemini" or other (OpenAI-compatible)
+        - provider: "gemini", "github_copilot", or other (OpenAI-compatible)
         - model: model name
         - api_keys: list of API keys
         - base_url: (optional) for OpenAI-compatible providers
@@ -148,95 +239,49 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     
     async for current_api_key in rotator.get_keys_async():
         try:
-            if provider == "gemini":
-                # Build Gemini-format contents
-                search_decider_contents = []
-                for msg in messages[::-1]:  # Reverse to get chronological order
-                    role = "model" if msg.get("role") == "assistant" else "user"
-                    content = msg.get("content", "")
-                    parts = []
-                    
-                    if isinstance(content, list):
-                        # Handle multimodal content (text + images)
-                        for part in content:
-                            if isinstance(part, dict):
-                                if part.get("type") == "text" and part.get("text"):
-                                    parts.append(types.Part.from_text(text=str(part["text"])))
-                                elif part.get("type") == "image_url" and part.get("image_url", {}).get("url"):
-                                    # Extract base64 image data
-                                    image_url = part["image_url"]["url"]
-                                    if image_url.startswith("data:"):
-                                        try:
-                                            header, b64_data = image_url.split(",", 1)
-                                            mime_type = header.split(":")[1].split(";")[0]
-                                            image_bytes = base64.b64decode(b64_data)
-                                            parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-                                        except Exception:
-                                            pass
-                    elif content:
-                        parts.append(types.Part.from_text(text=str(content)))
-                    
-                    if parts:
-                        search_decider_contents.append(types.Content(role=role, parts=parts))
-                
-                if not search_decider_contents:
-                    return {"needs_search": False}
-                
-                # Add instruction to analyze the conversation
-                search_decider_contents.append(types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text="Based on the conversation above, analyze the last user query and respond with your JSON decision.")]
-                ))
-                
-                date_str, time_str = get_current_datetime_strings()
-                system_prompt_with_date = f"{SEARCH_DECIDER_SYSTEM_PROMPT}\n\nCurrent date: {date_str}. Current time: {time_str}."
-                
-                config_kwargs = dict(
-                    system_instruction=system_prompt_with_date,
-                    temperature=0.1,
-                )
-                
-                # Add thinking config for Gemini 3 models
-                if "gemini-3" in model:
-                    config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level="MINIMAL")
-                
-                gemini_config = types.GenerateContentConfig(**config_kwargs)
-                
-                client = genai.Client(api_key=current_api_key, http_options=dict(api_version="v1beta"))
-                
-                response = await client.aio.models.generate_content(
-                    model=model,
-                    contents=search_decider_contents,
-                    config=gemini_config
-                )
-                
-                response_text = (response.text or "").strip()
-            else:
-                # OpenAI-compatible API
-                date_str, time_str = get_current_datetime_strings()
-                system_prompt_with_date = f"{SEARCH_DECIDER_SYSTEM_PROMPT}\n\nCurrent date: {date_str}. Current time: {time_str}."
-                
-                openai_messages = convert_messages_to_openai_format(
-                    messages, 
-                    system_prompt=system_prompt_with_date,
-                    reverse=True,
-                    include_analysis_prompt=True
-                )
-                
-                if len(openai_messages) <= 2:  # Only system prompt and analysis instruction
-                    return {"needs_search": False}
-                
-                openai_client = AsyncOpenAI(base_url=base_url, api_key=current_api_key)
-                
-                response = await openai_client.chat.completions.create(
-                    model=model,
-                    messages=openai_messages,
-                    temperature=0.1,
-                )
-                
-                response_text = response.choices[0].message.content.strip()
+            date_str, time_str = get_current_datetime_strings()
+            system_prompt_with_date = f"{SEARCH_DECIDER_SYSTEM_PROMPT}\n\nCurrent date: {date_str}. Current time: {time_str}."
             
-            # Parse response (common for both providers)
+            # Convert messages to OpenAI format (LiteLLM uses OpenAI format)
+            litellm_messages = convert_messages_to_openai_format(
+                messages, 
+                system_prompt=system_prompt_with_date,
+                reverse=True,
+                include_analysis_prompt=True
+            )
+            
+            if len(litellm_messages) <= 2:  # Only system prompt and analysis instruction
+                return {"needs_search": False}
+            
+            # Build LiteLLM model name
+            litellm_model = _build_litellm_model_name(provider, model)
+            
+            # Prepare LiteLLM call kwargs
+            litellm_kwargs = {
+                "model": litellm_model,
+                "messages": litellm_messages,
+                "temperature": 0.1,
+                "api_key": current_api_key,
+            }
+            
+            # Add base_url for OpenAI-compatible providers
+            if base_url and provider not in ("gemini", "github_copilot"):
+                litellm_kwargs["base_url"] = base_url
+            
+            # Add thinking config for Gemini 3 models
+            if provider == "gemini" and "gemini-3" in model:
+                litellm_kwargs["reasoning_effort"] = "minimal"
+            
+            # For GitHub Copilot, configure the token file before making the call
+            if provider == "github_copilot":
+                _configure_github_copilot_token(current_api_key)
+            
+            # Make the LiteLLM call
+            response = await litellm.acompletion(**litellm_kwargs)
+            
+            response_text = (response.choices[0].message.content or "").strip()
+            
+            # Parse response
             if response_text.startswith("```"):
                 # Remove markdown code blocks if present
                 response_text = response_text.split("```")[1]
@@ -472,4 +517,3 @@ async def perform_web_search(
     if formatted_results:
         return "\n\n---\nHere are the web search results in case the user asked you to search the net or something:\n\n**Web Search Results:**" + "".join(formatted_results), metadata
     return "", metadata
-
