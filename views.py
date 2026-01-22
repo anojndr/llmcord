@@ -218,15 +218,13 @@ def _has_grounding_data(metadata: Any) -> bool:
     """
     Check if metadata has any grounding data (queries or chunks).
     Used to determine if the Show Sources button should be displayed.
+    Only returns True if actual grounding queries or chunks exist.
     """
     if metadata is None:
         return False
     
-    # For list format, check if list is non-empty
-    if isinstance(metadata, list) and len(metadata) > 0:
-        return True
-    
-    # Check if we have queries or chunks
+    # Check if we have actual queries or chunks
+    # This handles all formats: list, dict, and object types
     if _get_grounding_queries(metadata):
         return True
     if _get_grounding_chunks(metadata):
