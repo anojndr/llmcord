@@ -19,14 +19,12 @@ from PIL import Image
 import tiktoken
 from twscrape import gather
 
-# Cache tiktoken encoding at module level for performance
-_tiktoken_encoding = None
+# Pre-load tiktoken encoding at module load time to avoid first-message delay
+# This shifts the ~1-2s loading cost from first message to bot startup
+_tiktoken_encoding = tiktoken.get_encoding("o200k_base")
 
 def _get_tiktoken_encoding():
-    """Get cached tiktoken encoding. Lazy initialization for better startup time."""
-    global _tiktoken_encoding
-    if _tiktoken_encoding is None:
-        _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
+    """Get the pre-loaded tiktoken encoding."""
     return _tiktoken_encoding
 from youtube_transcript_api import YouTubeTranscriptApi
 
