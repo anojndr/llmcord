@@ -1,22 +1,22 @@
 """
 Message handling logic for llmcord Discord bot.
-Part 1: Message parsing and content processing.
+Uses LiteLLM for unified LLM API access.
 """
 import asyncio
 from base64 import b64encode
 from datetime import datetime
 import io
+import json
 import logging
+import os
 import re
 
 import asyncpraw
 from bs4 import BeautifulSoup
 import discord
 from discord.ui import LayoutView, TextDisplay
-from google import genai
-from google.genai import types
 import httpx
-from openai import AsyncOpenAI
+import litellm
 from PIL import Image
 import tiktoken
 from twscrape import gather
@@ -48,6 +48,77 @@ from config import (
 from models import MsgNode
 from views import ResponseView, SourceView, SourceButton, TavilySourceButton
 from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
+
+
+def _configure_github_copilot_token(access_token: str) -> None:
+    """
+    Configure a GitHub Copilot access token for LiteLLM.
+    
+    LiteLLM's GitHub Copilot provider expects tokens in a config file.
+    This function writes the access token AND exchanges it for an API key.
+    
+    Args:
+        access_token: GitHub access token (ghu_...)
+    """
+    import time
+    
+    # Get the token directory from env or use default
+    token_dir = os.environ.get(
+        "GITHUB_COPILOT_TOKEN_DIR",
+        os.path.expanduser("~/.config/litellm/github_copilot")
+    )
+    
+    # Create directory if it doesn't exist
+    os.makedirs(token_dir, exist_ok=True)
+    
+    # Write access token file (just the raw token)
+    access_token_file = os.path.join(
+        token_dir,
+        os.environ.get("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token")
+    )
+    with open(access_token_file, "w") as f:
+        f.write(access_token)
+    
+    logging.debug(f"Configured GitHub Copilot access token at {access_token_file}")
+    
+    # Also exchange the access token for a Copilot API key
+    # This replicates what LiteLLM's authenticator does
+    try:
+        import requests
+        
+        headers = {
+            "Authorization": f"token {access_token}",
+            "Accept": "application/json",
+            "Editor-Version": "vscode/1.85.1",
+            "Editor-Plugin-Version": "copilot-chat/0.22.0",
+        }
+        
+        response = requests.get(
+            "https://api.github.com/copilot_internal/v2/token",
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            token_data = response.json()
+            
+            # Write the API key file in the format LiteLLM expects
+            api_key_file = os.path.join(token_dir, "api-key.json")
+            api_key_data = {
+                "token": token_data.get("token"),
+                "expires_at": token_data.get("expires_at", int(time.time()) + 3600),
+                "endpoints": token_data.get("endpoints", {}),
+            }
+            
+            with open(api_key_file, "w") as f:
+                json.dump(api_key_data, f)
+            
+            logging.debug(f"Exchanged GitHub access token for Copilot API key at {api_key_file}")
+        else:
+            logging.warning(f"Failed to exchange GitHub token: {response.status_code} - {response.text[:200]}")
+    except Exception as e:
+        logging.warning(f"Error exchanging GitHub token for Copilot API key: {e}")
+
 
 
 def _get_embed_text(embed: discord.Embed) -> str:
@@ -83,6 +154,27 @@ def append_search_to_content(content, search_results: str):
     elif content:
         return str(content) + "\n\n" + search_results
     return content
+
+
+def _build_litellm_model_name(provider: str, model: str) -> str:
+    """
+    Build the LiteLLM model name with proper provider prefix.
+    
+    Args:
+        provider: Provider name (e.g., "gemini", "openai", "github_copilot")
+        model: Model name
+    
+    Returns:
+        LiteLLM-compatible model string (e.g., "gemini/gemini-3-flash-preview")
+    """
+    if provider == "gemini":
+        return f"gemini/{model}"
+    elif provider == "github_copilot":
+        return f"github_copilot/{model}"
+    else:
+        # For OpenAI-compatible providers, just use the model name
+        # LiteLLM will use base_url if provided
+        return model
 
 
 async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddit_client, 
@@ -180,7 +272,6 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     max_tweet_replies = config.get("max_tweet_replies", 50)
 
     messages = []
-    gemini_contents = []
     user_warnings = set()
     curr_msg = new_msg
 
@@ -474,34 +565,22 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                     curr_node.lens_results = stored_lens_results
                     logging.info(f"Loaded stored lens results for message {curr_msg.id}")
 
-            if provider == "gemini":
-                parts = []
-                # Build text content, including stored search results for user messages
-                text_content = curr_node.text[:max_text] if curr_node.text else ""
-                if curr_node.search_results and curr_node.role == "user" and text_content:
-                    text_content = text_content + "\n\n" + curr_node.search_results
-                
-                if text_content:
-                    part = types.Part.from_text(text=text_content)
-                    if curr_node.thought_signature:
-                        part.thought_signature = curr_node.thought_signature
-                    parts.append(part)
-
-                for att in curr_node.raw_attachments:
-                    if att["content_type"].startswith("text"):
-                        continue
-
-                    part = types.Part.from_bytes(data=att["content"], mime_type=att["content_type"])
-                    if model_parameters and (media_res := model_parameters.get("media_resolution")):
-                        part.media_resolution = {"level": media_res}
-                    parts.append(part)
-
-                if parts:
-                    role = "model" if curr_node.role == "assistant" else "user"
-                    gemini_contents.append(types.Content(role=role, parts=parts))
-
+            # Build message content (now unified for all providers via LiteLLM)
             if curr_node.images[:max_images]:
                 content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
+                
+                # For Gemini with raw attachments (audio, video, PDF), add them as file parts
+                if provider == "gemini" and curr_node.raw_attachments:
+                    for att in curr_node.raw_attachments:
+                        if att["content_type"].startswith(("audio", "video", "application/pdf")):
+                            # LiteLLM supports inline data format for Gemini
+                            encoded_data = b64encode(att["content"]).decode('utf-8')
+                            content.append({
+                                "type": "file",
+                                "file": {
+                                    "file_data": f"data:{att['content_type']};base64,{encoded_data}"
+                                }
+                            })
             else:
                 content = curr_node.text[:max_text]
 
@@ -599,18 +678,6 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         if msg.get("role") == "user":
                             msg["content"] = append_search_to_content(msg.get("content", ""), search_results)
                             
-                            # Also update gemini_contents if it's a Gemini preview model
-                            if provider == "gemini" and gemini_contents:
-                                # Find the corresponding user content and update it  
-                                for j, gc in enumerate(gemini_contents):
-                                    if gc.role == "user":
-                                        if gc.parts and gc.parts[0].text:
-                                            # Create new parts with updated text
-                                            new_text = gc.parts[0].text + "\n\n" + search_results
-                                            new_parts = [types.Part.from_text(text=new_text)] + list(gc.parts[1:])
-                                            gemini_contents[j] = types.Content(role="user", parts=new_parts)
-                                        break
-                            
                             logging.info(f"Web search results appended to user message")
                             
                             # Save search results to database for persistence in chat history
@@ -628,7 +695,6 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         discord_bot=discord_bot,
         msg_nodes=msg_nodes,
         messages=messages,
-        gemini_contents=gemini_contents,
         user_warnings=user_warnings,
         provider=provider,
         model=model,
@@ -684,12 +750,12 @@ def count_text_tokens(text: str) -> int:
 
 
 async def generate_response(
-    new_msg, discord_bot, msg_nodes, messages, gemini_contents, user_warnings,
+    new_msg, discord_bot, msg_nodes, messages, user_warnings,
     provider, model, actual_model, provider_slash_model, base_url, api_keys, model_parameters,
     extra_headers, extra_query, extra_body, system_prompt, config, max_text,
     tavily_metadata, last_edit_time, processing_msg
 ):
-    """Generate and stream the LLM response."""
+    """Generate and stream the LLM response using LiteLLM."""
     curr_content = finish_reason = None
     # Initialize with the pre-created processing message
     response_msgs = [processing_msg]
@@ -700,7 +766,8 @@ async def generate_response(
     # Count input tokens (chat history + latest query)
     input_tokens = count_conversation_tokens(messages)
 
-    openai_kwargs = dict(model=actual_model, messages=messages[::-1], stream=True, extra_headers=extra_headers, extra_query=extra_query, extra_body=extra_body)
+    # Build LiteLLM model name
+    litellm_model = _build_litellm_model_name(provider, actual_model)
 
     if use_plain_responses := config.get("use_plain_responses", False):
         max_message_length = 4000
@@ -718,151 +785,88 @@ async def generate_response(
         await msg_nodes[response_msg.id].lock.acquire()
 
     async def get_stream(api_key):
+        """Get streaming response from LiteLLM."""
+        # For GitHub Copilot, configure the token file before making the call
+        if provider == "github_copilot":
+            _configure_github_copilot_token(api_key)
+        
+        # Build LiteLLM kwargs
+        litellm_kwargs = {
+            "model": litellm_model,
+            "messages": messages[::-1],  # Reverse to get chronological order
+            "stream": True,
+            "api_key": api_key,
+        }
+        
+        # Add base_url for OpenAI-compatible providers
+        if base_url and provider not in ("gemini", "github_copilot"):
+            litellm_kwargs["base_url"] = base_url
+        
+        # Add extra headers if provided
+        if extra_headers:
+            litellm_kwargs["extra_headers"] = extra_headers
+        
+        # Handle Gemini-specific settings
         if provider == "gemini":
             is_gemini_3 = "gemini-3" in actual_model
             is_preview = "preview" in actual_model
-
-            http_options = dict(api_version="v1beta")
-            if model_parameters and model_parameters.get("media_resolution"):
-                http_options["api_version"] = "v1alpha"
-
-            client = genai.Client(api_key=api_key, http_options=http_options)
             
-            has_url = re.search(r"https?://", new_msg.content)
-
-            if is_preview:
-                tools = []
-            else:
-                if has_url:
-                    tools = []
-                else:
-                    tools = [types.Tool(google_search=types.GoogleSearch()), types.Tool(url_context=types.UrlContext())]
-
-            config_kwargs = dict(
-                system_instruction=system_prompt,
-                tools=tools,
-            )
-
-            if model_parameters and not is_gemini_3:
-                config_kwargs["temperature"] = model_parameters.get("temperature")
-
+            # Add thinking config for Gemini 3 models
             thinking_level = model_parameters.get("thinking_level") if model_parameters else None
-
+            
             if not thinking_level:
                 if "gemini-3-flash" in actual_model:
                     thinking_level = "MINIMAL"
                 elif "gemini-3-pro" in actual_model:
                     thinking_level = "LOW"
-
+            
             if thinking_level:
-                config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
-
-            active_contents = gemini_contents[::-1]
-
-            while True:
-                gemini_config = types.GenerateContentConfig(**config_kwargs)
-                
-                full_text = ""
-                function_calls_to_execute = []
-                captured_thought_signature = None
-                finish_reason = None
-                grounding_metadata = None
-
-                async for chunk in await client.aio.models.generate_content_stream(
-                    model=actual_model,
-                    contents=active_contents,
-                    config=gemini_config
-                ):
-                    text = ""
-                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                        for part in chunk.candidates[0].content.parts:
-                            if part.text:
-                                text += part.text
-                    
-                    full_text += text
-                    
-                    reason = chunk.candidates[0].finish_reason if chunk.candidates else None
-                    if reason:
-                        finish_reason = reason
-                        
-                    grounding_metadata = chunk.candidates[0].grounding_metadata if chunk.candidates else None
-
-                    thought_signature = None
-                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                        for part in chunk.candidates[0].content.parts:
-                            if part.function_call:
-                                function_calls_to_execute.append(part.function_call)
-                            if hasattr(part, "thought_signature") and part.thought_signature:
-                                thought_signature = part.thought_signature
-                                captured_thought_signature = thought_signature
-
-                    yield_reason = str(reason) if reason else None
-                    if function_calls_to_execute:
-                        yield_reason = None
-
-                    yield text, yield_reason, grounding_metadata, thought_signature
-
-                if function_calls_to_execute:
-                    parts = []
-                    if full_text:
-                        parts.append(types.Part.from_text(text=full_text))
-                    
-                    for fc in function_calls_to_execute:
-                        parts.append(types.Part(function_call=fc))
-                    
-                    if captured_thought_signature and parts:
-                        parts[0].thought_signature = captured_thought_signature
-                        
-                    active_contents.append(types.Content(role="model", parts=parts))
-                    
-                    continue
-                
-                break
-        else:
-            openai_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+                # Map thinking levels to LiteLLM reasoning_effort
+                thinking_map = {
+                    "MINIMAL": "minimal",
+                    "LOW": "low", 
+                    "MEDIUM": "medium",
+                    "HIGH": "high"
+                }
+                litellm_kwargs["reasoning_effort"] = thinking_map.get(thinking_level, thinking_level.lower())
             
-            current_kwargs = openai_kwargs.copy()
+            # Add Google Search tool for non-preview models
+            if not is_preview:
+                has_url = re.search(r"https?://", new_msg.content)
+                if not has_url:
+                    litellm_kwargs["tools"] = [{"googleSearch": {}}, {"urlContext": {}}]
             
-            messages_list = list(current_kwargs["messages"])
-            current_kwargs["messages"] = messages_list
-
-            while True:
-                tool_calls = {}
-                finish_reason = None
-                
-                async for chunk in await openai_client.chat.completions.create(**current_kwargs):
-                    if not (choice := chunk.choices[0] if chunk.choices else None):
-                        continue
-                    
-                    if choice.delta.tool_calls:
-                        for tool_call_chunk in choice.delta.tool_calls:
-                            index = tool_call_chunk.index
-                            if index not in tool_calls:
-                                tool_calls[index] = {
-                                    "id": tool_call_chunk.id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": tool_call_chunk.function.name,
-                                        "arguments": ""
-                                    }
-                                }
-                            
-                            if tool_call_chunk.function.name:
-                                tool_calls[index]["function"]["name"] = tool_call_chunk.function.name
-                            
-                            if tool_call_chunk.function.arguments:
-                                tool_calls[index]["function"]["arguments"] += tool_call_chunk.function.arguments
-                    
-                    if choice.delta.content or (choice.finish_reason and choice.finish_reason != "tool_calls"):
-                        yield choice.delta.content or "", choice.finish_reason, None, None
-                    
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
-
-                if finish_reason == "tool_calls":
-                    break
-                else:
-                    break
+            # Set temperature for non-Gemini 3 models
+            if model_parameters and not is_gemini_3:
+                if "temperature" in model_parameters:
+                    litellm_kwargs["temperature"] = model_parameters["temperature"]
+        
+        # Add GitHub Copilot headers if needed
+        if provider == "github_copilot":
+            copilot_headers = {
+                "editor-version": "vscode/1.85.1",
+                "Copilot-Integration-Id": "vscode-chat"
+            }
+            if extra_headers:
+                litellm_kwargs["extra_headers"] = {**copilot_headers, **extra_headers}
+            else:
+                litellm_kwargs["extra_headers"] = copilot_headers
+        
+        # Make the streaming call
+        async for chunk in await litellm.acompletion(**litellm_kwargs):
+            if not chunk.choices:
+                continue
+            
+            choice = chunk.choices[0]
+            delta_content = choice.delta.content or ""
+            chunk_finish_reason = choice.finish_reason
+            
+            # LiteLLM handles grounding metadata in model_extra for Gemini
+            grounding_metadata = None
+            if hasattr(chunk, 'model_extra') and chunk.model_extra:
+                grounding_metadata = chunk.model_extra.get('vertex_ai_grounding_metadata') or chunk.model_extra.get('google_grounding_metadata')
+            
+            yield delta_content, chunk_finish_reason, grounding_metadata
 
     grounding_metadata = None
     attempt_count = 0
@@ -893,13 +897,9 @@ async def generate_response(
 
         try:
             async with new_msg.channel.typing():
-                thought_signature = None
-                async for delta_content, new_finish_reason, new_grounding_metadata, new_thought_signature in get_stream(current_api_key):
+                async for delta_content, new_finish_reason, new_grounding_metadata in get_stream(current_api_key):
                     if new_grounding_metadata:
                         grounding_metadata = new_grounding_metadata
-
-                    if new_thought_signature:
-                        thought_signature = new_thought_signature
 
                     if finish_reason != None:
                         break
@@ -931,7 +931,7 @@ async def generate_response(
                             embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
                             embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
 
-                            view = SourceView(grounding_metadata) if is_final_edit and grounding_metadata and grounding_metadata.web_search_queries else None
+                            view = SourceView(grounding_metadata) if is_final_edit and grounding_metadata else None
 
                             msg_index = len(response_contents) - 1
                             if start_next_msg:
@@ -956,7 +956,7 @@ async def generate_response(
                     # Add buttons only to the last message
                     if i == len(response_contents) - 1:
                         # Add Gemini grounding sources button if available
-                        if grounding_metadata and grounding_metadata.web_search_queries:
+                        if grounding_metadata:
                             layout.add_item(SourceButton(grounding_metadata))
                         # Add Tavily sources button if available
                         if tavily_metadata and (tavily_metadata.get("urls") or tavily_metadata.get("queries")):
@@ -1020,8 +1020,6 @@ async def generate_response(
 
     for response_msg in response_msgs:
         msg_nodes[response_msg.id].text = "".join(response_contents)
-        if thought_signature:
-            msg_nodes[response_msg.id].thought_signature = thought_signature
         msg_nodes[response_msg.id].lock.release()
 
     # Update the last message with ResponseView for "View Response Better" button
