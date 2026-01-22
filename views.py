@@ -112,14 +112,32 @@ async def upload_to_textis(text: str) -> Optional[str]:
 def _get_grounding_queries(metadata: Any) -> list[str]:
     """
     Extract web search queries from grounding metadata.
-    Handles both GenAI types.GroundingMetadata and LiteLLM dict formats.
+    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
     """
     if metadata is None:
         return []
     
+    # Handle list format (LiteLLM streaming returns list of grounding results)
+    if isinstance(metadata, list):
+        queries = []
+        for item in metadata:
+            if isinstance(item, dict):
+                # Check for search queries in various formats
+                item_queries = (
+                    item.get("web_search_queries") or 
+                    item.get("searchQueries") or
+                    item.get("webSearchQueries") or
+                    []
+                )
+                if isinstance(item_queries, list):
+                    queries.extend(item_queries)
+                elif item_queries:
+                    queries.append(str(item_queries))
+        return queries
+    
     # Handle dict format (LiteLLM)
     if isinstance(metadata, dict):
-        return metadata.get("web_search_queries", []) or metadata.get("searchQueries", []) or []
+        return metadata.get("web_search_queries", []) or metadata.get("searchQueries", []) or metadata.get("webSearchQueries", []) or []
     
     # Handle object format (GenAI GroundingMetadata)
     if hasattr(metadata, "web_search_queries"):
@@ -132,10 +150,42 @@ def _get_grounding_chunks(metadata: Any) -> list[dict]:
     """
     Extract grounding chunks from grounding metadata.
     Returns list of dicts with 'title' and 'uri' keys.
-    Handles both GenAI types.GroundingMetadata and LiteLLM dict formats.
+    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
     """
     if metadata is None:
         return []
+    
+    # Handle list format (LiteLLM streaming returns list of grounding results)
+    if isinstance(metadata, list):
+        result = []
+        for item in metadata:
+            if isinstance(item, dict):
+                # Check for chunks in various formats
+                chunks = (
+                    item.get("grounding_chunks") or 
+                    item.get("groundingChunks") or
+                    item.get("chunks") or
+                    []
+                )
+                for chunk in chunks:
+                    if isinstance(chunk, dict):
+                        web = chunk.get("web", {})
+                        if web:
+                            result.append({"title": web.get("title", ""), "uri": web.get("uri", "")})
+                        # Also check direct title/uri
+                        elif chunk.get("title") or chunk.get("uri"):
+                            result.append({"title": chunk.get("title", ""), "uri": chunk.get("uri", "")})
+                    elif hasattr(chunk, "web") and chunk.web:
+                        result.append({"title": chunk.web.title, "uri": chunk.web.uri})
+                
+                # Also check for grounding_supports or groundingSupports
+                supports = item.get("grounding_supports") or item.get("groundingSupports") or []
+                for support in supports:
+                    if isinstance(support, dict):
+                        # Grounding supports might have segment and ground_chunk_indices
+                        chunk_indices = support.get("groundingChunkIndices") or support.get("ground_chunk_indices") or []
+                        # The actual sources might be referenced elsewhere
+        return result
     
     # Handle dict format (LiteLLM)
     if isinstance(metadata, dict):
@@ -164,6 +214,27 @@ def _get_grounding_chunks(metadata: Any) -> list[dict]:
     return []
 
 
+def _has_grounding_data(metadata: Any) -> bool:
+    """
+    Check if metadata has any grounding data (queries or chunks).
+    Used to determine if the Show Sources button should be displayed.
+    """
+    if metadata is None:
+        return False
+    
+    # For list format, check if list is non-empty
+    if isinstance(metadata, list) and len(metadata) > 0:
+        return True
+    
+    # Check if we have queries or chunks
+    if _get_grounding_queries(metadata):
+        return True
+    if _get_grounding_chunks(metadata):
+        return True
+    
+    return False
+
+
 class ResponseView(discord.ui.View):
     """View with 'View Response Better' button that uploads to text.is"""
     
@@ -173,8 +244,8 @@ class ResponseView(discord.ui.View):
         self.metadata = metadata
         self.tavily_metadata = tavily_metadata
         
-        # Add Gemini grounding sources button if we have metadata with search queries
-        if metadata and _get_grounding_queries(metadata):
+        # Add Gemini grounding sources button if we have grounding metadata
+        if metadata and _has_grounding_data(metadata):
             self.add_item(SourceButton(metadata))
         
         # Add Tavily sources button if we have tavily metadata with URLs or queries
