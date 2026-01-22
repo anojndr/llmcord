@@ -720,10 +720,42 @@ async def generate_response(
             delta_content = choice.delta.content or ""
             chunk_finish_reason = choice.finish_reason
             
-            # LiteLLM handles grounding metadata in model_extra for Gemini
+            # LiteLLM handles grounding metadata in various locations depending on provider
             grounding_metadata = None
+            
+            # Check model_extra (common for Vertex AI / Gemini)
             if hasattr(chunk, 'model_extra') and chunk.model_extra:
-                grounding_metadata = chunk.model_extra.get('vertex_ai_grounding_metadata') or chunk.model_extra.get('google_grounding_metadata')
+                grounding_metadata = (
+                    chunk.model_extra.get('vertex_ai_grounding_metadata') or 
+                    chunk.model_extra.get('google_grounding_metadata') or
+                    chunk.model_extra.get('grounding_metadata') or
+                    chunk.model_extra.get('groundingMetadata')
+                )
+            
+            # Check the response object itself (some versions put it here)
+            if not grounding_metadata and hasattr(chunk, 'grounding_metadata'):
+                grounding_metadata = chunk.grounding_metadata
+            
+            # Check _hidden_params (LiteLLM sometimes stores provider-specific data here)
+            if not grounding_metadata and hasattr(chunk, '_hidden_params') and chunk._hidden_params:
+                grounding_metadata = (
+                    chunk._hidden_params.get('grounding_metadata') or
+                    chunk._hidden_params.get('google_grounding_metadata') or
+                    chunk._hidden_params.get('groundingMetadata')
+                )
+            
+            # For Gemini, also check in choices[0] for grounding info
+            if not grounding_metadata and hasattr(choice, 'grounding_metadata'):
+                grounding_metadata = choice.grounding_metadata
+            
+            # Log the chunk attributes on finish to help debug
+            if chunk_finish_reason and provider == "gemini":
+                chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith('_')]
+                logging.debug(f"Gemini chunk finish - attributes: {chunk_attrs}")
+                if hasattr(chunk, 'model_extra') and chunk.model_extra:
+                    logging.info(f"Gemini chunk model_extra keys: {list(chunk.model_extra.keys())}")
+                if hasattr(chunk, '_hidden_params') and chunk._hidden_params:
+                    logging.info(f"Gemini chunk _hidden_params keys: {list(chunk._hidden_params.keys())}")
             
             yield delta_content, chunk_finish_reason, grounding_metadata
 
@@ -759,6 +791,7 @@ async def generate_response(
                 async for delta_content, new_finish_reason, new_grounding_metadata in get_stream(current_api_key):
                     if new_grounding_metadata:
                         grounding_metadata = new_grounding_metadata
+                        logging.info(f"Captured grounding metadata from stream: {type(grounding_metadata)}")
 
                     if finish_reason != None:
                         break
