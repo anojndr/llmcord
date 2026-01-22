@@ -54,18 +54,21 @@ else:
 
 @discord_bot.tree.command(name="model", description="View or switch your current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
+    # Defer immediately to prevent Discord timeout
+    await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
+    
     user_id = str(interaction.user.id)
     db = get_bad_keys_db()
 
     if model not in config["models"]:
-        await interaction.response.send_message(f"Model `{model}` is not a valid model.", ephemeral=True)
+        await interaction.followup.send(f"Model `{model}` is not a valid model.", ephemeral=True)
         return
 
     # Get user's current model preference (or default)
     current_user_model = db.get_user_model(user_id)
     if current_user_model is None:
         if not config.get("models"):
-            await interaction.response.send_message("No models are configured. Please contact an administrator.", ephemeral=True)
+            await interaction.followup.send("No models are configured. Please contact an administrator.", ephemeral=True)
             return
         current_user_model = next(iter(config["models"]))  # Default model
 
@@ -76,7 +79,7 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
         output = f"Your model switched to: `{model}`"
         logging.info(f"User {user_id} switched model to: {model}")
 
-    await interaction.response.send_message(output, ephemeral=(interaction.channel.type == discord.ChannelType.private))
+    await interaction.followup.send(output)
 
 
 @model_command.autocomplete("model")
@@ -108,11 +111,14 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
 
 @discord_bot.tree.command(name="searchdecidermodel", description="View or switch your search decider model")
 async def search_decider_model_command(interaction: discord.Interaction, model: str) -> None:
+    # Defer immediately to prevent Discord timeout
+    await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
+    
     user_id = str(interaction.user.id)
     db = get_bad_keys_db()
 
     if model not in config["models"]:
-        await interaction.response.send_message(f"Model `{model}` is not a valid model.", ephemeral=True)
+        await interaction.followup.send(f"Model `{model}` is not a valid model.", ephemeral=True)
         return
 
     # Get user's current search decider model preference (or default from config)
@@ -122,7 +128,7 @@ async def search_decider_model_command(interaction: discord.Interaction, model: 
         current_user_model = default_decider if default_decider in config.get("models", {}) else None
     
     if current_user_model is None:
-        await interaction.response.send_message("No valid search decider model configured.", ephemeral=True)
+        await interaction.followup.send("No valid search decider model configured.", ephemeral=True)
         return
 
     if model == current_user_model:
@@ -132,7 +138,7 @@ async def search_decider_model_command(interaction: discord.Interaction, model: 
         output = f"Your search decider model switched to: `{model}`"
         logging.info(f"User {user_id} switched search decider model to: {model}")
 
-    await interaction.response.send_message(output, ephemeral=(interaction.channel.type == discord.ChannelType.private))
+    await interaction.followup.send(output)
 
 
 @search_decider_model_command.autocomplete("model")
