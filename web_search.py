@@ -2,6 +2,7 @@
 Web search functionality including search decision and Tavily integration.
 """
 import asyncio
+import base64
 import json
 import logging
 from datetime import datetime
@@ -168,7 +169,6 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                                         try:
                                             header, b64_data = image_url.split(",", 1)
                                             mime_type = header.split(":")[1].split(";")[0]
-                                            import base64
                                             image_bytes = base64.b64decode(b64_data)
                                             parts.append(types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
                                         except Exception:
@@ -384,20 +384,27 @@ async def perform_web_search(
     if not queries or not tavily_api_keys:
         return "", {}
     
-    async def search_single_query(query: str, depth: str) -> dict:
+    # Pre-fetch good keys once instead of creating KeyRotator per query
+    from bad_keys import get_bad_keys_db
+    db = get_bad_keys_db()
+    good_keys = db.get_good_keys_synced("tavily", tavily_api_keys)
+    if not good_keys:
+        db.reset_provider_keys_synced("tavily")
+        good_keys = tavily_api_keys.copy()
+    
+    async def search_single_query(query: str, depth: str, keys: list[str]) -> dict:
         """
-        Search with retry logic using KeyRotator.
+        Search with retry logic using pre-fetched keys.
         """
-        rotator = KeyRotator("tavily", tavily_api_keys)
-        
-        async for current_api_key in rotator.get_keys_async():
-            result = await tavily_search(query, current_api_key, max_results_per_query, depth)
+        for key in keys:
+            result = await tavily_search(query, key, max_results_per_query, depth)
             
             if "error" not in result:
                 return result
             
-            # Mark the current key as bad
-            rotator.mark_current_bad(result.get("error", "Unknown error"))
+            # Mark the key as bad
+            error_msg = result.get("error", "Unknown error")[:200]
+            db.mark_key_bad_synced("tavily", key, error_msg)
         
         # All keys failed
         logging.error(f"All Tavily API keys failed for query '{query}'")
@@ -405,9 +412,9 @@ async def perform_web_search(
     
     async def execute_searches(depth: str) -> tuple[list, list]:
         """Execute searches with given parameters and return results and URLs."""
-        # Execute searches concurrently
+        # Execute searches concurrently with shared key list
         search_tasks = [
-            search_single_query(query, depth)
+            search_single_query(query, depth, good_keys)
             for query in queries
         ]
         results = await asyncio.gather(*search_tasks)

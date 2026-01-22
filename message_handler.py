@@ -20,6 +20,16 @@ from openai import AsyncOpenAI
 from PIL import Image
 import tiktoken
 from twscrape import gather
+
+# Cache tiktoken encoding at module level for performance
+_tiktoken_encoding = None
+
+def _get_tiktoken_encoding():
+    """Get cached tiktoken encoding. Lazy initialization for better startup time."""
+    global _tiktoken_encoding
+    if _tiktoken_encoding is None:
+        _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
+    return _tiktoken_encoding
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from bad_keys import get_bad_keys_db, KeyRotator
@@ -642,8 +652,8 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 def count_conversation_tokens(messages: list) -> int:
     """Count tokens in the entire conversation using tiktoken."""
     try:
-        # Use o200k_base encoding (used by GPT-4o and modern models)
-        enc = tiktoken.get_encoding("o200k_base")
+        # Use cached encoding for performance
+        enc = _get_tiktoken_encoding()
         total_tokens = 0
         
         for msg in messages:
@@ -667,7 +677,7 @@ def count_conversation_tokens(messages: list) -> int:
 def count_text_tokens(text: str) -> int:
     """Count tokens in a text string using tiktoken."""
     try:
-        enc = tiktoken.get_encoding("o200k_base")
+        enc = _get_tiktoken_encoding()
         return len(enc.encode(text))
     except Exception:
         return 0
@@ -1032,6 +1042,10 @@ async def generate_response(
             await response_msgs[last_msg_index].edit(embed=embed, view=response_view)
 
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
-        for msg_id in sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]:
-            async with msg_nodes.setdefault(msg_id, MsgNode()).lock:
-                msg_nodes.pop(msg_id, None)
+        # Get keys to remove (oldest first based on insertion order)
+        keys_to_remove = sorted(msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]
+        for msg_id in keys_to_remove:
+            node = msg_nodes.get(msg_id)
+            if node is not None:
+                async with node.lock:
+                    msg_nodes.pop(msg_id, None)

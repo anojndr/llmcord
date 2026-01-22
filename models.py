@@ -8,9 +8,12 @@ from typing import Any, Literal, Optional
 import discord
 
 
-@dataclass
+@dataclass(slots=True)
 class MsgNode:
-    """Represents a message node in the conversation chain."""
+    """Represents a message node in the conversation chain.
+    
+    Uses __slots__ for memory efficiency since many instances are created.
+    """
     text: Optional[str] = None
     images: list[dict[str, Any]] = field(default_factory=list)
     raw_attachments: list[dict[str, Any]] = field(default_factory=list)
