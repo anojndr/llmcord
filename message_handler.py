@@ -45,7 +45,7 @@ from config import (
 )
 from litellm_utils import prepare_litellm_kwargs, build_litellm_model_name
 from models import MsgNode
-from views import ResponseView, SourceView, SourceButton, TavilySourceButton
+from views import ResponseView, SourceView, SourceButton, TavilySourceButton, _has_grounding_data
 from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
 
 
@@ -845,7 +845,7 @@ async def generate_response(
                             embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)
                             embed.color = EMBED_COLOR_COMPLETE if msg_split_incoming or is_good_finish else EMBED_COLOR_INCOMPLETE
 
-                            view = SourceView(grounding_metadata) if is_final_edit and grounding_metadata else None
+                            view = SourceView(grounding_metadata) if is_final_edit and _has_grounding_data(grounding_metadata) else None
 
                             msg_index = len(response_contents) - 1
                             if start_next_msg:
@@ -870,7 +870,7 @@ async def generate_response(
                     # Add buttons only to the last message
                     if i == len(response_contents) - 1:
                         # Add Gemini grounding sources button if available
-                        if grounding_metadata:
+                        if _has_grounding_data(grounding_metadata):
                             layout.add_item(SourceButton(grounding_metadata))
                         # Add Tavily sources button if available
                         if tavily_metadata and (tavily_metadata.get("urls") or tavily_metadata.get("queries")):
