@@ -272,9 +272,14 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
             if provider == "gemini" and "gemini-3" in model:
                 litellm_kwargs["reasoning_effort"] = "minimal"
             
-            # For GitHub Copilot, configure the token file before making the call
+            # For GitHub Copilot, configure the token file and add required headers
             if provider == "github_copilot":
                 _configure_github_copilot_token(current_api_key)
+                litellm_kwargs["extra_headers"] = {
+                    "Editor-Version": "vscode/1.85.1",
+                    "Editor-Plugin-Version": "copilot-chat/0.22.0",
+                    "Copilot-Integration-Id": "vscode-chat",
+                }
             
             # Make the LiteLLM call
             response = await litellm.acompletion(**litellm_kwargs)
