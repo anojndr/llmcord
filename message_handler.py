@@ -1,14 +1,12 @@
 """
 Message handling logic for llmcord Discord bot.
-Uses LiteLLM for unified LLM API access.
+Uses LiteLLM for unified LLM API access via shared litellm_utils.
 """
 import asyncio
 from base64 import b64encode
 from datetime import datetime
 import io
-import json
 import logging
-import os
 import re
 
 import asyncpraw
@@ -45,80 +43,10 @@ from config import (
     EDIT_DELAY_SECONDS,
     MAX_MESSAGE_NODES,
 )
+from litellm_utils import prepare_litellm_kwargs, build_litellm_model_name
 from models import MsgNode
 from views import ResponseView, SourceView, SourceButton, TavilySourceButton
 from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
-
-
-def _configure_github_copilot_token(access_token: str) -> None:
-    """
-    Configure a GitHub Copilot access token for LiteLLM.
-    
-    LiteLLM's GitHub Copilot provider expects tokens in a config file.
-    This function writes the access token AND exchanges it for an API key.
-    
-    Args:
-        access_token: GitHub access token (ghu_...)
-    """
-    import time
-    
-    # Get the token directory from env or use default
-    token_dir = os.environ.get(
-        "GITHUB_COPILOT_TOKEN_DIR",
-        os.path.expanduser("~/.config/litellm/github_copilot")
-    )
-    
-    # Create directory if it doesn't exist
-    os.makedirs(token_dir, exist_ok=True)
-    
-    # Write access token file (just the raw token)
-    access_token_file = os.path.join(
-        token_dir,
-        os.environ.get("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token")
-    )
-    with open(access_token_file, "w") as f:
-        f.write(access_token)
-    
-    logging.debug(f"Configured GitHub Copilot access token at {access_token_file}")
-    
-    # Also exchange the access token for a Copilot API key
-    # This replicates what LiteLLM's authenticator does
-    try:
-        import requests
-        
-        headers = {
-            "Authorization": f"token {access_token}",
-            "Accept": "application/json",
-            "Editor-Version": "vscode/1.85.1",
-            "Editor-Plugin-Version": "copilot-chat/0.22.0",
-        }
-        
-        response = requests.get(
-            "https://api.github.com/copilot_internal/v2/token",
-            headers=headers,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            token_data = response.json()
-            
-            # Write the API key file in the format LiteLLM expects
-            api_key_file = os.path.join(token_dir, "api-key.json")
-            api_key_data = {
-                "token": token_data.get("token"),
-                "expires_at": token_data.get("expires_at", int(time.time()) + 3600),
-                "endpoints": token_data.get("endpoints", {}),
-            }
-            
-            with open(api_key_file, "w") as f:
-                json.dump(api_key_data, f)
-            
-            logging.debug(f"Exchanged GitHub access token for Copilot API key at {api_key_file}")
-        else:
-            logging.warning(f"Failed to exchange GitHub token: {response.status_code} - {response.text[:200]}")
-    except Exception as e:
-        logging.warning(f"Error exchanging GitHub token for Copilot API key: {e}")
-
 
 
 def _get_embed_text(embed: discord.Embed) -> str:
@@ -154,27 +82,6 @@ def append_search_to_content(content, search_results: str):
     elif content:
         return str(content) + "\n\n" + search_results
     return content
-
-
-def _build_litellm_model_name(provider: str, model: str) -> str:
-    """
-    Build the LiteLLM model name with proper provider prefix.
-    
-    Args:
-        provider: Provider name (e.g., "gemini", "openai", "github_copilot")
-        model: Model name
-    
-    Returns:
-        LiteLLM-compatible model string (e.g., "gemini/gemini-3-flash-preview")
-    """
-    if provider == "gemini":
-        return f"gemini/{model}"
-    elif provider == "github_copilot":
-        return f"github_copilot/{model}"
-    else:
-        # For OpenAI-compatible providers, just use the model name
-        # LiteLLM will use base_url if provided
-        return model
 
 
 async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddit_client, 
@@ -766,8 +673,8 @@ async def generate_response(
     # Count input tokens (chat history + latest query)
     input_tokens = count_conversation_tokens(messages)
 
-    # Build LiteLLM model name
-    litellm_model = _build_litellm_model_name(provider, actual_model)
+    # Build LiteLLM model name (for display purposes in footer)
+    litellm_model = build_litellm_model_name(provider, actual_model)
 
     if use_plain_responses := config.get("use_plain_responses", False):
         max_message_length = 4000
@@ -785,72 +692,24 @@ async def generate_response(
         await msg_nodes[response_msg.id].lock.acquire()
 
     async def get_stream(api_key):
-        """Get streaming response from LiteLLM."""
-        # For GitHub Copilot, configure the token file before making the call
-        if provider == "github_copilot":
-            _configure_github_copilot_token(api_key)
+        """Get streaming response from LiteLLM using shared configuration."""
+        import re as regex_module
         
-        # Build LiteLLM kwargs
-        litellm_kwargs = {
-            "model": litellm_model,
-            "messages": messages[::-1],  # Reverse to get chronological order
-            "stream": True,
-            "api_key": api_key,
-        }
+        # Check if Gemini grounding should be enabled (no URL in message content)
+        enable_grounding = not regex_module.search(r"https?://", new_msg.content)
         
-        # Add base_url for OpenAI-compatible providers
-        if base_url and provider not in ("gemini", "github_copilot"):
-            litellm_kwargs["base_url"] = base_url
-        
-        # Add extra headers if provided
-        if extra_headers:
-            litellm_kwargs["extra_headers"] = extra_headers
-        
-        # Handle Gemini-specific settings
-        if provider == "gemini":
-            is_gemini_3 = "gemini-3" in actual_model
-            is_preview = "preview" in actual_model
-            
-            # Add thinking config for Gemini 3 models
-            thinking_level = model_parameters.get("thinking_level") if model_parameters else None
-            
-            if not thinking_level:
-                if "gemini-3-flash" in actual_model:
-                    thinking_level = "MINIMAL"
-                elif "gemini-3-pro" in actual_model:
-                    thinking_level = "LOW"
-            
-            if thinking_level:
-                # Map thinking levels to LiteLLM reasoning_effort
-                thinking_map = {
-                    "MINIMAL": "minimal",
-                    "LOW": "low", 
-                    "MEDIUM": "medium",
-                    "HIGH": "high"
-                }
-                litellm_kwargs["reasoning_effort"] = thinking_map.get(thinking_level, thinking_level.lower())
-            
-            # Add Google Search tool for non-preview models
-            if not is_preview:
-                has_url = re.search(r"https?://", new_msg.content)
-                if not has_url:
-                    litellm_kwargs["tools"] = [{"googleSearch": {}}, {"urlContext": {}}]
-            
-            # Set temperature for non-Gemini 3 models
-            if model_parameters and not is_gemini_3:
-                if "temperature" in model_parameters:
-                    litellm_kwargs["temperature"] = model_parameters["temperature"]
-        
-        # Add GitHub Copilot headers if needed
-        if provider == "github_copilot":
-            copilot_headers = {
-                "editor-version": "vscode/1.85.1",
-                "Copilot-Integration-Id": "vscode-chat"
-            }
-            if extra_headers:
-                litellm_kwargs["extra_headers"] = {**copilot_headers, **extra_headers}
-            else:
-                litellm_kwargs["extra_headers"] = copilot_headers
+        # Use shared utility to prepare kwargs with all provider-specific config
+        litellm_kwargs = prepare_litellm_kwargs(
+            provider=provider,
+            model=actual_model,
+            messages=messages[::-1],  # Reverse to get chronological order
+            api_key=api_key,
+            base_url=base_url,
+            extra_headers=extra_headers,
+            stream=True,
+            model_parameters=model_parameters,
+            enable_grounding=enable_grounding,
+        )
         
         # Make the streaming call
         async for chunk in await litellm.acompletion(**litellm_kwargs):

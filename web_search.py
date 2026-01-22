@@ -1,88 +1,17 @@
 """
 Web search functionality including search decision and Tavily integration.
-Uses LiteLLM for unified LLM API access.
+Uses LiteLLM for unified LLM API access via shared litellm_utils.
 """
 import asyncio
-import base64
 import json
 import logging
-import os
 from datetime import datetime
 
 import httpx
 import litellm
 
 from bad_keys import get_bad_keys_db, KeyRotator
-
-
-def _configure_github_copilot_token(access_token: str) -> None:
-    """
-    Configure a GitHub Copilot access token for LiteLLM.
-    
-    LiteLLM's GitHub Copilot provider expects tokens in a config file.
-    This function writes the access token AND exchanges it for an API key.
-    
-    Args:
-        access_token: GitHub access token (ghu_...)
-    """
-    import time
-    
-    # Get the token directory from env or use default
-    token_dir = os.environ.get(
-        "GITHUB_COPILOT_TOKEN_DIR",
-        os.path.expanduser("~/.config/litellm/github_copilot")
-    )
-    
-    # Create directory if it doesn't exist
-    os.makedirs(token_dir, exist_ok=True)
-    
-    # Write access token file (just the raw token)
-    access_token_file = os.path.join(
-        token_dir,
-        os.environ.get("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token")
-    )
-    with open(access_token_file, "w") as f:
-        f.write(access_token)
-    
-    logging.debug(f"Configured GitHub Copilot access token at {access_token_file}")
-    
-    # Also exchange the access token for a Copilot API key
-    # This replicates what LiteLLM's authenticator does
-    try:
-        import requests
-        
-        headers = {
-            "Authorization": f"token {access_token}",
-            "Accept": "application/json",
-            "Editor-Version": "vscode/1.85.1",
-            "Editor-Plugin-Version": "copilot-chat/0.22.0",
-        }
-        
-        response = requests.get(
-            "https://api.github.com/copilot_internal/v2/token",
-            headers=headers,
-            timeout=30
-        )
-        
-        if response.status_code == 200:
-            token_data = response.json()
-            
-            # Write the API key file in the format LiteLLM expects
-            api_key_file = os.path.join(token_dir, "api-key.json")
-            api_key_data = {
-                "token": token_data.get("token"),
-                "expires_at": token_data.get("expires_at", int(time.time()) + 3600),
-                "endpoints": token_data.get("endpoints", {}),
-            }
-            
-            with open(api_key_file, "w") as f:
-                json.dump(api_key_data, f)
-            
-            logging.debug(f"Exchanged GitHub access token for Copilot API key at {api_key_file}")
-        else:
-            logging.warning(f"Failed to exchange GitHub token: {response.status_code} - {response.text[:200]}")
-    except Exception as e:
-        logging.warning(f"Error exchanging GitHub token for Copilot API key: {e}")
+from litellm_utils import prepare_litellm_kwargs
 
 
 def get_current_datetime_strings() -> tuple[str, str]:
@@ -192,27 +121,6 @@ Examples:
 """
 
 
-def _build_litellm_model_name(provider: str, model: str) -> str:
-    """
-    Build the LiteLLM model name with proper provider prefix.
-    
-    Args:
-        provider: Provider name (e.g., "gemini", "openai", "github_copilot")
-        model: Model name
-    
-    Returns:
-        LiteLLM-compatible model string (e.g., "gemini/gemini-3-flash-preview")
-    """
-    if provider == "gemini":
-        return f"gemini/{model}"
-    elif provider == "github_copilot":
-        return f"github_copilot/{model}"
-    else:
-        # For OpenAI-compatible providers, just use the model name
-        # LiteLLM will use base_url if provided
-        return model
-
-
 async def decide_web_search(messages: list, decider_config: dict) -> dict:
     """
     Uses a configurable model to decide if web search is needed and generates optimized queries.
@@ -253,33 +161,15 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
             if len(litellm_messages) <= 2:  # Only system prompt and analysis instruction
                 return {"needs_search": False}
             
-            # Build LiteLLM model name
-            litellm_model = _build_litellm_model_name(provider, model)
-            
-            # Prepare LiteLLM call kwargs
-            litellm_kwargs = {
-                "model": litellm_model,
-                "messages": litellm_messages,
-                "temperature": 0.1,
-                "api_key": current_api_key,
-            }
-            
-            # Add base_url for OpenAI-compatible providers
-            if base_url and provider not in ("gemini", "github_copilot"):
-                litellm_kwargs["base_url"] = base_url
-            
-            # Add thinking config for Gemini 3 models
-            if provider == "gemini" and "gemini-3" in model:
-                litellm_kwargs["reasoning_effort"] = "minimal"
-            
-            # For GitHub Copilot, configure the token file and add required headers
-            if provider == "github_copilot":
-                _configure_github_copilot_token(current_api_key)
-                litellm_kwargs["extra_headers"] = {
-                    "Editor-Version": "vscode/1.85.1",
-                    "Editor-Plugin-Version": "copilot-chat/0.22.0",
-                    "Copilot-Integration-Id": "vscode-chat",
-                }
+            # Use shared utility to prepare kwargs with all provider-specific config
+            litellm_kwargs = prepare_litellm_kwargs(
+                provider=provider,
+                model=model,
+                messages=litellm_messages,
+                api_key=current_api_key,
+                base_url=base_url,
+                temperature=0.1,
+            )
             
             # Make the LiteLLM call
             response = await litellm.acompletion(**litellm_kwargs)
@@ -435,7 +325,6 @@ async def perform_web_search(
         return "", {}
     
     # Pre-fetch good keys once instead of creating KeyRotator per query
-    from bad_keys import get_bad_keys_db
     db = get_bad_keys_db()
     good_keys = db.get_good_keys_synced("tavily", tavily_api_keys)
     if not good_keys:
