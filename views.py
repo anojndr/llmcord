@@ -12,14 +12,15 @@ from google.genai import types
 from config import get_config
 
 
-async def upload_to_textis(text: str) -> Optional[str]:
-    """
-    Upload text to text.is and return the paste URL.
-    Returns None if upload fails.
-    """
-    try:
+# Shared httpx client for text.is uploads - reuses connections for better performance
+_textis_client: httpx.AsyncClient | None = None
+
+
+def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
+    """Get or create the shared text.is httpx client."""
+    global _textis_client
+    if _textis_client is None or _textis_client.is_closed:
         # Browser-like headers to avoid being blocked
-        # Note: Don't include Accept-Encoding - let httpx handle decompression automatically
         browser_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -27,67 +28,83 @@ async def upload_to_textis(text: str) -> Optional[str]:
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         }
-        
+        _textis_client = httpx.AsyncClient(
+            follow_redirects=False,
+            headers=browser_headers,
+            proxy=proxy_url,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _textis_client
+
+
+async def upload_to_textis(text: str) -> Optional[str]:
+    """
+    Upload text to text.is and return the paste URL.
+    Returns None if upload fails.
+    """
+    try:
         # Proxy configuration from config (optional)
         config = get_config()
         proxy_url = config.get("proxy_url") or None
         
-        async with httpx.AsyncClient(follow_redirects=False, headers=browser_headers, proxy=proxy_url) as client:
-            # Get the CSRF token from the main page
-            response = await client.get("https://text.is/", timeout=30)
-            
-            # Extract CSRF token from the form
-            soup = BeautifulSoup(response.text, "lxml")  # lxml is faster than html.parser
-            csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
-            if not csrf_input:
-                # Debug: log a snippet of the response to help diagnose
-                logging.error("Could not find CSRF token on text.is")
-                logging.debug(f"Response status: {response.status_code}, Content preview: {response.text[:500]}")
-                return None
-            
-            csrf_token = csrf_input.get("value")
-            
-            # Get cookies from the response
-            cookies = response.cookies
-            
-            # POST the text content
-            form_data = {
-                "csrfmiddlewaretoken": csrf_token,
-                "text": text,
-            }
-            
-            headers = {
-                "Referer": "https://text.is/",
-                "Origin": "https://text.is",
-            }
-            
-            post_response = await client.post(
-                "https://text.is/",
-                data=form_data,
-                headers=headers,
-                cookies=cookies,
-                timeout=30
-            )
-            
-            # The response should be a redirect (302) to the paste URL
-            if post_response.status_code in (301, 302, 303, 307, 308):
-                paste_url = post_response.headers.get("Location")
-                if paste_url:
-                    # Handle relative URLs
-                    if paste_url.startswith("/"):
-                        paste_url = f"https://text.is{paste_url}"
-                    return paste_url
-            
-            # If we got a 200, the paste might have been created and we're on the page
-            if post_response.status_code == 200:
-                # Check if the URL changed (we might be on the paste page)
-                final_url = str(post_response.url)
-                if final_url != "https://text.is/" and "text.is/" in final_url:
-                    return final_url
-            
-            logging.error(f"Unexpected response from text.is: {post_response.status_code}")
+        client = _get_textis_client(proxy_url)
+        
+        # Get the CSRF token from the main page
+        response = await client.get("https://text.is/", timeout=30)
+        
+        # Extract CSRF token from the form
+        soup = BeautifulSoup(response.text, "lxml")  # lxml is faster than html.parser
+        csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
+        if not csrf_input:
+            # Debug: log a snippet of the response to help diagnose
+            logging.error("Could not find CSRF token on text.is")
+            logging.debug(f"Response status: {response.status_code}, Content preview: {response.text[:500]}")
             return None
-            
+        
+        csrf_token = csrf_input.get("value")
+        
+        # Get cookies from the response
+        cookies = response.cookies
+        
+        # POST the text content
+        form_data = {
+            "csrfmiddlewaretoken": csrf_token,
+            "text": text,
+        }
+        
+        headers = {
+            "Referer": "https://text.is/",
+            "Origin": "https://text.is",
+        }
+        
+        post_response = await client.post(
+            "https://text.is/",
+            data=form_data,
+            headers=headers,
+            cookies=cookies,
+            timeout=30
+        )
+        
+        # The response should be a redirect (302) to the paste URL
+        if post_response.status_code in (301, 302, 303, 307, 308):
+            paste_url = post_response.headers.get("Location")
+            if paste_url:
+                # Handle relative URLs
+                if paste_url.startswith("/"):
+                    paste_url = f"https://text.is{paste_url}"
+                return paste_url
+        
+        # If we got a 200, the paste might have been created and we're on the page
+        if post_response.status_code == 200:
+            # Check if the URL changed (we might be on the paste page)
+            final_url = str(post_response.url)
+            if final_url != "https://text.is/" and "text.is/" in final_url:
+                return final_url
+        
+        logging.error(f"Unexpected response from text.is: {post_response.status_code}")
+        return None
+        
     except Exception as e:
         logging.exception(f"Error uploading to text.is: {e}")
         return None

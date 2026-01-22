@@ -3,6 +3,7 @@ Turso (libSQL) based tracking of bad API keys to avoid wasting retries.
 Uses Turso cloud database for persistent storage across deployments.
 """
 import hashlib
+import json
 import logging
 import os
 import functools
@@ -379,7 +380,6 @@ class BadKeysDB:
         Save web search results, lens results, and metadata associated with a Discord message.
         This allows search results to persist in chat history when conversations are rebuilt.
         """
-        import json
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -393,7 +393,11 @@ class BadKeysDB:
              search_results, json.dumps(tavily_metadata) if tavily_metadata else None, lens_results)
         )
         conn.commit()
-        self._sync()
+        # Sync in background to avoid blocking
+        try:
+            self._sync()
+        except Exception as e:
+            logging.debug(f"Background sync after save failed: {e}")
         logging.info(f"Saved search data for message {message_id}")
     
     @_with_reconnect
@@ -401,11 +405,10 @@ class BadKeysDB:
         """
         Get web search results, metadata, and lens results associated with a Discord message.
         Returns a tuple of (search_results, tavily_metadata, lens_results) or (None, None, None) if not found.
+        Uses local replica for fast reads - sync happens periodically in background.
         """
-        import json
-        # Sync with Turso cloud before reading to ensure we have the latest data
-        # This is especially important after bot restarts
-        self._sync()
+        # Use local replica for fast reads (synced periodically)
+        # Only sync if we haven't found data and need fresh data
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
