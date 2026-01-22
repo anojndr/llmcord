@@ -473,21 +473,43 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                     logging.info(f"Loaded stored lens results for message {curr_msg.id}")
 
             # Build message content (now unified for all providers via LiteLLM)
-            if curr_node.images[:max_images]:
-                content = ([dict(type="text", text=curr_node.text[:max_text])] if curr_node.text[:max_text] else []) + curr_node.images[:max_images]
+            # Check if there are Gemini-specific file attachments (audio, video, PDF)
+            gemini_file_attachments = []
+            if provider == "gemini" and curr_node.raw_attachments:
+                for att in curr_node.raw_attachments:
+                    if att["content_type"].startswith(("audio", "video")) or att["content_type"] == "application/pdf":
+                        # LiteLLM supports inline data format for Gemini
+                        encoded_data = b64encode(att["content"]).decode('utf-8')
+                        gemini_file_attachments.append({
+                            "type": "file",
+                            "file": {
+                                "file_data": f"data:{att['content_type']};base64,{encoded_data}"
+                            }
+                        })
+            
+            # Determine if we need multimodal content format
+            has_images = bool(curr_node.images[:max_images])
+            has_gemini_files = bool(gemini_file_attachments)
+            
+            if has_images or has_gemini_files:
+                # Build multimodal content array
+                content = []
                 
-                # For Gemini with raw attachments (audio, video, PDF), add them as file parts
-                if provider == "gemini" and curr_node.raw_attachments:
-                    for att in curr_node.raw_attachments:
-                        if att["content_type"].startswith(("audio", "video", "application/pdf")):
-                            # LiteLLM supports inline data format for Gemini
-                            encoded_data = b64encode(att["content"]).decode('utf-8')
-                            content.append({
-                                "type": "file",
-                                "file": {
-                                    "file_data": f"data:{att['content_type']};base64,{encoded_data}"
-                                }
-                            })
+                # Add text part if present
+                if curr_node.text[:max_text]:
+                    content.append(dict(type="text", text=curr_node.text[:max_text]))
+                
+                # Add images
+                content.extend(curr_node.images[:max_images])
+                
+                # Add Gemini file attachments (audio, video, PDF)
+                content.extend(gemini_file_attachments)
+                if gemini_file_attachments:
+                    logging.info(f"Added {len(gemini_file_attachments)} Gemini file attachment(s) (audio/video/PDF) to message")
+                
+                # Ensure we have at least some content
+                if not content:
+                    content = [dict(type="text", text="What is in this file?")]
             else:
                 content = curr_node.text[:max_text]
 
@@ -495,7 +517,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
             if curr_node.search_results and curr_node.role == "user":
                 content = append_search_to_content(content, curr_node.search_results)
 
-            if content != "":
+            if content:
                 message = dict(content=content, role=curr_node.role)
                 if accept_usernames and curr_node.user_id != None:
                     message["name"] = str(curr_node.user_id)
