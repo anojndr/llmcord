@@ -49,11 +49,12 @@ from web_search import decide_web_search, perform_web_search, get_current_dateti
 
 
 def _get_embed_text(embed: discord.Embed) -> str:
-    """Safely extract text content from a Discord embed, handling None values."""
+    """Safely extract text content from a Discord embed, handling None values.
+    
+    Note: Footer text is intentionally excluded as it contains metadata
+    (model name, token count) that should not be sent to the LLM.
+    """
     parts = [embed.title, embed.description]
-    # Handle edge case where footer is None
-    if embed.footer:
-        parts.append(embed.footer.text)
     return "\n".join(filter(None, parts))
 
 
