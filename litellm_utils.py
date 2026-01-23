@@ -105,6 +105,7 @@ GITHUB_COPILOT_HEADERS = {
     "Editor-Version": "vscode/1.85.1",
     "Editor-Plugin-Version": "copilot-chat/0.22.0",
     "Copilot-Integration-Id": "vscode-chat",
+    "Copilot-Vision-Request": "true",  # Required for vision/image requests
 }
 
 
