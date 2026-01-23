@@ -11,6 +11,7 @@ import httpx
 import litellm
 
 from bad_keys import get_bad_keys_db, KeyRotator
+from config import get_or_create_httpx_client
 from litellm_utils import prepare_litellm_kwargs
 
 
@@ -206,20 +207,21 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     return {"needs_search": False}
 
 
-# Shared httpx client for Tavily API calls - reuses connections for better performance
-_tavily_client: httpx.AsyncClient | None = None
+# Shared httpx client for Tavily API calls - uses DRY factory pattern
+_tavily_client_holder: list = []
 
 
 def _get_tavily_client() -> httpx.AsyncClient:
-    """Get or create the shared Tavily httpx client."""
-    global _tavily_client
-    if _tavily_client is None or _tavily_client.is_closed:
-        _tavily_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),  # 30s total, 10s connect
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            follow_redirects=True,
-        )
-    return _tavily_client
+    """Get or create the shared Tavily httpx client using the DRY factory pattern."""
+    return get_or_create_httpx_client(
+        _tavily_client_holder,
+        timeout=30.0,
+        connect_timeout=10.0,
+        max_connections=20,
+        max_keepalive=10,
+        follow_redirects=True,
+        headers={},  # Tavily doesn't need browser headers, just defaults
+    )
 
 
 async def tavily_search(

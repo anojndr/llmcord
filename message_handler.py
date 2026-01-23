@@ -40,6 +40,7 @@ from config import (
     PROCESSING_MESSAGE,
     EDIT_DELAY_SECONDS,
     MAX_MESSAGE_NODES,
+    BROWSER_HEADERS,
 )
 from litellm_utils import prepare_litellm_kwargs, build_litellm_model_name
 from models import MsgNode
@@ -54,6 +55,116 @@ def _get_embed_text(embed: discord.Embed) -> str:
     if embed.footer:
         parts.append(embed.footer.text)
     return "\n".join(filter(None, parts))
+
+
+# =============================================================================
+# DRY Helper Functions for Message Processing
+# =============================================================================
+
+async def fetch_tweet_with_replies(
+    twitter_api,
+    tweet_id: int,
+    max_replies: int = 0,
+    include_url: bool = False,
+    tweet_url: str = ""
+) -> str | None:
+    """
+    Fetch a tweet and optionally its replies, returning formatted text.
+    
+    DRY: Consolidates the duplicated tweet fetching logic that appeared in:
+    - Google Lens Twitter extraction
+    - Main tweet URL processing
+    
+    Args:
+        twitter_api: The twscrape API instance
+        tweet_id: The tweet's ID
+        max_replies: Maximum number of replies to fetch (0 = no replies)
+        include_url: Whether to include the tweet URL in the output
+        tweet_url: The tweet URL (used if include_url=True)
+    
+    Returns:
+        Formatted tweet text or None if fetch failed
+    """
+    try:
+        tweet = await asyncio.wait_for(twitter_api.tweet_details(tweet_id), timeout=10)
+        
+        # Handle edge case where tweet or user is None
+        if not tweet or not tweet.user:
+            return None
+        
+        username = tweet.user.username or "unknown"
+        
+        if include_url and tweet_url:
+            tweet_text = f"\n--- Tweet from @{username} ({tweet_url}) ---\n{tweet.rawContent or ''}"
+        else:
+            tweet_text = f"Tweet from @{username}:\n{tweet.rawContent or ''}"
+        
+        if max_replies > 0:
+            replies = await asyncio.wait_for(
+                gather(twitter_api.tweet_replies(tweet_id, limit=max_replies)),
+                timeout=10
+            )
+            if replies:
+                tweet_text += "\n\nReplies:" if include_url else "\nReplies:"
+                for reply in replies:
+                    if reply and reply.user:
+                        reply_username = reply.user.username or "unknown"
+                        tweet_text += f"\n- @{reply_username}: {reply.rawContent or ''}"
+        
+        return tweet_text
+    except Exception as e:
+        logging.debug(f"Failed to fetch tweet {tweet_id}: {e}")
+        return None
+
+
+def build_node_text_parts(
+    cleaned_content: str,
+    embeds: list,
+    components: list,
+    text_attachments: list[str] = None,
+    extra_parts: list[str] = None,
+) -> str:
+    """
+    Build node text from multiple content sources.
+    
+    DRY: Consolidates the duplicated text joining pattern that appeared twice
+    in process_message for building curr_node.text.
+    
+    Args:
+        cleaned_content: The cleaned message content
+        embeds: List of Discord embeds
+        components: List of Discord components
+        text_attachments: Optional list of text attachment contents
+        extra_parts: Optional list of additional text parts (transcripts, tweets, etc.)
+    
+    Returns:
+        Joined text content
+    """
+    parts = []
+    
+    if cleaned_content:
+        parts.append(cleaned_content)
+    
+    # Add embed text
+    for embed in embeds:
+        embed_text = _get_embed_text(embed)
+        if embed_text:
+            parts.append(embed_text)
+    
+    # Add text display components
+    for component in components:
+        if component.type == discord.ComponentType.text_display and component.content:
+            parts.append(component.content)
+    
+    # Add text attachments
+    if text_attachments:
+        parts.extend(text_attachments)
+    
+    # Add extra parts (transcripts, tweets, reddit posts, etc.)
+    if extra_parts:
+        parts.extend(extra_parts)
+    
+    return "\n".join(parts)
 
 
 def append_search_to_content(content, search_results: str):
@@ -200,15 +311,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         logging.debug(f"Using cached lens results for message {curr_msg.id}")
                     elif image_url := next((att.url for att in curr_msg.attachments if att.content_type and att.content_type.startswith("image")), None):
                         try:
-                            headers = {
-                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                            }
+                            # Use shared browser headers (DRY)
                             params = {
                                 "rpt": "imageview",
                                 "url": image_url
                             }
                             
-                            yandex_resp = await httpx_client.get("https://yandex.com/images/search", params=params, headers=headers, follow_redirects=True, timeout=60)
+                            yandex_resp = await httpx_client.get("https://yandex.com/images/search", params=params, headers=BROWSER_HEADERS, follow_redirects=True, timeout=60)
                             soup = BeautifulSoup(yandex_resp.text, "lxml")  # lxml is faster than html.parser
                             
                             lens_results = []
@@ -232,31 +341,21 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                     if re.search(r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+", link):
                                         twitter_urls_found.append(link)
                             
-                            # Extract tweet content from Twitter/X URLs found in Yandex results
+                            # Extract tweet content from Twitter/X URLs found in Yandex results (using DRY helper)
                             twitter_content = []
                             if twitter_urls_found:
                                 for twitter_url in twitter_urls_found:
                                     tweet_id_match = re.search(r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/([0-9]+)", twitter_url)
                                     if tweet_id_match:
-                                        tweet_id = tweet_id_match.group(1)
-                                        try:
-                                            tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
-                                            # Handle edge case where tweet or user is None
-                                            if not tweet or not tweet.user:
-                                                continue
-                                            tweet_text = f"\n--- Tweet from @{tweet.user.username or 'unknown'} ({twitter_url}) ---\n{tweet.rawContent or ''}"
-                                            
-                                            if max_tweet_replies > 0:
-                                                replies = await asyncio.wait_for(gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies)), timeout=10)
-                                                if replies:
-                                                    tweet_text += "\n\nReplies:"
-                                                    for reply in replies:
-                                                        if reply and reply.user:
-                                                            tweet_text += f"\n- @{reply.user.username or 'unknown'}: {reply.rawContent or ''}"
-                                            
+                                        tweet_text = await fetch_tweet_with_replies(
+                                            twitter_api,
+                                            int(tweet_id_match.group(1)),
+                                            max_replies=max_tweet_replies,
+                                            include_url=True,
+                                            tweet_url=twitter_url
+                                        )
+                                        if tweet_text:
                                             twitter_content.append(tweet_text)
-                                        except Exception:
-                                            logging.debug(f"Failed to fetch tweet {tweet_id}")
                             
                             if lens_results:
                                 result_text = "\n\nanswer the user's query based on the yandex reverse image results:\n" + "\n".join(lens_results)
@@ -311,11 +410,12 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                     processed_attachments.append(dict(content_type=content_type, content=content, text=resp.text if content_type.startswith("text") else None))
 
-                curr_node.text = "\n".join(
-                    ([cleaned_content] if cleaned_content else [])
-                    + [_get_embed_text(embed) for embed in curr_msg.embeds]
-                    + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
-                    + [att["text"] for att in processed_attachments if att["content_type"].startswith("text")]
+                # Initial text building before async content fetches (using DRY helper)
+                curr_node.text = build_node_text_parts(
+                    cleaned_content,
+                    curr_msg.embeds,
+                    curr_msg.components,
+                    text_attachments=[att["text"] for att in processed_attachments if att["content_type"].startswith("text") and att["text"]]
                 )
 
                 curr_node.images = [
@@ -354,24 +454,17 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 else:
                     yt_transcripts = []
 
+                # Fetch tweets using DRY helper function
                 tweets = []
                 for tweet_id in re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)", cleaned_content):
-                    try:
-                        tweet = await asyncio.wait_for(twitter_api.tweet_details(int(tweet_id)), timeout=10)
-                        # Handle edge case where tweet or user is None
-                        if not tweet or not tweet.user:
-                            continue
-                        tweets.append(f"Tweet from @{tweet.user.username or 'unknown'}:\n{tweet.rawContent or ''}")
-
-                        if max_tweet_replies > 0:
-                            replies = await asyncio.wait_for(gather(twitter_api.tweet_replies(int(tweet_id), limit=max_tweet_replies)), timeout=10)
-                            if replies:
-                                tweets.append("\nReplies:")
-                                for reply in replies:
-                                    if reply and reply.user:
-                                        tweets.append(f"- @{reply.user.username or 'unknown'}: {reply.rawContent or ''}")
-                    except Exception:
-                        pass
+                    tweet_text = await fetch_tweet_with_replies(
+                        twitter_api,
+                        int(tweet_id),
+                        max_replies=max_tweet_replies,
+                        include_url=False
+                    )
+                    if tweet_text:
+                        tweets.append(tweet_text)
 
                 reddit_posts = []
                 if reddit_client:
@@ -412,14 +505,13 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         except Exception:
                             pass
 
-                curr_node.text = "\n".join(
-                    ([cleaned_content] if cleaned_content else [])
-                    + [_get_embed_text(embed) for embed in curr_msg.embeds]
-                    + [component.content for component in curr_msg.components if component.type == discord.ComponentType.text_display]
-                    + [resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text")]
-                    + yt_transcripts
-                    + tweets
-                    + reddit_posts
+                # Final text building with all async content (using DRY helper)
+                curr_node.text = build_node_text_parts(
+                    cleaned_content,
+                    curr_msg.embeds,
+                    curr_msg.components,
+                    text_attachments=[resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text") and resp.text],
+                    extra_parts=yt_transcripts + tweets + reddit_posts
                 )
 
                 if not curr_node.text and curr_node.images:
