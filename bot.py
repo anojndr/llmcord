@@ -52,119 +52,169 @@ else:
     reddit_client = None
 
 
-@discord_bot.tree.command(name="model", description="View or switch your current model")
-async def model_command(interaction: discord.Interaction, model: str) -> None:
-    # Defer immediately to prevent Discord timeout
-    await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
+# =============================================================================
+# DRY Helper Functions for Slash Commands
+# =============================================================================
+
+async def _handle_model_switch(
+    interaction: discord.Interaction,
+    model: str,
+    get_current_model_fn,
+    set_model_fn,
+    get_default_fn,
+    model_type_label: str = "model"
+) -> None:
+    """
+    Generic handler for model switching slash commands.
     
+    DRY: Consolidates the shared logic between /model and /searchdecidermodel commands.
+    
+    Args:
+        interaction: Discord interaction object
+        model: The model to switch to
+        get_current_model_fn: Function to get current model for user (db method)
+        set_model_fn: Function to set model for user (db method)
+        get_default_fn: Function to get default model (returns model string)
+        model_type_label: Label for logging/messages (e.g., "model" or "search decider model")
+    """
     user_id = str(interaction.user.id)
-    db = get_bad_keys_db()
 
     if model not in config["models"]:
         await interaction.followup.send(f"Model `{model}` is not a valid model.", ephemeral=True)
         return
 
     # Get user's current model preference (or default)
-    current_user_model = db.get_user_model(user_id)
+    current_user_model = get_current_model_fn(user_id)
+    default_model = get_default_fn()
+    
     if current_user_model is None:
-        if not config.get("models"):
-            await interaction.followup.send("No models are configured. Please contact an administrator.", ephemeral=True)
-            return
-        current_user_model = next(iter(config["models"]))  # Default model
+        current_user_model = default_model
+    
+    if current_user_model is None:
+        await interaction.followup.send(f"No valid {model_type_label} configured.", ephemeral=True)
+        return
 
     if model == current_user_model:
-        output = f"Your current model: `{current_user_model}`"
+        output = f"Your current {model_type_label}: `{current_user_model}`"
     else:
-        db.set_user_model(user_id, model)
-        output = f"Your model switched to: `{model}`"
-        logging.info(f"User {user_id} switched model to: {model}")
+        set_model_fn(user_id, model)
+        output = f"Your {model_type_label} switched to: `{model}`"
+        logging.info(f"User {user_id} switched {model_type_label} to: {model}")
 
     await interaction.followup.send(output)
+
+
+def _build_model_autocomplete(
+    curr_str: str,
+    get_current_model_fn,
+    get_default_fn,
+    user_id: str
+) -> list[Choice[str]]:
+    """
+    Generic builder for model autocomplete choices.
+    
+    DRY: Consolidates the shared autocomplete logic between commands.
+    
+    Args:
+        curr_str: Current search string from user input
+        get_current_model_fn: Function to get current model for user (db method)
+        get_default_fn: Function to get default model (returns model string)
+        user_id: User ID string
+    
+    Returns:
+        List of discord.app_commands.Choice objects
+    """
+    user_model = get_current_model_fn(user_id)
+    default_model = get_default_fn()
+    
+    if user_model is None:
+        user_model = default_model
+    
+    # Validate that user's saved model still exists in config
+    if not user_model or user_model not in config.get("models", {}):
+        user_model = default_model or next(iter(config.get("models", {})), "")
+    
+    if not user_model:
+        return []
+
+    choices = [Choice(name=f"◉ {user_model} (current)", value=user_model)] if curr_str.lower() in user_model.lower() else []
+    choices += [Choice(name=f"○ {m}", value=m) for m in config["models"] if m != user_model and curr_str.lower() in m.lower()]
+
+    return choices[:25]
+
+
+# =============================================================================
+# Slash Commands
+# =============================================================================
+
+@discord_bot.tree.command(name="model", description="View or switch your current model")
+async def model_command(interaction: discord.Interaction, model: str) -> None:
+    await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
+    
+    db = get_bad_keys_db()
+    
+    def get_default():
+        return next(iter(config.get("models", {})), None)
+    
+    await _handle_model_switch(
+        interaction=interaction,
+        model=model,
+        get_current_model_fn=db.get_user_model,
+        set_model_fn=db.set_user_model,
+        get_default_fn=get_default,
+        model_type_label="model"
+    )
 
 
 @model_command.autocomplete("model")
 async def model_autocomplete(interaction: discord.Interaction, curr_str: str) -> list[Choice[str]]:
     global config
-
-    # Refresh config from cache (will reload if file changed)
     if curr_str == "":
         config = get_config()
 
-    # Get user's current model preference (or default)
-    user_id = str(interaction.user.id)
     db = get_bad_keys_db()
-    user_model = db.get_user_model(user_id)
-    if user_model is None:
-        if not config.get("models"):
-            return []
-        user_model = next(iter(config["models"]))  # Default model
+    user_id = str(interaction.user.id)
     
-    # Validate that user's saved model still exists in config
-    if user_model not in config["models"]:
-        user_model = next(iter(config["models"]))
-
-    choices = [Choice(name=f"◉ {user_model} (current)", value=user_model)] if curr_str.lower() in user_model.lower() else []
-    choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != user_model and curr_str.lower() in model.lower()]
-
-    return choices[:25]
+    def get_default():
+        return next(iter(config.get("models", {})), None)
+    
+    return _build_model_autocomplete(curr_str, db.get_user_model, get_default, user_id)
 
 
 @discord_bot.tree.command(name="searchdecidermodel", description="View or switch your search decider model")
 async def search_decider_model_command(interaction: discord.Interaction, model: str) -> None:
-    # Defer immediately to prevent Discord timeout
     await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
     
-    user_id = str(interaction.user.id)
     db = get_bad_keys_db()
-
-    if model not in config["models"]:
-        await interaction.followup.send(f"Model `{model}` is not a valid model.", ephemeral=True)
-        return
-
-    # Get user's current search decider model preference (or default from config)
-    current_user_model = db.get_user_search_decider_model(user_id)
-    default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
-    if current_user_model is None:
-        current_user_model = default_decider if default_decider in config.get("models", {}) else None
     
-    if current_user_model is None:
-        await interaction.followup.send("No valid search decider model configured.", ephemeral=True)
-        return
-
-    if model == current_user_model:
-        output = f"Your current search decider model: `{current_user_model}`"
-    else:
-        db.set_user_search_decider_model(user_id, model)
-        output = f"Your search decider model switched to: `{model}`"
-        logging.info(f"User {user_id} switched search decider model to: {model}")
-
-    await interaction.followup.send(output)
+    def get_default():
+        default = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+        return default if default in config.get("models", {}) else None
+    
+    await _handle_model_switch(
+        interaction=interaction,
+        model=model,
+        get_current_model_fn=db.get_user_search_decider_model,
+        set_model_fn=db.set_user_search_decider_model,
+        get_default_fn=get_default,
+        model_type_label="search decider model"
+    )
 
 
 @search_decider_model_command.autocomplete("model")
 async def search_decider_model_autocomplete(interaction: discord.Interaction, curr_str: str) -> list[Choice[str]]:
     global config
-
-    # Refresh config from cache (will reload if file changed)
     if curr_str == "":
         config = get_config()
 
-    # Get user's current search decider model preference (or default from config)
-    user_id = str(interaction.user.id)
     db = get_bad_keys_db()
-    user_model = db.get_user_search_decider_model(user_id)
-    default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
-    if user_model is None:
-        user_model = default_decider
+    user_id = str(interaction.user.id)
     
-    # Validate that user's saved model still exists in config
-    if user_model not in config.get("models", {}):
-        user_model = default_decider if default_decider in config.get("models", {}) else (next(iter(config.get("models", {})), None) or "")
-
-    choices = [Choice(name=f"◉ {user_model} (current)", value=user_model)] if curr_str.lower() in user_model.lower() else []
-    choices += [Choice(name=f"○ {model}", value=model) for model in config["models"] if model != user_model and curr_str.lower() in model.lower()]
-
-    return choices[:25]
+    def get_default():
+        default = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
+        return default if default in config.get("models", {}) else next(iter(config.get("models", {})), "")
+    
+    return _build_model_autocomplete(curr_str, db.get_user_search_decider_model, get_default, user_id)
 
 
 @discord_bot.tree.command(name="resetallpreferences", description="[Owner] Reset all users' model preferences")

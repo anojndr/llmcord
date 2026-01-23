@@ -8,33 +8,24 @@ import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from config import get_config
+from config import get_config, get_or_create_httpx_client
 
 
-# Shared httpx client for text.is uploads - reuses connections for better performance
-_textis_client: httpx.AsyncClient | None = None
+# Shared httpx client for text.is uploads - uses factory pattern for DRY
+_textis_client_holder: list = []
 
 
 def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
-    """Get or create the shared text.is httpx client."""
-    global _textis_client
-    if _textis_client is None or _textis_client.is_closed:
-        # Browser-like headers to avoid being blocked
-        browser_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-        }
-        _textis_client = httpx.AsyncClient(
-            follow_redirects=False,
-            headers=browser_headers,
-            proxy=proxy_url,
-            timeout=httpx.Timeout(30.0, connect=10.0),
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-        )
-    return _textis_client
+    """Get or create the shared text.is httpx client using the DRY factory pattern."""
+    return get_or_create_httpx_client(
+        _textis_client_holder,
+        timeout=30.0,
+        connect_timeout=10.0,
+        max_connections=10,
+        max_keepalive=5,
+        proxy_url=proxy_url,
+        follow_redirects=False,  # text.is needs redirect handling
+    )
 
 
 async def upload_to_textis(text: str) -> Optional[str]:
