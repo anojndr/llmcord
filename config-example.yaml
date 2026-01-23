@@ -4,6 +4,7 @@ bot_token:
 client_id: 
 status_message: 
 tavily_api_key:  # For web search on non-Gemini and preview models
+tavily_search_depth: advanced  # Options: basic, advanced, fast, ultra-fast (advanced recommended for quality)
 
 # Turso database settings (for persistent bad API keys tracking):
 turso_database_url:  # e.g., libsql://your-db.turso.io
