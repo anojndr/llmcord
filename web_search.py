@@ -301,7 +301,8 @@ async def perform_web_search(
     tavily_api_keys: list[str], 
     max_results_per_query: int = 5, 
     max_chars_per_url: int = 2000,
-    min_score: float = 0.3
+    min_score: float = 0.3,
+    search_depth: str = "advanced"
 ) -> tuple[str, dict]:
     """
     Perform concurrent web searches for multiple queries using Tavily.
@@ -311,7 +312,7 @@ async def perform_web_search(
     Best practices applied:
     - Concurrent requests with asyncio.gather()
     - KeyRotator for synced bad key tracking with database persistence
-    - Always uses "advanced" search depth for highest quality results
+    - Configurable search depth (default: "advanced" for highest quality results)
     
     Args:
         queries: List of search queries
@@ -319,6 +320,7 @@ async def perform_web_search(
         max_results_per_query: Maximum number of URLs per query (default: 5)
         max_chars_per_url: Maximum characters per URL content (default: 2000)
         min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.3)
+        search_depth: Search depth - "basic", "advanced", "fast", or "ultra-fast" (default: "advanced")
     
     Returns:
         tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...]})
@@ -402,8 +404,8 @@ async def perform_web_search(
         logging.info(f"Total URLs collected: {len(urls)}")
         return formatted, urls
     
-    # Always use advanced depth for best results
-    formatted_results, all_urls = await execute_searches("advanced")
+    # Use configured search depth (defaults to "advanced" for best results)
+    formatted_results, all_urls = await execute_searches(search_depth)
     
     metadata = {
         "queries": queries,

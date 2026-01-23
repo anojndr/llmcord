@@ -690,7 +690,8 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 logging.info(f"Web search triggered. Queries: {queries}")
                 
                 # Perform concurrent Tavily searches (5 URLs per query, 2k chars per URL)
-                search_results, tavily_metadata = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_url=2000)
+                tavily_search_depth = config.get("tavily_search_depth", "advanced")
+                search_results, tavily_metadata = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_url=2000, search_depth=tavily_search_depth)
                 
                 if search_results:
                     # Append search results to the first (most recent) user message
