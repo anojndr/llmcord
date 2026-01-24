@@ -18,6 +18,7 @@ import litellm
 from PIL import Image
 import tiktoken
 from twscrape import gather
+import pymupdf4llm
 
 # Pre-load tiktoken encoding at module load time to avoid first-message delay
 # This shifts the ~1-2s loading cost from first message to bot startup
@@ -61,6 +62,47 @@ def _get_embed_text(embed: discord.Embed) -> str:
 # =============================================================================
 # DRY Helper Functions for Message Processing
 # =============================================================================
+
+async def extract_pdf_text(pdf_content: bytes) -> str | None:
+    """
+    Extract text content from a PDF file using pymupdf4llm.
+    
+    This is used for non-Gemini models since they don't natively support PDF attachments.
+    Runs in a thread pool since PyMuPDF operations are CPU-bound.
+    
+    Args:
+        pdf_content: The raw PDF file bytes
+        
+    Returns:
+        Extracted markdown text from the PDF, or None if extraction failed
+    """
+    def _extract():
+        try:
+            import fitz  # PyMuPDF
+            # Open PDF from bytes (in-memory)
+            doc = fitz.open(stream=pdf_content, filetype="pdf")
+            
+            # Use pymupdf4llm for clean markdown extraction
+            md_text = pymupdf4llm.to_markdown(doc)
+            doc.close()
+            return md_text
+        except Exception as e:
+            logging.warning(f"Failed to extract PDF text: {e}")
+            return None
+    
+    try:
+        # Run in thread pool with timeout to avoid blocking
+        pdf_text = await asyncio.wait_for(
+            asyncio.to_thread(_extract),
+            timeout=30  # 30 second timeout for large PDFs
+        )
+        return pdf_text
+    except asyncio.TimeoutError:
+        logging.warning("PDF extraction timed out")
+        return None
+    except Exception as e:
+        logging.warning(f"PDF extraction error: {e}")
+        return None
 
 async def fetch_tweet_with_replies(
     twitter_api,
@@ -373,9 +415,9 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         except Exception:
                             logging.exception("Error fetching Yandex results")
 
-                allowed_types = ("text", "image")
+                allowed_types = ("text", "image", "application/pdf")  # PDF always allowed - Gemini uses native, others get text extraction
                 if provider == "gemini":
-                    allowed_types += ("audio", "video", "application/pdf")
+                    allowed_types += ("audio", "video")
 
                 good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in allowed_types)]
 
@@ -506,13 +548,37 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         except Exception:
                             pass
 
+                # PDF text extraction for non-Gemini providers
+                # Gemini handles PDFs natively, but other providers need text extraction
+                pdf_texts = []
+                if provider != "gemini":
+                    pdf_attachments = [
+                        att for att in processed_attachments 
+                        if att["content_type"] == "application/pdf"
+                    ]
+                    if pdf_attachments:
+                        # Extract text from PDFs in parallel
+                        pdf_extraction_tasks = [
+                            extract_pdf_text(att["content"]) 
+                            for att in pdf_attachments
+                        ]
+                        pdf_results = await asyncio.gather(*pdf_extraction_tasks)
+                        
+                        for i, pdf_text in enumerate(pdf_results):
+                            if pdf_text:
+                                # Format PDF content nicely for the LLM
+                                pdf_texts.append(f"--- PDF Attachment {i + 1} Content ---\n{pdf_text}")
+                                logging.info(f"Extracted text from PDF attachment ({len(pdf_text)} chars)")
+                            else:
+                                logging.warning(f"Could not extract text from PDF attachment {i + 1}")
+                
                 # Final text building with all async content (using DRY helper)
                 curr_node.text = build_node_text_parts(
                     cleaned_content,
                     curr_msg.embeds,
                     curr_msg.components,
                     text_attachments=[resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text") and resp.text],
-                    extra_parts=yt_transcripts + tweets + reddit_posts
+                    extra_parts=yt_transcripts + tweets + reddit_posts + pdf_texts
                 )
 
                 if not curr_node.text and curr_node.images:
