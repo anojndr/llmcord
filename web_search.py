@@ -61,8 +61,14 @@ def convert_messages_to_openai_format(
         
         content = msg.get("content", "")
         if isinstance(content, list):
-            # Keep multimodal format for OpenAI
-            openai_messages.append({"role": role, "content": content})
+            # Filter to only include types supported by OpenAI-compatible APIs
+            # GitHub Copilot and others only accept 'text' and 'image_url' types
+            filtered_content = [
+                part for part in content 
+                if isinstance(part, dict) and part.get("type") in ("text", "image_url")
+            ]
+            if filtered_content:
+                openai_messages.append({"role": role, "content": filtered_content})
         elif content:
             openai_messages.append({"role": role, "content": str(content)})
     
