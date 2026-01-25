@@ -30,6 +30,8 @@ def build_litellm_model_name(provider: str, model: str) -> str:
         return f"gemini/{model}"
     elif provider == "github_copilot":
         return f"github_copilot/{model}"
+    elif provider == "mistral":
+        return f"mistral/{model}"
     else:
         # For OpenAI-compatible providers, just use the model name
         # LiteLLM will use base_url if provided
