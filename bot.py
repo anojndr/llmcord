@@ -56,6 +56,20 @@ else:
 # DRY Helper Functions for Slash Commands
 # =============================================================================
 
+def get_channel_locked_model(channel_id: int) -> str | None:
+    """
+    Check if a channel has a locked model override.
+    
+    Args:
+        channel_id: The Discord channel ID to check
+        
+    Returns:
+        The model name if the channel has a locked model, None otherwise
+    """
+    overrides = config.get("channel_model_overrides", {})
+    # Convert channel_id to string for comparison since YAML may parse keys as ints or strings
+    return overrides.get(channel_id) or overrides.get(str(channel_id))
+
 async def _handle_model_switch(
     interaction: discord.Interaction,
     model: str,
@@ -150,6 +164,17 @@ def _build_model_autocomplete(
 @discord_bot.tree.command(name="model", description="View or switch your current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
     await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
+    
+    # Check if this channel has a locked model
+    channel_id = interaction.channel_id
+    locked_model = get_channel_locked_model(channel_id)
+    if locked_model:
+        await interaction.followup.send(
+            f"❌ This channel is locked to model `{locked_model}`. "
+            f"The /model command is disabled here.",
+            ephemeral=True
+        )
+        return
     
     db = get_bad_keys_db()
     
@@ -271,19 +296,30 @@ async def on_ready() -> None:
 
 @discord_bot.event
 async def on_message(new_msg: discord.Message) -> None:
-    # Get user's model preference from database (or use default)
-    user_id = str(new_msg.author.id)
-    db = get_bad_keys_db()
-    user_model = db.get_user_model(user_id)
+    # Check if this channel has a locked model override
+    channel_id = new_msg.channel.id
+    locked_model = get_channel_locked_model(channel_id)
     
-    # Fall back to default model if user hasn't set a preference or if their saved model is no longer valid
-    default_model = next(iter(config.get("models", {})), None)
-    if not default_model:
-        logging.error("No models configured in config.yaml")
-        return
-    
-    if user_model is None or user_model not in config.get("models", {}):
-        user_model = default_model
+    if locked_model:
+        # Use the channel's locked model (ignore user preference)
+        if locked_model not in config.get("models", {}):
+            logging.error(f"Channel {channel_id} has locked model '{locked_model}' but it's not in config.yaml models")
+            return
+        user_model = locked_model
+    else:
+        # Get user's model preference from database (or use default)
+        user_id = str(new_msg.author.id)
+        db = get_bad_keys_db()
+        user_model = db.get_user_model(user_id)
+        
+        # Fall back to default model if user hasn't set a preference or if their saved model is no longer valid
+        default_model = next(iter(config.get("models", {})), None)
+        if not default_model:
+            logging.error("No models configured in config.yaml")
+            return
+        
+        if user_model is None or user_model not in config.get("models", {}):
+            user_model = default_model
     
     # Create a reference list to pass user's model by reference
     curr_model_ref = [user_model]
