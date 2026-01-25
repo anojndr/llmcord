@@ -714,14 +714,32 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         messages.append(dict(role="system", content=system_prompt))
 
     # Web Search Integration for non-Gemini models and Gemini preview models
+    # Supports both Tavily and Exa MCP as search providers
     tavily_api_keys = ensure_list(config.get("tavily_api_key"))
+    exa_mcp_url = config.get("exa_mcp_url", "")
+    web_search_provider = config.get("web_search_provider", "tavily")  # Default to Tavily
+    
+    # Determine if web search is available based on provider config
+    web_search_available = False
+    if web_search_provider == "tavily" and tavily_api_keys:
+        web_search_available = True
+    elif web_search_provider == "exa" and exa_mcp_url:
+        web_search_available = True
+    elif web_search_provider == "auto":
+        # Auto-detect: prefer Tavily if keys are available, otherwise try Exa
+        if tavily_api_keys:
+            web_search_provider = "tavily"
+            web_search_available = True
+        elif exa_mcp_url:
+            web_search_provider = "exa"
+            web_search_available = True
     
     is_preview_model = "preview" in actual_model.lower()
     is_non_gemini = provider != "gemini"
     is_googlelens_query = new_msg.content.lower().removeprefix(discord_bot.user.mention).strip().lower().startswith("googlelens")
     
-    tavily_metadata = None
-    if tavily_api_keys and (is_non_gemini or is_preview_model) and not is_googlelens_query:
+    search_metadata = None
+    if web_search_available and (is_non_gemini or is_preview_model) and not is_googlelens_query:
         # Get web search decider model - first check user preference, then config default
         db = get_bad_keys_db()
         user_id = str(new_msg.author.id)
@@ -753,11 +771,19 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
             
             if search_decision.get("needs_search") and search_decision.get("queries"):
                 queries = search_decision["queries"]
-                logging.info(f"Web search triggered. Queries: {queries}")
+                logging.info(f"Web search triggered with {web_search_provider}. Queries: {queries}")
                 
-                # Perform concurrent Tavily searches (5 URLs per query, 2k chars per URL)
-                tavily_search_depth = config.get("tavily_search_depth", "advanced")
-                search_results, tavily_metadata = await perform_web_search(queries, tavily_api_keys, max_results_per_query=5, max_chars_per_url=2000, search_depth=tavily_search_depth)
+                # Perform web search with the configured provider
+                search_depth = config.get("tavily_search_depth", "advanced")
+                search_results, search_metadata = await perform_web_search(
+                    queries, 
+                    api_keys=tavily_api_keys,
+                    max_results_per_query=5, 
+                    max_chars_per_url=2000, 
+                    search_depth=search_depth,
+                    web_search_provider=web_search_provider,
+                    exa_mcp_url=exa_mcp_url or "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check",
+                )
                 
                 if search_results:
                     # Append search results to the first (most recent) user message
@@ -768,12 +794,12 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             logging.info(f"Web search results appended to user message")
                             
                             # Save search results to database for persistence in chat history
-                            get_bad_keys_db().save_message_search_data(new_msg.id, search_results, tavily_metadata)
+                            get_bad_keys_db().save_message_search_data(new_msg.id, search_results, search_metadata)
                             
                             # Also update the cached MsgNode so follow-up requests in the same session get the data
                             if new_msg.id in msg_nodes:
                                 msg_nodes[new_msg.id].search_results = search_results
-                                msg_nodes[new_msg.id].tavily_metadata = tavily_metadata
+                                msg_nodes[new_msg.id].tavily_metadata = search_metadata
                             break
 
     # Continue with response generation
@@ -796,7 +822,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         system_prompt=system_prompt,
         config=config,
         max_text=max_text,
-        tavily_metadata=tavily_metadata,
+        tavily_metadata=search_metadata,
         last_edit_time=last_edit_time,
         processing_msg=processing_msg,
     )

@@ -50,7 +50,7 @@ Or run local models with:
 ---
 
 ### And more:
-- **Web Search**: Automatic web search with Tavily (for non-Gemini models) or native Gemini grounding. Uses an LLM to intelligently decide when search is needed.
+- **Web Search**: Automatic web search with Tavily or Exa MCP (for non-Gemini models) or native Gemini grounding. Uses an LLM to intelligently decide when search is needed.
 - **"View Response Better" button**: Upload long responses to text.is for easier reading
 - **"Show Sources" button**: View search queries and source URLs when web search was used
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
@@ -88,6 +88,8 @@ Or run local models with:
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
 | **tavily_api_key** | Optional. API key(s) for [Tavily Search](https://tavily.com/) to enable web search for non-Gemini models. Can be a single key or a list of keys for rotation. |
+| **exa_mcp_url** | Optional. URL for [Exa MCP](https://mcp.exa.ai/) web search endpoint. Append `?tools=...` to enable specific tools. Alternative to Tavily that doesn't require API keys. |
+| **web_search_provider** | Which web search provider to use: `tavily`, `exa`, or `auto`. Auto prefers Tavily if keys are available, otherwise falls back to Exa. (Default: `tavily`) |
 | **web_search_decider_model** | The model used to decide if a query needs web search. Format: `provider/model`. (Default: `gemini/gemini-3-flash-preview`) |
 | **reddit_client_id** | Optional. Reddit API client ID for expanding Reddit links. |
 | **reddit_client_secret** | Optional. Reddit API client secret. |

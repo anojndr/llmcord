@@ -341,35 +341,38 @@ class SourceButton(discord.ui.Button):
 
 
 class TavilySourceButton(discord.ui.Button):
-    """Button to show sources from Tavily web search"""
+    """Button to show sources from web search (supports Tavily and Exa)"""
     
-    def __init__(self, tavily_metadata: dict):
+    def __init__(self, search_metadata: dict):
         super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary, emoji="🔍")
-        self.tavily_metadata = tavily_metadata
+        self.search_metadata = search_metadata
     
     async def callback(self, interaction: discord.Interaction):
-        view = TavilySourcesView(self.tavily_metadata)
+        view = TavilySourcesView(self.search_metadata)
         embed = view.build_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 class TavilySourcesView(discord.ui.View):
-    """Paginated view for displaying Tavily search sources"""
+    """Paginated view for displaying web search sources (supports Tavily and Exa)"""
     
     # Limits for embed content
     MAX_EMBED_SIZE = 5500  # Leave buffer below 6000
     FIELD_LIMIT = 1024
     SOURCES_PER_PAGE = 10  # Reasonable default
     
-    def __init__(self, tavily_metadata: dict):
+    def __init__(self, search_metadata: dict):
         super().__init__(timeout=300)  # 5 minute timeout
         # Handle None or malformed metadata
-        self.tavily_metadata = tavily_metadata or {}
+        self.search_metadata = search_metadata or {}
         self.current_page = 0
         
+        # Detect provider from metadata (defaults to "tavily" for backwards compatibility)
+        self.provider = self.search_metadata.get("provider", "tavily")
+        
         # Prepare source entries with defensive defaults
-        self.queries = self.tavily_metadata.get("queries") or []
-        self.urls = self.tavily_metadata.get("urls") or []
+        self.queries = self.search_metadata.get("queries") or []
+        self.urls = self.search_metadata.get("urls") or []
         self.sources = self._prepare_sources()
         self.pages = self._paginate_sources()
         self.total_pages = len(self.pages)
@@ -447,8 +450,9 @@ class TavilySourcesView(discord.ui.View):
         elif not self.urls:
             embed.add_field(name="Sources", value="No URLs available", inline=False)
         
-        # Footer with pagination info
-        footer_text = f"Page {self.current_page + 1}/{self.total_pages} • {len(self.urls)} total sources • Powered by Tavily Search"
+        # Footer with pagination info - show provider name
+        provider_name = "Exa Search" if self.provider == "exa" else "Tavily Search"
+        footer_text = f"Page {self.current_page + 1}/{self.total_pages} • {len(self.urls)} total sources • Powered by {provider_name}"
         embed.set_footer(text=footer_text)
         
         return embed

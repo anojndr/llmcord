@@ -1,5 +1,6 @@
 """
-Web search functionality including search decision and Tavily integration.
+Web search functionality including search decision and web search provider integration.
+Supports both Tavily and Exa MCP as web search backends.
 Uses LiteLLM for unified LLM API access via shared litellm_utils.
 """
 import asyncio
@@ -302,49 +303,296 @@ async def tavily_search(
         return {"error": str(e), "query": query}
 
 
+# Shared httpx client for Exa MCP API calls - uses DRY factory pattern
+_exa_client_holder: list = []
+
+
+def _get_exa_client() -> httpx.AsyncClient:
+    """Get or create the shared Exa MCP httpx client using the DRY factory pattern."""
+    return get_or_create_httpx_client(
+        _exa_client_holder,
+        timeout=60.0,  # Exa can take longer for deep searches
+        connect_timeout=15.0,
+        max_connections=20,
+        max_keepalive=10,
+        follow_redirects=True,
+        headers={},
+    )
+
+
+def parse_exa_text_format(text_content: str) -> list[dict]:
+    """
+    Parse Exa MCP's structured text response format into a list of result dicts.
+    
+    Exa returns results in this format (multiple results separated by blank lines):
+    Title: ...
+    Author: ...
+    Published Date: ...
+    URL: ...
+    Text: ...
+    
+    Returns a list of dicts with 'title', 'url', and 'content' keys.
+    """
+    if not text_content:
+        return []
+    
+    results = []
+    
+    # Split by double newlines to separate individual results
+    # Each result block starts with "Title:"
+    blocks = text_content.split("\n\nTitle:")
+    
+    for i, block in enumerate(blocks):
+        # Add back "Title:" prefix for all blocks except the first if it starts with "Title:"
+        if i == 0:
+            if not block.strip().startswith("Title:"):
+                continue  # Skip if first block doesn't start with Title
+            current_block = block.strip()
+        else:
+            current_block = "Title:" + block
+        
+        # Parse the block
+        title = ""
+        url = ""
+        content = ""
+        
+        lines = current_block.split("\n")
+        text_started = False
+        text_lines = []
+        
+        for line in lines:
+            if line.startswith("Title:"):
+                title = line[6:].strip()
+            elif line.startswith("URL:"):
+                url = line[4:].strip()
+            elif line.startswith("Text:"):
+                text_started = True
+                text_lines.append(line[5:].strip())
+            elif text_started:
+                text_lines.append(line)
+            # Skip Author and Published Date as they're not needed
+        
+        content = "\n".join(text_lines).strip()
+        
+        if title or url:  # Only add if we have at least a title or URL
+            results.append({
+                "title": title or "Untitled",
+                "url": url,
+                "content": content,
+            })
+    
+    return results
+
+
+async def exa_search(
+    query: str,
+    exa_mcp_url: str = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check",
+    max_results: int = 5,
+) -> dict:
+    """
+    Execute a single Exa MCP web search query.
+    Uses the Exa MCP HTTP endpoint for web search.
+    Handles SSE (Server-Sent Events) streaming responses.
+    Returns the search results with page content or an error dict.
+    
+    Args:
+        query: Search query
+        exa_mcp_url: The Exa MCP endpoint URL (default: https://mcp.exa.ai/mcp)
+        max_results: Maximum results to return
+    """
+    try:
+        client = _get_exa_client()
+        
+        # MCP uses JSON-RPC 2.0 format for tool calls
+        # The web_search_exa tool is enabled by default on Exa MCP
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "web_search_exa",
+                "arguments": {
+                    "query": query,
+                    "numResults": max_results,
+                }
+            }
+        }
+        
+        logging.info(f"Exa MCP request for query '{query}': max_results={max_results}")
+        
+        # Use streaming request to handle SSE responses
+        async with client.stream(
+            "POST",
+            exa_mcp_url,
+            json=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+            },
+            timeout=60.0,
+        ) as response:
+            logging.info(f"Exa MCP response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                error_text = await response.aread()
+                error_text = error_text.decode("utf-8", errors="replace")[:500]
+                logging.error(f"Exa MCP HTTP error for query '{query}': {response.status_code} - {error_text}")
+                return {"error": f"HTTP {response.status_code}: {error_text[:200]}", "query": query}
+            
+            # Check content type to determine how to parse
+            content_type = response.headers.get("content-type", "")
+            
+            if "text/event-stream" in content_type:
+                # Handle SSE stream - collect events and find the result
+                full_response = ""
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if line.startswith("data:"):
+                        data = line[5:].strip()
+                        if data:
+                            full_response = data  # Keep the last data event
+                    elif line.startswith("event:"):
+                        # Log event type for debugging
+                        event_type = line[6:].strip()
+                        logging.debug(f"Exa MCP SSE event: {event_type}")
+                
+                if not full_response:
+                    logging.warning(f"Exa MCP returned empty SSE stream for query '{query}'")
+                    return {"results": [], "query": query}
+                
+                try:
+                    result = json.loads(full_response)
+                except json.JSONDecodeError as e:
+                    logging.error(f"Exa MCP SSE JSON parse error: {e}, data: {full_response[:500]}")
+                    return {"error": f"JSON parse error: {e}", "query": query}
+            else:
+                # Regular JSON response
+                response_text = await response.aread()
+                response_text = response_text.decode("utf-8")
+                
+                if not response_text:
+                    logging.warning(f"Exa MCP returned empty response for query '{query}'")
+                    return {"results": [], "query": query}
+                
+                try:
+                    result = json.loads(response_text)
+                except json.JSONDecodeError as e:
+                    logging.error(f"Exa MCP JSON parse error: {e}, response: {response_text[:500]}")
+                    return {"error": f"JSON parse error: {e}", "query": query}
+        
+        # MCP JSON-RPC response format
+        if "error" in result:
+            error_msg = result.get("error", {}).get("message", "Unknown MCP error")
+            logging.error(f"Exa MCP error for query '{query}': {error_msg}")
+            return {"error": error_msg, "query": query}
+        
+        # Log the full result structure for debugging
+        logging.debug(f"Exa MCP full result keys: {result.keys() if isinstance(result, dict) else type(result)}")
+        
+        # Extract results from the MCP response
+        # The result is in result.result.content[0].text as JSON
+        mcp_result = result.get("result", {})
+        logging.debug(f"Exa MCP mcp_result keys: {mcp_result.keys() if isinstance(mcp_result, dict) else type(mcp_result)}")
+        
+        content = mcp_result.get("content", [])
+        logging.debug(f"Exa MCP content type: {type(content)}, length: {len(content) if isinstance(content, list) else 'N/A'}")
+        
+        if content and isinstance(content, list) and len(content) > 0:
+            # Log first content item structure
+            first_content = content[0]
+            logging.debug(f"Exa MCP first content item: {first_content.keys() if isinstance(first_content, dict) else type(first_content)}")
+            
+            # Parse the text content which contains the actual search results
+            text_content = first_content.get("text", "") if isinstance(first_content, dict) else str(first_content)
+            logging.info(f"Exa MCP text_content preview: {text_content[:500] if text_content else 'empty'}...")
+            
+            try:
+                search_data = json.loads(text_content) if text_content else {}
+                logging.debug(f"Exa MCP search_data keys: {search_data.keys() if isinstance(search_data, dict) else type(search_data)}")
+                
+                # Normalize to match Tavily response format
+                # Exa might return results directly or under a different key
+                results = search_data.get("results", [])
+                if not results and isinstance(search_data, list):
+                    # If search_data is a list directly, use it as results
+                    results = search_data
+                
+                logging.info(f"Exa MCP response for query '{query}': {len(results)} results")
+                return {"results": results, "query": query}
+            except json.JSONDecodeError:
+                # Exa MCP returns a structured text format, not JSON
+                # Parse the text format: "Title: ...\nAuthor: ...\nPublished Date: ...\nURL: ...\nText: ..."
+                logging.info(f"Exa MCP returned text format, parsing structured text for query '{query}'")
+                results = parse_exa_text_format(text_content)
+                if results:
+                    logging.info(f"Exa MCP parsed {len(results)} results from text format")
+                    return {"results": results, "query": query}
+                else:
+                    # Fallback: treat the entire text as a single result
+                    logging.warning(f"Could not parse Exa text format, using as single result")
+                    return {"results": [{"title": "Search Result", "url": "", "content": text_content}], "query": query}
+        
+        logging.warning(f"Exa MCP returned empty content for query '{query}'")
+        return {"results": [], "query": query}
+        
+    except httpx.TimeoutException as e:
+        logging.error(f"Exa MCP timeout for query '{query}': {e}")
+        return {"error": f"Timeout: {e}", "query": query}
+    except httpx.RequestError as e:
+        logging.error(f"Exa MCP connection error for query '{query}': {e}")
+        return {"error": f"Connection error: {e}", "query": query}
+    except Exception as e:
+        logging.exception(f"Exa MCP search error for query '{query}': {e}")
+        return {"error": str(e), "query": query}
+
+
 async def perform_web_search(
     queries: list[str], 
-    tavily_api_keys: list[str], 
+    api_keys: list[str] = None,
     max_results_per_query: int = 5, 
     max_chars_per_url: int = 2000,
     min_score: float = 0.3,
-    search_depth: str = "advanced"
+    search_depth: str = "advanced",
+    web_search_provider: str = "tavily",
+    exa_mcp_url: str = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check",
 ) -> tuple[str, dict]:
     """
-    Perform concurrent web searches for multiple queries using Tavily.
-    Uses KeyRotator for consistent key rotation and bad key tracking.
+    Perform concurrent web searches for multiple queries.
+    Supports both Tavily and Exa MCP as search providers.
     Returns a tuple of (formatted_results, metadata).
     
     Best practices applied:
     - Concurrent requests with asyncio.gather()
-    - KeyRotator for synced bad key tracking with database persistence
-    - Configurable search depth (default: "advanced" for highest quality results)
+    - KeyRotator for synced bad key tracking with database persistence (Tavily only)
+    - Configurable search depth (Tavily: "basic", "advanced", "fast", "ultra-fast")
     
     Args:
         queries: List of search queries
-        tavily_api_keys: List of Tavily API keys for rotation
+        api_keys: List of API keys for rotation (required for Tavily, optional for Exa)
         max_results_per_query: Maximum number of URLs per query (default: 5)
         max_chars_per_url: Maximum characters per URL content (default: 2000)
         min_score: Minimum relevance score to include a result (0.0-1.0, default: 0.3)
-        search_depth: Search depth - "basic", "advanced", "fast", or "ultra-fast" (default: "advanced")
+        search_depth: Tavily search depth - "basic", "advanced", "fast", or "ultra-fast" (default: "advanced")
+        web_search_provider: Which provider to use - "tavily" or "exa" (default: "tavily")
+        exa_mcp_url: The Exa MCP endpoint URL (default: https://mcp.exa.ai/mcp)
     
     Returns:
-        tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...]})
+        tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...], "provider": "..."})
     """
-    if not queries or not tavily_api_keys:
+    if not queries:
         return "", {}
     
-    # Pre-fetch good keys once instead of creating KeyRotator per query
-    db = get_bad_keys_db()
-    good_keys = db.get_good_keys_synced("tavily", tavily_api_keys)
-    if not good_keys:
-        db.reset_provider_keys_synced("tavily")
-        good_keys = tavily_api_keys.copy()
+    # Validate provider and requirements
+    if web_search_provider == "tavily":
+        if not api_keys:
+            logging.warning("Tavily requires API keys but none provided")
+            return "", {}
     
-    async def search_single_query(query: str, depth: str, keys: list[str]) -> dict:
-        """
-        Search with retry logic using pre-fetched keys.
-        """
+    db = get_bad_keys_db()
+    
+    # Provider-specific search functions
+    async def search_single_query_tavily(query: str, depth: str, keys: list[str]) -> dict:
+        """Search with Tavily using retry logic and key rotation."""
         for key in keys:
             result = await tavily_search(query, key, max_results_per_query, depth)
             
@@ -359,23 +607,40 @@ async def perform_web_search(
         logging.error(f"All Tavily API keys failed for query '{query}'")
         return {"error": "All API keys exhausted", "query": query}
     
-    async def execute_searches(depth: str) -> tuple[list, list]:
-        """Execute searches with given parameters and return results and URLs."""
-        # Execute searches concurrently with shared key list
-        search_tasks = [
-            search_single_query(query, depth, good_keys)
-            for query in queries
-        ]
+    async def search_single_query_exa(query: str) -> dict:
+        """Search with Exa MCP."""
+        return await exa_search(query, exa_mcp_url, max_results_per_query)
+    
+    async def execute_searches() -> tuple[list, list]:
+        """Execute searches with the configured provider and return results and URLs."""
+        if web_search_provider == "tavily":
+            # Pre-fetch good keys for Tavily
+            good_keys = db.get_good_keys_synced("tavily", api_keys)
+            if not good_keys:
+                db.reset_provider_keys_synced("tavily")
+                good_keys = api_keys.copy()
+            
+            search_tasks = [
+                search_single_query_tavily(query, search_depth, good_keys)
+                for query in queries
+            ]
+        else:  # exa
+            search_tasks = [
+                search_single_query_exa(query)
+                for query in queries
+            ]
+        
         results = await asyncio.gather(*search_tasks)
         
         formatted = []
         urls = []
         
-        logging.info(f"Tavily search returned {len(results)} result sets for {len(queries)} queries")
+        provider_name = web_search_provider.capitalize()
+        logging.info(f"{provider_name} search returned {len(results)} result sets for {len(queries)} queries")
         
         for i, result in enumerate(results):
             if "error" in result:
-                logging.warning(f"Tavily search error for query '{queries[i]}': {result.get('error')}")
+                logging.warning(f"{provider_name} search error for query '{queries[i]}': {result.get('error')}")
                 continue
             
             query = queries[i]
@@ -385,6 +650,7 @@ async def perform_web_search(
             logging.info(f"Query '{query}' returned {len(result_items)} items")
             
             for item in result_items:
+                # Handle both Tavily and Exa result formats
                 score = item.get("score", 0)
                 
                 title = item.get("title", "No title")
@@ -394,13 +660,16 @@ async def perform_web_search(
                     urls.append({"title": title, "url": url, "score": score})
                 
                 # Prefer raw_content (full page content) over content (snippet)
+                # Tavily uses raw_content, Exa might use text or content
                 raw_content = item.get("raw_content", "")
-                content = item.get("content", "")
+                content = item.get("content", "") or item.get("text", "")
                 
                 page_content = raw_content if raw_content else content
                 page_content = page_content[:max_chars_per_url] if page_content else ""
                 
-                result_text = f"\n**{title}** (relevance: {score:.2f})\n{url}\n{page_content}\n"
+                # Format score display - handle missing scores gracefully
+                score_str = f" (relevance: {score:.2f})" if score else ""
+                result_text = f"\n**{title}**{score_str}\n{url}\n{page_content}\n"
                 query_results.append(result_text)
             
             if query_results:
@@ -410,14 +679,16 @@ async def perform_web_search(
         logging.info(f"Total URLs collected: {len(urls)}")
         return formatted, urls
     
-    # Use configured search depth (defaults to "advanced" for best results)
-    formatted_results, all_urls = await execute_searches(search_depth)
+    # Execute the searches
+    formatted_results, all_urls = await execute_searches()
     
     metadata = {
         "queries": queries,
-        "urls": all_urls
+        "urls": all_urls,
+        "provider": web_search_provider,
     }
     
     if formatted_results:
         return "\n\n---\nHere are the web search results in case the user asked you to search the net or something:\n\n**Web Search Results:**" + "".join(formatted_results), metadata
     return "", metadata
+
