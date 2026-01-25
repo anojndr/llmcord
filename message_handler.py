@@ -736,7 +736,11 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     
     is_preview_model = "preview" in actual_model.lower()
     is_non_gemini = provider != "gemini"
-    is_googlelens_query = new_msg.content.lower().removeprefix(discord_bot.user.mention).strip().lower().startswith("googlelens")
+    # Check for googlelens query - strip both mention and "at ai" prefix
+    content_for_lens_check = new_msg.content.lower().removeprefix(discord_bot.user.mention.lower()).strip()
+    if content_for_lens_check.startswith("at ai"):
+        content_for_lens_check = content_for_lens_check[5:].strip()  # Remove "at ai" prefix
+    is_googlelens_query = content_for_lens_check.startswith("googlelens")
     
     search_metadata = None
     if web_search_available and (is_non_gemini or is_preview_model) and not is_googlelens_query:
