@@ -921,6 +921,9 @@ async def generate_response(
             enable_grounding=enable_grounding,
         )
         
+        # Add timeout to prevent indefinite hangs (120 seconds for streaming)
+        litellm_kwargs["timeout"] = 120
+        
         # Make the streaming call
         async for chunk in await litellm.acompletion(**litellm_kwargs):
             if not chunk.choices:
@@ -1076,17 +1079,43 @@ async def generate_response(
         except Exception as e:
             logging.exception("Error while generating response")
             
-            # Mark the current key as bad (synced with search decider)
-            error_msg = str(e)[:200] if e else "Unknown error"
-            get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
+            # Determine if this is an API key error vs other error (timeout, network, etc.)
+            is_key_error = False
+            is_timeout_error = isinstance(e, asyncio.TimeoutError) or "timeout" in str(e).lower()
+            is_empty_response = "no content" in str(e).lower()
             
-            # Remove the bad key from good_keys list for this session
-            if current_api_key in good_keys:
-                good_keys.remove(current_api_key)
+            # Check for typical API key/auth error patterns
+            error_str = str(e).lower()
+            key_error_patterns = [
+                "unauthorized", "invalid_api_key", "invalid key", "api key", 
+                "authentication", "forbidden", "401", "403", "quota", "rate limit",
+                "billing", "insufficient_quota", "expired"
+            ]
+            for pattern in key_error_patterns:
+                if pattern in error_str:
+                    is_key_error = True
+                    break
+            
+            # Only mark the key as bad for actual key-related errors
+            if is_key_error:
+                error_msg = str(e)[:200] if e else "Unknown error"
+                get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
+                
+                # Remove the bad key from good_keys list for this session
+                if current_api_key in good_keys:
+                    good_keys.remove(current_api_key)
+            elif is_timeout_error or is_empty_response:
+                # For timeouts and empty responses, don't mark key as bad but still retry
+                logging.warning(f"Non-key error for provider '{provider}': {'timeout' if is_timeout_error else 'empty response'}")
             
             # Check if we've exceeded maximum retry attempts
             if attempt_count >= max_retry_attempts:
-                error_text = "❌ I encountered too many errors while generating a response. Please try again later."
+                if is_timeout_error:
+                    error_text = "❌ The AI is taking too long to respond. Please try again later."
+                elif is_empty_response:
+                    error_text = "❌ The AI returned an empty response. Please try rephrasing your question."
+                else:
+                    error_text = "❌ I encountered too many errors while generating a response. Please try again later."
 
                 if use_plain_responses:
                     layout = LayoutView().add_item(TextDisplay(content=error_text))
@@ -1105,8 +1134,8 @@ async def generate_response(
                     response_contents = [error_text]
                 break
             
-            # Check if we've exhausted all keys after reset
-            if not good_keys:
+            # Check if we've exhausted all keys after reset (only relevant for key errors)
+            if is_key_error and not good_keys:
                 # Reset and try again with all keys (up to max_retry_attempts)
                 logging.warning(f"All keys exhausted for provider '{provider}'. Resetting synced keys for retry...")
                 get_bad_keys_db().reset_provider_keys_synced(provider)
