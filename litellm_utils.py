@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 import requests
 
+from config import is_gemini_model
+
 
 def build_litellm_model_name(provider: str, model: str) -> str:
     """
@@ -164,7 +166,8 @@ def prepare_litellm_kwargs(
         kwargs["base_url"] = base_url
     
     # Provider-specific configuration
-    if provider == "gemini":
+    # Only apply Gemini-specific config to actual Gemini models (not Gemma)
+    if provider == "gemini" and is_gemini_model(model):
         _configure_gemini_kwargs(kwargs, model, model_parameters, enable_grounding)
     elif provider == "github_copilot":
         _configure_github_copilot_kwargs(kwargs, api_key, extra_headers)

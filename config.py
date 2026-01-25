@@ -12,6 +12,28 @@ import discord
 
 # Model and provider constants
 VISION_MODEL_TAGS = ("claude", "gemini", "gemma", "gpt-4", "gpt-5", "grok-4", "llama", "llava", "mistral", "o3", "o4", "vision", "vl")
+
+
+def is_gemini_model(model: str) -> bool:
+    """
+    Check if a model is an actual Gemini model (not Gemma or other models on the Gemini provider).
+    
+    Gemini models have special capabilities like native PDF handling, audio/video support,
+    and grounding tools that Gemma models don't have even though they're served via the
+    same Gemini provider.
+    
+    Args:
+        model: Model name (e.g., "gemini-3-flash-preview", "gemma-3-27b-it")
+        
+    Returns:
+        True if this is a genuine Gemini model, False for Gemma and other models
+    """
+    model_lower = model.lower()
+    # Gemma models contain "gemma" in their name
+    if "gemma" in model_lower:
+        return False
+    # Gemini models contain "gemini" in their name
+    return "gemini" in model_lower
 PROVIDERS_SUPPORTING_USERNAMES = ("openai", "x-ai")
 
 # Discord embed colors
