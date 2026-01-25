@@ -975,7 +975,12 @@ async def generate_response(
 
     grounding_metadata = None
     attempt_count = 0
-    max_retry_attempts = config.get("max_response_retries", 10)  # Maximum number of retry attempts
+    fallback_level = 0  # 0 = original, 1 = mistral, 2 = gemma
+    original_provider = provider  # Store original for logging
+    original_model = actual_model
+    
+    # Determine if the original model is already mistral (skip to gemma fallback)
+    is_original_mistral = original_provider == "mistral" and "mistral" in original_model.lower()
     
     # Get good keys (filter out known bad ones - synced with search decider)
     good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
@@ -985,6 +990,8 @@ async def generate_response(
         logging.warning(f"All API keys for provider '{provider}' (synced) are marked as bad. Resetting...")
         get_bad_keys_db().reset_provider_keys_synced(provider)
         good_keys = api_keys.copy()
+    
+    initial_key_count = len(good_keys)
 
     while True:
         curr_content = finish_reason = None
@@ -993,10 +1000,71 @@ async def generate_response(
         
         # Get the next good key to try
         if not good_keys:
-            # All good keys exhausted in this session, reset and try again
-            logging.warning(f"All available keys exhausted for provider '{provider}'. Resetting synced bad keys database...")
-            get_bad_keys_db().reset_provider_keys_synced(provider)
-            good_keys = api_keys.copy()
+            # All good keys exhausted, try next fallback level
+            next_fallback = None
+            
+            if fallback_level == 0:
+                # First fallback: mistral (unless original was already mistral)
+                if is_original_mistral:
+                    # Skip mistral, go directly to gemma
+                    fallback_level = 2
+                    next_fallback = ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it")
+                    logging.warning(f"All {initial_key_count} keys exhausted for mistral/{original_model}. Falling back to gemini/gemma-3-27b-it...")
+                else:
+                    fallback_level = 1
+                    next_fallback = ("mistral", "mistral-large-latest", "mistral/mistral-large-latest")
+                    logging.warning(f"All {initial_key_count} keys exhausted for provider '{original_provider}'. Falling back to mistral/mistral-large-latest...")
+            elif fallback_level == 1:
+                # Second fallback: gemma
+                fallback_level = 2
+                next_fallback = ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it")
+                logging.warning(f"Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...")
+            
+            if next_fallback:
+                new_provider, new_model, new_provider_slash_model = next_fallback
+                
+                # Switch to fallback provider
+                provider = new_provider
+                actual_model = new_model
+                provider_slash_model = new_provider_slash_model
+                litellm_model = build_litellm_model_name(provider, actual_model)
+                
+                # Get fallback provider configuration
+                fallback_provider_config = config.get("providers", {}).get(provider, {})
+                base_url = fallback_provider_config.get("base_url")
+                fallback_api_keys = ensure_list(fallback_provider_config.get("api_key"))
+                
+                if fallback_api_keys:
+                    api_keys = fallback_api_keys
+                    good_keys = fallback_api_keys.copy()
+                    initial_key_count = len(good_keys)
+                    attempt_count = 0  # Reset attempt count for new provider
+                    continue  # Try with the new provider
+                else:
+                    logging.error(f"No API keys available for fallback provider '{provider}'")
+                    # Continue to try the next fallback level
+                    good_keys = []
+                    continue
+            else:
+                # All fallback levels exhausted
+                logging.error("All fallback options exhausted (mistral and gemma)")
+                error_text = "❌ All API keys (including all fallbacks) exhausted. Please try again later."
+                if use_plain_responses:
+                    layout = LayoutView().add_item(TextDisplay(content=error_text))
+                    if response_msgs:
+                        await response_msgs[-1].edit(view=layout)
+                    else:
+                        await reply_helper(view=layout)
+                    response_contents = [error_text]
+                else:
+                    embed.description = error_text
+                    embed.color = EMBED_COLOR_INCOMPLETE
+                    if response_msgs:
+                        await response_msgs[-1].edit(embed=embed, view=None)
+                    else:
+                        await reply_helper(embed=embed)
+                    response_contents = [error_text]
+                break
         
         current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
 
@@ -1105,42 +1173,21 @@ async def generate_response(
                 # Remove the bad key from good_keys list for this session
                 if current_api_key in good_keys:
                     good_keys.remove(current_api_key)
+                    logging.info(f"Removed bad key for '{provider}', {len(good_keys)} keys remaining")
             elif is_timeout_error or is_empty_response:
                 # For timeouts and empty responses, don't mark key as bad but still retry
-                logging.warning(f"Non-key error for provider '{provider}': {'timeout' if is_timeout_error else 'empty response'}")
+                # Remove from good_keys for this session to try next key
+                if current_api_key in good_keys:
+                    good_keys.remove(current_api_key)
+                logging.warning(f"Non-key error for provider '{provider}': {'timeout' if is_timeout_error else 'empty response'}, {len(good_keys)} keys remaining")
+            else:
+                # For other errors, also try the next key
+                if current_api_key in good_keys:
+                    good_keys.remove(current_api_key)
+                logging.warning(f"Unknown error for provider '{provider}', {len(good_keys)} keys remaining")
             
-            # Check if we've exceeded maximum retry attempts
-            if attempt_count >= max_retry_attempts:
-                if is_timeout_error:
-                    error_text = "❌ The AI is taking too long to respond. Please try again later."
-                elif is_empty_response:
-                    error_text = "❌ The AI returned an empty response. Please try rephrasing your question."
-                else:
-                    error_text = "❌ I encountered too many errors while generating a response. Please try again later."
-
-                if use_plain_responses:
-                    layout = LayoutView().add_item(TextDisplay(content=error_text))
-                    if response_msgs:
-                        await response_msgs[-1].edit(view=layout)
-                    else:
-                        await reply_helper(view=layout)
-                    response_contents = [error_text]
-                else:
-                    embed.description = error_text
-                    embed.color = EMBED_COLOR_INCOMPLETE
-                    if response_msgs:
-                        await response_msgs[-1].edit(embed=embed, view=None)
-                    else:
-                        await reply_helper(embed=embed)
-                    response_contents = [error_text]
-                break
-            
-            # Check if we've exhausted all keys after reset (only relevant for key errors)
-            if is_key_error and not good_keys:
-                # Reset and try again with all keys (up to max_retry_attempts)
-                logging.warning(f"All keys exhausted for provider '{provider}'. Resetting synced keys for retry...")
-                get_bad_keys_db().reset_provider_keys_synced(provider)
-                good_keys = api_keys.copy()
+            # If no keys left, the main loop will handle fallback to mistral
+            # Continue to the next iteration
 
     if not use_plain_responses and len(response_msgs) > len(response_contents):
         for msg in response_msgs[len(response_contents):]:
