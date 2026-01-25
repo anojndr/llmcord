@@ -33,6 +33,7 @@ from bad_keys import get_bad_keys_db, KeyRotator
 from config import (
     get_config,
     ensure_list,
+    is_gemini_model,
     VISION_MODEL_TAGS,
     PROVIDERS_SUPPORTING_USERNAMES,
     EMBED_COLOR_COMPLETE,
@@ -416,7 +417,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             logging.exception("Error fetching Yandex results")
 
                 allowed_types = ("text", "image", "application/pdf")  # PDF always allowed - Gemini uses native, others get text extraction
-                if provider == "gemini":
+                if is_gemini_model(actual_model):
                     allowed_types += ("audio", "video")
 
                 good_attachments = [att for att in curr_msg.attachments if att.content_type and any(att.content_type.startswith(x) for x in allowed_types)]
@@ -548,10 +549,10 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         except Exception:
                             pass
 
-                # PDF text extraction for non-Gemini providers
-                # Gemini handles PDFs natively, but other providers need text extraction
+                # PDF text extraction for non-Gemini models
+                # Genuine Gemini models handle PDFs natively, but Gemma and other providers need text extraction
                 pdf_texts = []
-                if provider != "gemini":
+                if not is_gemini_model(actual_model):
                     pdf_attachments = [
                         att for att in processed_attachments 
                         if att["content_type"] == "application/pdf"
@@ -632,7 +633,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
             # Build message content (now unified for all providers via LiteLLM)
             # Check if there are Gemini-specific file attachments (audio, video, PDF)
             gemini_file_attachments = []
-            if provider == "gemini" and curr_node.raw_attachments:
+            if is_gemini_model(actual_model) and curr_node.raw_attachments:
                 for att in curr_node.raw_attachments:
                     if att["content_type"].startswith(("audio", "video")) or att["content_type"] == "application/pdf":
                         # LiteLLM supports inline data format for Gemini
@@ -735,7 +736,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
             web_search_available = True
     
     is_preview_model = "preview" in actual_model.lower()
-    is_non_gemini = provider != "gemini"
+    is_non_gemini = not is_gemini_model(actual_model)
     # Check for googlelens query - strip both mention and "at ai" prefix
     content_for_lens_check = new_msg.content.lower().removeprefix(discord_bot.user.mention.lower()).strip()
     if content_for_lens_check.startswith("at ai"):
@@ -962,7 +963,7 @@ async def generate_response(
                 grounding_metadata = choice.grounding_metadata
             
             # Log the chunk attributes on finish to help debug
-            if chunk_finish_reason and provider == "gemini":
+            if chunk_finish_reason and is_gemini_model(actual_model):
                 chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith('_')]
                 logging.debug(f"Gemini chunk finish - attributes: {chunk_attrs}")
                 if hasattr(chunk, 'model_extra') and chunk.model_extra:
