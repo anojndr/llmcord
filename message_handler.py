@@ -744,7 +744,15 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     is_googlelens_query = content_for_lens_check.startswith("googlelens")
     
     search_metadata = None
-    if web_search_available and (is_non_gemini or is_preview_model) and not is_googlelens_query:
+
+    # Check for existing search results to handle retries correctly
+    if new_msg.id in msg_nodes and msg_nodes[new_msg.id].search_results:
+        search_metadata = msg_nodes[new_msg.id].tavily_metadata
+        has_existing_search = True
+    else:
+        has_existing_search = False
+
+    if web_search_available and (is_non_gemini or is_preview_model) and not is_googlelens_query and not has_existing_search:
         # Get web search decider model - first check user preference, then config default
         db = get_bad_keys_db()
         user_id = str(new_msg.author.id)
