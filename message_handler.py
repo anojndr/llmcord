@@ -808,6 +808,18 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             break
 
     # Continue with response generation
+    async def retry_callback():
+        await process_message(
+            new_msg=new_msg,
+            discord_bot=discord_bot,
+            httpx_client=httpx_client,
+            twitter_api=twitter_api,
+            reddit_client=reddit_client,
+            msg_nodes=msg_nodes,
+            curr_model_lock=curr_model_lock,
+            curr_model_ref=curr_model_ref,
+        )
+
     await generate_response(
         new_msg=new_msg,
         discord_bot=discord_bot,
@@ -830,6 +842,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         tavily_metadata=search_metadata,
         last_edit_time=last_edit_time,
         processing_msg=processing_msg,
+        retry_callback=retry_callback,
     )
 
 
@@ -871,7 +884,7 @@ async def generate_response(
     new_msg, discord_bot, msg_nodes, messages, user_warnings,
     provider, model, actual_model, provider_slash_model, base_url, api_keys, model_parameters,
     extra_headers, extra_query, extra_body, system_prompt, config, max_text,
-    tavily_metadata, last_edit_time, processing_msg
+    tavily_metadata, last_edit_time, processing_msg, retry_callback
 ):
     """Generate and stream the LLM response using LiteLLM."""
     curr_content = finish_reason = None
@@ -1204,7 +1217,7 @@ async def generate_response(
     # Update the last message with ResponseView for "View Response Better" button
     if not use_plain_responses and response_msgs and response_contents:
         full_response = "".join(response_contents)
-        response_view = ResponseView(full_response, grounding_metadata, tavily_metadata)
+        response_view = ResponseView(full_response, grounding_metadata, tavily_metadata, retry_callback, new_msg.author.id)
         
         # Count output tokens and update footer with total
         output_tokens = count_text_tokens(full_response)
