@@ -1006,12 +1006,19 @@ async def generate_response(
     is_original_mistral = original_provider == "mistral" and "mistral" in original_model.lower()
     
     # Get good keys (filter out known bad ones - synced with search decider)
-    good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
+    try:
+        good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
+    except Exception:
+        logging.exception("Failed to get good keys, falling back to all keys")
+        good_keys = api_keys.copy()
     
     # If all keys are bad, reset and try again with all keys
     if not good_keys:
         logging.warning(f"All API keys for provider '{provider}' (synced) are marked as bad. Resetting...")
-        get_bad_keys_db().reset_provider_keys_synced(provider)
+        try:
+            get_bad_keys_db().reset_provider_keys_synced(provider)
+        except Exception:
+            logging.exception("Failed to reset provider keys")
         good_keys = api_keys.copy()
     
     initial_key_count = len(good_keys)
@@ -1222,7 +1229,10 @@ async def generate_response(
             # Only mark the key as bad for actual key-related errors
             if is_key_error:
                 error_msg = str(e)[:200] if e else "Unknown error"
-                get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
+                try:
+                    get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
+                except Exception:
+                    logging.exception("Failed to mark key as bad")
                 
                 # Remove the bad key from good_keys list for this session
                 if current_api_key in good_keys:

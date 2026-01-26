@@ -324,16 +324,24 @@ async def on_message(new_msg: discord.Message) -> None:
     # Create a reference list to pass user's model by reference
     curr_model_ref = [user_model]
     
-    await process_message(
-        new_msg=new_msg,
-        discord_bot=discord_bot,
-        httpx_client=httpx_client,
-        twitter_api=twitter_api,
-        reddit_client=reddit_client,
-        msg_nodes=msg_nodes,
-        curr_model_lock=curr_model_lock,
-        curr_model_ref=curr_model_ref,
-    )
+    try:
+        await process_message(
+            new_msg=new_msg,
+            discord_bot=discord_bot,
+            httpx_client=httpx_client,
+            twitter_api=twitter_api,
+            reddit_client=reddit_client,
+            msg_nodes=msg_nodes,
+            curr_model_lock=curr_model_lock,
+            curr_model_ref=curr_model_ref,
+        )
+    except Exception as e:
+        logging.exception("Error processing message")
+        # Try to notify the user about the error
+        try:
+            await new_msg.reply(f"❌ An internal error occurred while processing your request.\nError: {e}")
+        except Exception:
+            pass
 
 
 async def health_check(request):
