@@ -224,14 +224,36 @@ def _has_grounding_data(metadata: Any) -> bool:
     return False
 
 
+
+class RetryButton(discord.ui.Button):
+    """Button to retry the generation"""
+    
+    def __init__(self, callback_fn, user_id):
+        super().__init__(style=discord.ButtonStyle.secondary, label="Retry", emoji="🔄")
+        self.callback_fn = callback_fn
+        self.user_id = user_id
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("❌ You cannot retry this message.", ephemeral=True)
+            return
+            
+        await interaction.response.defer()
+        await self.callback_fn()
+
+
 class ResponseView(discord.ui.View):
     """View with 'View Response Better' button that uploads to text.is"""
     
-    def __init__(self, full_response: str, metadata: Optional[Any] = None, tavily_metadata: Optional[dict] = None):
+    def __init__(self, full_response: str, metadata: Optional[Any] = None, tavily_metadata: Optional[dict] = None, retry_callback: Optional[Any] = None, user_id: Optional[int] = None):
         super().__init__(timeout=None)
         self.full_response = full_response
         self.metadata = metadata
         self.tavily_metadata = tavily_metadata
+        
+        # Add Retry button if callback is provided
+        if retry_callback and user_id:
+            self.add_item(RetryButton(retry_callback, user_id))
         
         # Add Gemini grounding sources button if we have grounding metadata
         if metadata and _has_grounding_data(metadata):
