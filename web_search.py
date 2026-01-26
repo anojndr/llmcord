@@ -445,16 +445,37 @@ async def exa_search(
             if "text/event-stream" in content_type:
                 # Handle SSE stream - collect events and find the result
                 full_response = ""
+                current_event_data = []
+                
                 async for line in response.aiter_lines():
-                    line = line.strip()
-                    if line.startswith("data:"):
-                        data = line[5:].strip()
-                        if data:
-                            full_response = data  # Keep the last data event
+                    line = line.rstrip('\n').rstrip('\r')
+                    
+                    if not line:
+                        # End of event (blank line)
+                        if current_event_data:
+                            # Join without newlines to reconstruct split JSON without injecting invalid control chars
+                            event_body = "".join(current_event_data)
+                            logging.debug(f"Exa MCP SSE event body length: {len(event_body)}")
+                            
+                            # We are looking for the JSON result. It should start with {
+                            if event_body.strip().startswith("{"):
+                                full_response = event_body
+                            
+                            current_event_data = []
+                    elif line.startswith("data:"):
+                        # Extract data, handling optional space
+                        data = line[5:]
+                        if data.startswith(" "):
+                            data = data[1:]
+                        current_event_data.append(data)
                     elif line.startswith("event:"):
                         # Log event type for debugging
                         event_type = line[6:].strip()
                         logging.debug(f"Exa MCP SSE event: {event_type}")
+                
+                # Check if there's any remaining data after the loop finishes
+                if current_event_data and not full_response:
+                    full_response = "".join(current_event_data)
                 
                 if not full_response:
                     logging.warning(f"Exa MCP returned empty SSE stream for query '{query}'")
