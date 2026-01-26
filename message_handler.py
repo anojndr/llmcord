@@ -19,14 +19,6 @@ from PIL import Image
 import tiktoken
 from twscrape import gather
 import pymupdf4llm
-
-# Pre-load tiktoken encoding at module load time to avoid first-message delay
-# This shifts the ~1-2s loading cost from first message to bot startup
-_tiktoken_encoding = tiktoken.get_encoding("o200k_base")
-
-def _get_tiktoken_encoding():
-    """Get the pre-loaded tiktoken encoding."""
-    return _tiktoken_encoding
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from bad_keys import get_bad_keys_db, KeyRotator
@@ -48,6 +40,14 @@ from litellm_utils import prepare_litellm_kwargs, build_litellm_model_name
 from models import MsgNode
 from views import ResponseView, SourceView, SourceButton, TavilySourceButton, _has_grounding_data
 from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
+
+# Pre-load tiktoken encoding at module load time to avoid first-message delay
+# This shifts the ~1-2s loading cost from first message to bot startup
+_tiktoken_encoding = tiktoken.get_encoding("o200k_base")
+
+def _get_tiktoken_encoding():
+    """Get the pre-loaded tiktoken encoding."""
+    return _tiktoken_encoding
 
 
 def _get_embed_text(embed: discord.Embed) -> str:
@@ -229,7 +229,7 @@ def append_search_to_content(content, search_results: str):
         # For multimodal content, append to the text part
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
-                part["text"] = part["text"] + "\n\n" + search_results
+                part["text"] += "\n\n" + search_results
                 break
         return content
     elif content:
@@ -335,11 +335,11 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     user_warnings = set()
     curr_msg = new_msg
 
-    while curr_msg != None and len(messages) < max_messages:
+    while curr_msg is not None and len(messages) < max_messages:
         curr_node = msg_nodes.setdefault(curr_msg.id, MsgNode())
 
         async with curr_node.lock:
-            if curr_node.text == None:
+            if curr_node.text is None:
                 cleaned_content = curr_msg.content.removeprefix(discord_bot.user.mention).lstrip()
                 cleaned_content = re.sub(r"\bat ai\b", "", cleaned_content, flags=re.IGNORECASE).lstrip()
 
@@ -405,7 +405,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                 result_text = "\n\nanswer the user's query based on the yandex reverse image results:\n" + "\n".join(lens_results)
                                 if twitter_content:
                                     result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(twitter_content)
-                                cleaned_content = cleaned_content + result_text
+                                cleaned_content += result_text
                                 
                                 # Store lens results for persistence
                                 curr_node.lens_results = result_text
@@ -596,7 +596,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
                 try:
                     if (
-                        curr_msg.reference == None
+                        curr_msg.reference is None
                         and discord_bot.user.mention not in curr_msg.content
                         and "at ai" not in curr_msg.content.lower()
                         and (prev_msg_in_channel := ([m async for m in curr_msg.channel.history(before=curr_msg, limit=1)] or [None])[0])
@@ -606,7 +606,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         curr_node.parent_msg = prev_msg_in_channel
                     else:
                         is_public_thread = curr_msg.channel.type == discord.ChannelType.public_thread
-                        parent_is_thread_start = is_public_thread and curr_msg.reference == None and curr_msg.channel.parent.type == discord.ChannelType.text
+                        parent_is_thread_start = is_public_thread and curr_msg.reference is None and curr_msg.channel.parent.type == discord.ChannelType.text
 
                         if parent_msg_id := curr_msg.channel.id if parent_is_thread_start else getattr(curr_msg.reference, "message_id", None):
                             if parent_is_thread_start:
@@ -677,7 +677,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
             if content:
                 message = dict(content=content, role=curr_node.role)
-                if accept_usernames and curr_node.user_id != None:
+                if accept_usernames and curr_node.user_id is not None:
                     message["name"] = str(curr_node.user_id)
 
                 messages.append(message)
@@ -688,7 +688,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 user_warnings.add(f"⚠️ Max {max_images} image{'' if max_images == 1 else 's'} per message" if max_images > 0 else "⚠️ Can't see images")
             if curr_node.has_bad_attachments:
                 user_warnings.add("⚠️ Unsupported attachments")
-            if curr_node.fetch_parent_failed or (curr_node.parent_msg != None and len(messages) == max_messages):
+            if curr_node.fetch_parent_failed or (curr_node.parent_msg is not None and len(messages) == max_messages):
                 user_warnings.add(f"⚠️ Only using last {len(messages)} message{'' if len(messages) == 1 else 's'}")
 
             curr_msg = curr_node.parent_msg

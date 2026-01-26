@@ -194,7 +194,7 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
 @model_command.autocomplete("model")
 async def model_autocomplete(interaction: discord.Interaction, curr_str: str) -> list[Choice[str]]:
     global config
-    if curr_str == "":
+    if not curr_str:
         config = get_config()
 
     db = get_bad_keys_db()
