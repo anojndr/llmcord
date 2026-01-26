@@ -1000,6 +1000,7 @@ async def generate_response(
     original_provider = provider  # Store original for logging
     original_model = actual_model
     last_error_msg = None
+    overloaded_error_count = 0
     
     # Determine if the original model is already mistral (skip to gemma fallback)
     is_original_mistral = original_provider == "mistral" and "mistral" in original_model.lower()
@@ -1061,6 +1062,7 @@ async def generate_response(
                     good_keys = fallback_api_keys.copy()
                     initial_key_count = len(good_keys)
                     attempt_count = 0  # Reset attempt count for new provider
+                    overloaded_error_count = 0  # Reset overload counter for new provider
                     continue  # Try with the new provider
                 else:
                     logging.error(f"No API keys available for fallback provider '{provider}'")
@@ -1179,6 +1181,34 @@ async def generate_response(
             
             # Check for typical API key/auth error patterns
             error_str = str(e).lower()
+
+            if "overloaded" in error_str or "503" in error_str:
+                overloaded_error_count += 1
+                if overloaded_error_count >= 3:
+                    logging.warning("Abort retry loop due to consecutive overloaded errors")
+                    error_text = "❌ The model is currently overloaded. Please try again later."
+                    if last_error_msg:
+                        error_text += f"\nLast error: {last_error_msg}"
+                    
+                    if use_plain_responses:
+                        layout = LayoutView().add_item(TextDisplay(content=error_text))
+                        if response_msgs:
+                            await response_msgs[-1].edit(view=layout)
+                        else:
+                            await reply_helper(view=layout)
+                        response_contents = [error_text]
+                    else:
+                        embed.description = error_text
+                        embed.color = EMBED_COLOR_INCOMPLETE
+                        if response_msgs:
+                            await response_msgs[-1].edit(embed=embed, view=None)
+                        else:
+                            await reply_helper(embed=embed)
+                        response_contents = [error_text]
+                    break
+            else:
+                overloaded_error_count = 0
+
             key_error_patterns = [
                 "unauthorized", "invalid_api_key", "invalid key", "api key", 
                 "authentication", "forbidden", "401", "403", "quota", "rate limit",
