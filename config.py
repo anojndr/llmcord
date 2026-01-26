@@ -112,7 +112,7 @@ def get_or_create_httpx_client(
     )
     
     # Store in holder
-    if client_holder:
+    if client_holder is not None:
         if len(client_holder) == 0:
             client_holder.append(client)
         else:
