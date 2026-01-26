@@ -296,7 +296,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
     except ValueError:
         logging.error(f"Invalid model format: {provider_slash_model}. Expected 'provider/model'.")
-        embed = discord.Embed(description="❌ Invalid model configuration. Please contact an administrator.", color=EMBED_COLOR_INCOMPLETE)
+        embed = discord.Embed(description=f"❌ Invalid model configuration: '{provider_slash_model}'. Expected format: 'provider/model'.\nPlease contact an administrator.", color=EMBED_COLOR_INCOMPLETE)
         await processing_msg.edit(embed=embed)
         return
 
@@ -999,6 +999,7 @@ async def generate_response(
     fallback_level = 0  # 0 = original, 1 = mistral, 2 = gemma
     original_provider = provider  # Store original for logging
     original_model = actual_model
+    last_error_msg = None
     
     # Determine if the original model is already mistral (skip to gemma fallback)
     is_original_mistral = original_provider == "mistral" and "mistral" in original_model.lower()
@@ -1067,9 +1068,10 @@ async def generate_response(
                     good_keys = []
                     continue
             else:
-                # All fallback levels exhausted
                 logging.error("All fallback options exhausted (mistral and gemma)")
                 error_text = "❌ All API keys (including all fallbacks) exhausted. Please try again later."
+                if last_error_msg:
+                    error_text += f"\nLast error: {last_error_msg}"
                 if use_plain_responses:
                     layout = LayoutView().add_item(TextDisplay(content=error_text))
                     if response_msgs:
@@ -1167,6 +1169,7 @@ async def generate_response(
             break
 
         except Exception as e:
+            last_error_msg = str(e)
             logging.exception("Error while generating response")
             
             # Determine if this is an API key error vs other error (timeout, network, etc.)

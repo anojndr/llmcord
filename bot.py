@@ -94,7 +94,7 @@ async def _handle_model_switch(
     user_id = str(interaction.user.id)
 
     if model not in config["models"]:
-        await interaction.followup.send(f"Model `{model}` is not a valid model.", ephemeral=True)
+        await interaction.followup.send(f"❌ Model `{model}` is not configured in `config.yaml`.", ephemeral=True)
         return
 
     # Get user's current model preference (or default)
@@ -105,7 +105,7 @@ async def _handle_model_switch(
         current_user_model = default_model
     
     if current_user_model is None:
-        await interaction.followup.send(f"No valid {model_type_label} configured.", ephemeral=True)
+        await interaction.followup.send(f"❌ No valid {model_type_label} configured. Please ask an administrator to check `config.yaml`.", ephemeral=True)
         return
 
     if model == current_user_model:
