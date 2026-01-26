@@ -4,9 +4,9 @@ Discord UI components (Views and Buttons) for llmcord.
 import logging
 from typing import Optional, Any
 
+from bs4 import BeautifulSoup
 import discord
 import httpx
-from bs4 import BeautifulSoup
 
 from config import get_config, get_or_create_httpx_client
 
