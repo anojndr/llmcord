@@ -20,6 +20,7 @@ import libsql
 logger = logging.getLogger(__name__)
 P = ParamSpec("P")
 T = TypeVar("T")
+LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception))
 
 
 def _with_reconnect(
@@ -31,7 +32,7 @@ def _with_reconnect(
         max_retries = 2
         try:
             return method(self, *args, **kwargs)
-        except (ValueError, libsql.LibsqlError) as exc:
+        except (ValueError, LIBSQL_ERROR) as exc:
             error_str = str(exc)
             # Check for Hrana stream errors (stale connection)
             if "stream not found" not in error_str and "Hrana" not in error_str:
@@ -44,7 +45,7 @@ def _with_reconnect(
             self._reconnect()
             try:
                 return method(self, *args, **kwargs)
-            except (ValueError, libsql.LibsqlError):
+            except (ValueError, LIBSQL_ERROR):
                 logger.exception(
                     "Failed to reconnect to Turso after %d attempts",
                     max_retries,
@@ -146,7 +147,7 @@ class BadKeysDB:
             )
         """)
         # Migration: Add lens_results column if it doesn't exist.
-        with contextlib.suppress(libsql.LibsqlError):
+        with contextlib.suppress(LIBSQL_ERROR, ValueError):
             cursor.execute(
                 "ALTER TABLE message_search_data ADD COLUMN lens_results TEXT",
             )
@@ -159,7 +160,7 @@ class BadKeysDB:
         if self._conn and self.db_url and self.auth_token:
             try:
                 self._conn.sync()
-            except libsql.LibsqlError as exc:
+            except LIBSQL_ERROR as exc:
                 logger.warning("Failed to sync with Turso: %s", exc)
 
     def _hash_key(self, api_key: str) -> str:
