@@ -7,20 +7,37 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import requests
 
 from config import is_gemini_model
 
+HTTP_STATUS_OK = 200
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class LiteLLMOptions:
+    """Optional configuration for building LiteLLM kwargs."""
+
+    base_url: str | None = None
+    extra_headers: dict | None = None
+    stream: bool = False
+    model_parameters: dict | None = None
+    temperature: float | None = None
+    enable_grounding: bool = False
+
 
 def build_litellm_model_name(provider: str, model: str) -> str:
     """Build the LiteLLM model name with proper provider prefix.
-    
+
     Args:
         provider: Provider name (e.g., "gemini", "openai", "github_copilot")
         model: Model name
-    
+
     Returns:
         LiteLLM-compatible model string (e.g., "gemini/gemini-3-flash-preview")
 
@@ -38,32 +55,33 @@ def build_litellm_model_name(provider: str, model: str) -> str:
 
 def configure_github_copilot_token(access_token: str) -> None:
     """Configure a GitHub Copilot access token for LiteLLM.
-    
+
     LiteLLM's GitHub Copilot provider expects tokens in a config file.
     This function writes the access token AND exchanges it for an API key.
-    
+
     Args:
         access_token: GitHub access token (ghu_...)
 
     """
     # Get the token directory from env or use default
-    token_dir = os.environ.get(
-        "GITHUB_COPILOT_TOKEN_DIR",
-        os.path.expanduser("~/.config/litellm/github_copilot"),
-    )
+    token_dir = Path(
+        os.environ.get(
+            "GITHUB_COPILOT_TOKEN_DIR",
+            "~/.config/litellm/github_copilot",
+        ),
+    ).expanduser()
 
     # Create directory if it doesn't exist
-    os.makedirs(token_dir, exist_ok=True)
+    token_dir.mkdir(parents=True, exist_ok=True)
 
     # Write access token file (just the raw token)
-    access_token_file = os.path.join(
-        token_dir,
-        os.environ.get("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
+    access_token_file = token_dir / os.environ.get(
+        "GITHUB_COPILOT_ACCESS_TOKEN_FILE",
+        "access-token",
     )
-    with open(access_token_file, "w") as f:
-        f.write(access_token)
+    access_token_file.write_text(access_token, encoding="utf-8")
 
-    logging.debug(f"Configured GitHub Copilot access token at {access_token_file}")
+    logger.debug("Configured GitHub Copilot access token at %s", access_token_file)
 
     # Also exchange the access token for a Copilot API key
     # This replicates what LiteLLM's authenticator does
@@ -81,25 +99,32 @@ def configure_github_copilot_token(access_token: str) -> None:
             timeout=30,
         )
 
-        if response.status_code == 200:
+        if response.status_code == HTTP_STATUS_OK:
             token_data = response.json()
 
             # Write the API key file in the format LiteLLM expects
-            api_key_file = os.path.join(token_dir, "api-key.json")
+            api_key_file = token_dir / "api-key.json"
             api_key_data = {
                 "token": token_data.get("token"),
                 "expires_at": token_data.get("expires_at", int(time.time()) + 3600),
                 "endpoints": token_data.get("endpoints", {}),
             }
 
-            with open(api_key_file, "w") as f:
-                json.dump(api_key_data, f)
+            with api_key_file.open("w", encoding="utf-8") as file_handle:
+                json.dump(api_key_data, file_handle)
 
-            logging.debug(f"Exchanged GitHub access token for Copilot API key at {api_key_file}")
+            logger.debug(
+                "Exchanged GitHub access token for Copilot API key at %s",
+                api_key_file,
+            )
         else:
-            logging.warning(f"Failed to exchange GitHub token: {response.status_code} - {response.text[:200]}")
-    except Exception as e:
-        logging.warning(f"Error exchanging GitHub token for Copilot API key: {e}")
+            logger.warning(
+                "Failed to exchange GitHub token: %s - %s",
+                response.status_code,
+                response.text[:200],
+            )
+    except (requests.RequestException, ValueError, OSError) as exc:
+        logger.warning("Error exchanging GitHub token for Copilot API key: %s", exc)
 
 
 # GitHub Copilot required headers - used by all Copilot API calls
@@ -117,34 +142,26 @@ def prepare_litellm_kwargs(
     messages: list,
     api_key: str,
     *,
-    base_url: str | None = None,
-    extra_headers: dict | None = None,
-    stream: bool = False,
-    model_parameters: dict | None = None,
-    temperature: float | None = None,
-    enable_grounding: bool = False,
+    options: LiteLLMOptions | None = None,
 ) -> dict[str, Any]:
-    """Prepare kwargs for LiteLLM acompletion() with all provider-specific configuration.
-    
+    """Prepare kwargs for LiteLLM acompletion() with provider-specific configuration.
+
     This is the main entry point for creating consistent LiteLLM calls across
     both the main model handler and search decider.
-    
+
     Args:
         provider: Provider name (e.g., "gemini", "openai", "github_copilot")
         model: Model name (actual model, after any aliasing)
         messages: List of message dicts
         api_key: API key to use
-        base_url: Optional base URL for OpenAI-compatible providers
-        extra_headers: Optional extra headers from config
-        stream: Whether to enable streaming
-        model_parameters: Optional model parameters from config
-        temperature: Optional temperature override
-        enable_grounding: Whether to enable Gemini grounding/search tools
-    
+        options: Optional configuration bundle for provider-specific settings
+
     Returns:
         Dict of kwargs ready to pass to litellm.acompletion()
 
     """
+    options = options or LiteLLMOptions()
+
     # Build the model name with proper prefix
     litellm_model = build_litellm_model_name(provider, model)
 
@@ -155,28 +172,33 @@ def prepare_litellm_kwargs(
         "api_key": api_key,
     }
 
-    if stream:
+    if options.stream:
         kwargs["stream"] = True
 
-    if temperature is not None:
-        kwargs["temperature"] = temperature
+    if options.temperature is not None:
+        kwargs["temperature"] = options.temperature
 
     # Add base_url for OpenAI-compatible providers (not Gemini or GitHub Copilot)
-    if base_url and provider not in ("gemini", "github_copilot"):
-        kwargs["base_url"] = base_url
+    if options.base_url and provider not in ("gemini", "github_copilot"):
+        kwargs["base_url"] = options.base_url
 
     # Provider-specific configuration
     # Only apply Gemini-specific config to actual Gemini models (not Gemma)
     if provider == "gemini" and is_gemini_model(model):
-        _configure_gemini_kwargs(kwargs, model, model_parameters, enable_grounding)
+        _configure_gemini_kwargs(
+            kwargs,
+            model,
+            options.model_parameters,
+            enable_grounding=options.enable_grounding,
+        )
     elif provider == "github_copilot":
-        _configure_github_copilot_kwargs(kwargs, api_key, extra_headers)
+        _configure_github_copilot_kwargs(kwargs, api_key, options.extra_headers)
 
     # Merge extra headers if provided (after provider-specific headers)
-    if extra_headers and "extra_headers" not in kwargs:
-        kwargs["extra_headers"] = extra_headers
-    elif extra_headers and "extra_headers" in kwargs:
-        kwargs["extra_headers"] = {**kwargs["extra_headers"], **extra_headers}
+    if options.extra_headers and "extra_headers" not in kwargs:
+        kwargs["extra_headers"] = options.extra_headers
+    elif options.extra_headers and "extra_headers" in kwargs:
+        kwargs["extra_headers"] = {**kwargs["extra_headers"], **options.extra_headers}
 
     return kwargs
 
@@ -185,6 +207,7 @@ def _configure_gemini_kwargs(
     kwargs: dict[str, Any],
     model: str,
     model_parameters: dict | None = None,
+    *,
     enable_grounding: bool = False,
 ) -> None:
     """Configure Gemini-specific kwargs."""
@@ -192,7 +215,9 @@ def _configure_gemini_kwargs(
     is_preview = "preview" in model
 
     # Add thinking config for Gemini 3 models
-    thinking_level = model_parameters.get("thinking_level") if model_parameters else None
+    thinking_level = (
+        model_parameters.get("thinking_level") if model_parameters else None
+    )
 
     if not thinking_level:
         if "gemini-3-flash" in model:
@@ -208,16 +233,24 @@ def _configure_gemini_kwargs(
             "MEDIUM": "medium",
             "HIGH": "high",
         }
-        kwargs["reasoning_effort"] = thinking_map.get(thinking_level, thinking_level.lower())
+        kwargs["reasoning_effort"] = thinking_map.get(
+            thinking_level,
+            thinking_level.lower(),
+        )
 
-    # Add Google Search and URL Context tools for non-preview models when grounding is enabled
+    # Add Google Search and URL Context tools for non-preview models
+    # when grounding is enabled.
     if enable_grounding and not is_preview:
         kwargs["tools"] = [{"googleSearch": {}}, {"urlContext": {}}]
 
     # Set temperature for non-Gemini 3 models
-    if model_parameters and not is_gemini_3:
-        if "temperature" in model_parameters and "temperature" not in kwargs:
-            kwargs["temperature"] = model_parameters["temperature"]
+    if (
+        model_parameters
+        and not is_gemini_3
+        and "temperature" in model_parameters
+        and "temperature" not in kwargs
+    ):
+        kwargs["temperature"] = model_parameters["temperature"]
 
 
 def _configure_github_copilot_kwargs(
