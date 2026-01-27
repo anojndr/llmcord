@@ -1734,6 +1734,33 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
                             last_edit_time = datetime.now(timezone.utc).timestamp()
 
+            fallback_used = False
+            if (
+                finish_reason is None
+                and provider == "gemini"
+                and is_gemini_model(actual_model)
+            ):
+                logger.warning(
+                    "Gemini stream ended without finish reason. Falling back to non-streaming request.",
+                )
+                non_stream_content, non_stream_grounding = await get_completion(
+                    current_api_key,
+                )
+                if non_stream_grounding:
+                    grounding_metadata = non_stream_grounding
+                if non_stream_content:
+                    response_contents = _split_response_content(
+                        non_stream_content,
+                        max_message_length,
+                    )
+                    fallback_used = True
+                elif not response_contents:
+                    _raise_empty_response()
+                else:
+                    logger.warning(
+                        "Gemini non-streaming fallback returned empty content; keeping partial stream output.",
+                    )
+
             if not response_contents:
                 if provider == "gemini" and is_gemini_model(actual_model):
                     logger.warning(
@@ -1753,6 +1780,15 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                         _raise_empty_response()
                 else:
                     _raise_empty_response()
+
+            if fallback_used and not use_plain_responses:
+                for i, content in enumerate(response_contents):
+                    embed.description = content
+                    embed.color = EMBED_COLOR_COMPLETE
+                    if i < len(response_msgs):
+                        await response_msgs[i].edit(embed=embed, view=None)
+                    else:
+                        await reply_helper(embed=embed, silent=True, view=None)
 
             if use_plain_responses:
                 for i, content in enumerate(response_contents):
