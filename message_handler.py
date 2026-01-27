@@ -1800,26 +1800,10 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     logger.warning(
                         "Abort retry loop due to consecutive overloaded errors",
                     )
-                    error_text = "❌ The model is currently overloaded. Please try again later."
-                    if last_error_msg:
-                        error_text += f"\nLast error: {last_error_msg}"
-
-                    if use_plain_responses:
-                        layout = LayoutView().add_item(TextDisplay(content=error_text))
-                        if response_msgs:
-                            await response_msgs[-1].edit(view=layout)
-                        else:
-                            await reply_helper(view=layout)
-                        response_contents = [error_text]
-                    else:
-                        embed.description = error_text
-                        embed.color = EMBED_COLOR_INCOMPLETE
-                        if response_msgs:
-                            await response_msgs[-1].edit(embed=embed, view=None)
-                        else:
-                            await reply_helper(embed=embed)
-                        response_contents = [error_text]
-                    break
+                    # Force fallback by exhausting keys for this provider.
+                    # This avoids stopping the request when the primary model is overloaded.
+                    good_keys = []
+                    continue
             else:
                 overloaded_error_count = 0
 
