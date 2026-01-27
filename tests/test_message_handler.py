@@ -1,3 +1,7 @@
+"""Tests for message handler helpers."""
+
+# ruff: noqa: S101
+
 from __future__ import annotations
 
 import dataclasses
@@ -9,16 +13,20 @@ import message_handler
 
 @dataclasses.dataclass
 class DummyTextDisplay:
+    """Minimal text display stub for component tests."""
+
     type: discord.ComponentType
     content: str | None
 
 
 def test_get_embed_text() -> None:
+    """Extract text from an embed."""
     embed = discord.Embed(title="Title", description="Description")
-    assert message_handler._get_embed_text(embed) == "Title\nDescription"
+    assert message_handler._get_embed_text(embed) == "Title\nDescription"  # noqa: SLF001
 
 
 def test_build_node_text_parts() -> None:
+    """Build a concatenated text payload from parts."""
     embed = discord.Embed(title="Title", description="Description")
     components = [
         DummyTextDisplay(type=discord.ComponentType.text_display, content="Component"),
@@ -40,11 +48,13 @@ def test_build_node_text_parts() -> None:
 
 
 def test_append_search_to_content_string() -> None:
+    """Append search text to string content."""
     content = message_handler.append_search_to_content("hello", "search")
     assert content == "hello\n\nsearch"
 
 
 def test_append_search_to_content_list() -> None:
+    """Append search text to list-based content payload."""
     content = [
         {"type": "text", "text": "hello"},
         {"type": "image_url", "image_url": {"url": "https://example.com"}},

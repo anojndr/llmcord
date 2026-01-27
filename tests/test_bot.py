@@ -1,9 +1,19 @@
+"""Tests for bot utilities."""
+
+# ruff: noqa: S101
+
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import bot
 
+if TYPE_CHECKING:
+    import pytest
 
-def test_get_channel_locked_model(monkeypatch) -> None:
+
+def test_get_channel_locked_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return channel-specific model overrides."""
     monkeypatch.setattr(
         bot,
         "config",
@@ -21,6 +31,7 @@ def test_get_channel_locked_model(monkeypatch) -> None:
 
 
 def test_build_model_autocomplete() -> None:
+    """Build model autocomplete choices from handlers."""
     config_data = {
         "models": {
             "model-a": {},
@@ -33,7 +44,7 @@ def test_build_model_autocomplete() -> None:
         get_default=lambda: "model-a",
     )
 
-    choices = bot._build_model_autocomplete(
+    choices = bot._build_model_autocomplete(  # noqa: SLF001
         curr_str="model",
         handlers=handlers,
         user_id="123",

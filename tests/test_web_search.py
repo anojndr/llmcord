@@ -1,3 +1,7 @@
+"""Tests for web search helpers."""
+
+# ruff: noqa: S101
+
 from __future__ import annotations
 
 import re
@@ -9,12 +13,14 @@ import web_search
 
 
 def test_get_current_datetime_strings_format() -> None:
+    """Validate current datetime string formats."""
     date_str, time_str = web_search.get_current_datetime_strings()
     assert re.match(r"^[A-Z][a-z]+ \d{2} \d{4}$", date_str)
     assert re.match(r"^\d{2}:\d{2}:\d{2} .+", time_str)
 
 
 def test_convert_messages_to_openai_format() -> None:
+    """Convert mixed message formats to OpenAI format."""
     messages = [
         {"role": "user", "content": "hello"},
         {
@@ -38,10 +44,13 @@ def test_convert_messages_to_openai_format() -> None:
     assert result[-1]["role"] == "user"
     assert result[-1]["content"].startswith("Based on the conversation")
     assert result[2]["role"] == "assistant"
-    assert len(result[2]["content"]) == 2
+    expected_content_len = 2
+
+    assert len(result[2]["content"]) == expected_content_len
 
 
 def test_parse_exa_text_format() -> None:
+    """Parse Exa text results into structured records."""
     text = (
         "Title: Result One\nURL: https://example.com/1\n"
         "Text: First content\n\n"
@@ -66,10 +75,16 @@ def test_parse_exa_text_format() -> None:
 
 @pytest.mark.asyncio
 async def test_perform_web_search_tavily(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Handle Tavily search results and bad keys."""
     temp_db = bad_keys.BadKeysDB(local_db_path=":memory:")
     monkeypatch.setattr(web_search, "get_bad_keys_db", lambda: temp_db)
 
-    async def fake_tavily_search(query: str, api_key: str, max_results: int, depth: str) -> dict:
+    async def fake_tavily_search(
+        query: str,
+        api_key: str,
+        _max_results: int,
+        _depth: str,
+    ) -> dict:
         if api_key == "bad":
             return {"error": "bad key", "query": query}
         return {
@@ -102,7 +117,9 @@ async def test_perform_web_search_tavily(monkeypatch: pytest.MonkeyPatch) -> Non
 
 @pytest.mark.asyncio
 async def test_perform_web_search_exa(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_exa_search(query: str, exa_mcp_url: str, max_results: int) -> dict:
+    """Handle Exa search results."""
+
+    async def fake_exa_search(query: str, _exa_mcp_url: str, _max_results: int) -> dict:
         return {
             "results": [
                 {

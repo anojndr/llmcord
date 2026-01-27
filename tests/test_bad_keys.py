@@ -1,19 +1,28 @@
+"""Tests for bad key tracking and rotation."""
+
+# ruff: noqa: S101
+
 from __future__ import annotations
 
-import pathlib
+from typing import TYPE_CHECKING
 
 import pytest
 
 import bad_keys
 
+if TYPE_CHECKING:
+    import pathlib
 
-@pytest.fixture()
+
+@pytest.fixture
 def temp_db(tmp_path: pathlib.Path) -> bad_keys.BadKeysDB:
+    """Create a temporary bad keys database."""
     db_path = tmp_path / "bad_keys.db"
     return bad_keys.BadKeysDB(local_db_path=str(db_path))
 
 
 def test_bad_keys_mark_and_check(temp_db: bad_keys.BadKeysDB) -> None:
+    """Mark keys as bad and verify filtering."""
     temp_db.mark_key_bad("openai", "secret-key", "oops")
 
     assert temp_db.is_key_bad("openai", "secret-key") is True
@@ -24,12 +33,14 @@ def test_bad_keys_mark_and_check(temp_db: bad_keys.BadKeysDB) -> None:
 
 
 def test_bad_keys_synced(temp_db: bad_keys.BadKeysDB) -> None:
+    """Mark synced keys as bad across providers."""
     temp_db.mark_key_bad_synced("openai", "key1")
     assert temp_db.is_key_bad_synced("openai", "key1") is True
     assert temp_db.is_key_bad_synced("decider_openai", "key1") is True
 
 
 def test_user_preferences(temp_db: bad_keys.BadKeysDB) -> None:
+    """Store and reset user preference values."""
     assert temp_db.get_user_model("123") is None
     temp_db.set_user_model("123", "gpt-4.1")
     assert temp_db.get_user_model("123") == "gpt-4.1"
@@ -43,6 +54,7 @@ def test_user_preferences(temp_db: bad_keys.BadKeysDB) -> None:
 
 
 def test_message_search_data_roundtrip(temp_db: bad_keys.BadKeysDB) -> None:
+    """Round-trip search metadata storage and retrieval."""
     temp_db.save_message_search_data(
         message_id="1",
         search_results="result",
@@ -57,7 +69,8 @@ def test_message_search_data_roundtrip(temp_db: bad_keys.BadKeysDB) -> None:
 
 
 def test_message_search_data_handles_bad_json(temp_db: bad_keys.BadKeysDB) -> None:
-    conn = temp_db._get_connection()
+    """Handle corrupt JSON in stored metadata."""
+    conn = temp_db._get_connection()  # noqa: SLF001
     cursor = conn.cursor()
     cursor.execute(
         "INSERT OR REPLACE INTO message_search_data (message_id, tavily_metadata) "
@@ -70,7 +83,11 @@ def test_message_search_data_handles_bad_json(temp_db: bad_keys.BadKeysDB) -> No
     assert tavily_metadata is None
 
 
-def test_key_rotator_marks_bad(monkeypatch: pytest.MonkeyPatch, temp_db: bad_keys.BadKeysDB) -> None:
+def test_key_rotator_marks_bad(
+    monkeypatch: pytest.MonkeyPatch,
+    temp_db: bad_keys.BadKeysDB,
+) -> None:
+    """Rotate keys and mark failures as bad."""
     monkeypatch.setattr(bad_keys, "get_bad_keys_db", lambda: temp_db)
 
     rotator = bad_keys.KeyRotator("openai", ["key1", "key2"], max_retries_multiplier=1)
@@ -90,12 +107,14 @@ def test_key_rotator_marks_bad(monkeypatch: pytest.MonkeyPatch, temp_db: bad_key
 
 
 def test_get_good_keys_synced(temp_db: bad_keys.BadKeysDB) -> None:
+    """Filter out bad synced keys."""
     temp_db.mark_key_bad_synced("tavily", "bad")
     keys = temp_db.get_good_keys_synced("tavily", ["bad", "good"])
     assert keys == ["good"]
 
 
 def test_reset_provider_keys_synced(temp_db: bad_keys.BadKeysDB) -> None:
+    """Reset provider-specific synced bad keys."""
     temp_db.mark_key_bad_synced("tavily", "bad")
     temp_db.reset_provider_keys_synced("tavily")
     assert temp_db.get_bad_key_count("tavily") == 0

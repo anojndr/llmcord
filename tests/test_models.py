@@ -1,9 +1,14 @@
+"""Tests for model defaults."""
+
+# ruff: noqa: S101
+
 import asyncio
 
 import models
 
 
 def test_msgnode_defaults() -> None:
+    """Verify default values on a new message node."""
     node = models.MsgNode()
 
     assert node.text is None
