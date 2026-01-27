@@ -1400,6 +1400,41 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
         msg_nodes[response_msg.id] = MsgNode(parent_msg=new_msg)
         await msg_nodes[response_msg.id].lock.acquire()
 
+    def _extract_grounding_metadata(
+        response_obj: object,
+        choice_obj: object | None = None,
+    ) -> object | None:
+        grounding_metadata = None
+
+        if hasattr(response_obj, "model_extra") and response_obj.model_extra:
+            grounding_metadata = (
+                response_obj.model_extra.get("vertex_ai_grounding_metadata")
+                or response_obj.model_extra.get("google_grounding_metadata")
+                or response_obj.model_extra.get("grounding_metadata")
+                or response_obj.model_extra.get("groundingMetadata")
+            )
+
+        if not grounding_metadata and hasattr(response_obj, "grounding_metadata"):
+            grounding_metadata = response_obj.grounding_metadata
+
+        hidden_params = getattr(response_obj, "_hidden_params", None)
+        if not grounding_metadata and hidden_params:
+            grounding_metadata = (
+                hidden_params.get("grounding_metadata")
+                or hidden_params.get("google_grounding_metadata")
+                or hidden_params.get("groundingMetadata")
+            )
+
+        if not grounding_metadata and choice_obj and hasattr(choice_obj, "grounding_metadata"):
+            grounding_metadata = choice_obj.grounding_metadata
+
+        return grounding_metadata
+
+    def _split_response_content(text: str, max_length: int) -> list[str]:
+        if not text:
+            return []
+        return [text[i : i + max_length] for i in range(0, len(text), max_length)]
+
     async def get_stream(
         api_key: str,
     ) -> AsyncIterator[tuple[str, object | None, object | None]]:
@@ -1434,34 +1469,7 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
             delta_content = choice.delta.content or ""
             chunk_finish_reason = choice.finish_reason
 
-            # LiteLLM handles grounding metadata in various locations depending on provider
-            grounding_metadata = None
-
-            # Check model_extra (common for Vertex AI / Gemini)
-            if hasattr(chunk, "model_extra") and chunk.model_extra:
-                grounding_metadata = (
-                    chunk.model_extra.get("vertex_ai_grounding_metadata") or
-                    chunk.model_extra.get("google_grounding_metadata") or
-                    chunk.model_extra.get("grounding_metadata") or
-                    chunk.model_extra.get("groundingMetadata")
-                )
-
-            # Check the response object itself (some versions put it here)
-            if not grounding_metadata and hasattr(chunk, "grounding_metadata"):
-                grounding_metadata = chunk.grounding_metadata
-
-            # Check _hidden_params (LiteLLM sometimes stores provider-specific data here)
-            hidden_params = getattr(chunk, "_hidden_params", None)
-            if not grounding_metadata and hidden_params:
-                grounding_metadata = (
-                    hidden_params.get("grounding_metadata")
-                    or hidden_params.get("google_grounding_metadata")
-                    or hidden_params.get("groundingMetadata")
-                )
-
-            # For Gemini, also check in choices[0] for grounding info
-            if not grounding_metadata and hasattr(choice, "grounding_metadata"):
-                grounding_metadata = choice.grounding_metadata
+            grounding_metadata = _extract_grounding_metadata(chunk, choice)
 
             # Log the chunk attributes on finish to help debug
             if chunk_finish_reason and is_gemini_model(actual_model):
@@ -1472,6 +1480,7 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                         "Gemini chunk model_extra keys: %s",
                         list(chunk.model_extra.keys()),
                     )
+                hidden_params = getattr(chunk, "_hidden_params", None)
                 if hidden_params:
                     logger.info(
                         "Gemini chunk _hidden_params keys: %s",
@@ -1479,6 +1488,43 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     )
 
             yield delta_content, chunk_finish_reason, grounding_metadata
+
+    async def get_completion(
+        api_key: str,
+    ) -> tuple[str | None, object | None]:
+        """Get non-streaming response from LiteLLM using shared configuration."""
+        enable_grounding = not re.search(r"https?://", new_msg.content)
+
+        litellm_kwargs = prepare_litellm_kwargs(
+            provider=provider,
+            model=actual_model,
+            messages=messages[::-1],
+            api_key=api_key,
+            options=LiteLLMOptions(
+                base_url=base_url,
+                extra_headers=extra_headers,
+                stream=False,
+                model_parameters=model_parameters,
+                enable_grounding=enable_grounding,
+            ),
+        )
+
+        litellm_kwargs["timeout"] = 120
+        response = await litellm.acompletion(**litellm_kwargs)
+
+        if not response.choices:
+            return None, _extract_grounding_metadata(response)
+
+        choice = response.choices[0]
+        message = getattr(choice, "message", None)
+        content = None
+        if message is not None:
+            content = getattr(message, "content", None)
+            if content is None and isinstance(message, dict):
+                content = message.get("content")
+
+        grounding_metadata = _extract_grounding_metadata(response, choice)
+        return content, grounding_metadata
 
     grounding_metadata = None
     attempt_count = 0
@@ -1689,7 +1735,24 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                             last_edit_time = datetime.now(timezone.utc).timestamp()
 
             if not response_contents:
-                _raise_empty_response()
+                if provider == "gemini" and is_gemini_model(actual_model):
+                    logger.warning(
+                        "Empty streaming response from Gemini. Falling back to non-streaming request.",
+                    )
+                    non_stream_content, non_stream_grounding = await get_completion(
+                        current_api_key,
+                    )
+                    if non_stream_grounding:
+                        grounding_metadata = non_stream_grounding
+                    if non_stream_content:
+                        response_contents = _split_response_content(
+                            non_stream_content,
+                            max_message_length,
+                        )
+                    else:
+                        _raise_empty_response()
+                else:
+                    _raise_empty_response()
 
             if use_plain_responses:
                 for i, content in enumerate(response_contents):
