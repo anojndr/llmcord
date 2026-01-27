@@ -12,7 +12,7 @@ import litellm
 
 from bad_keys import KeyRotator, get_bad_keys_db
 from config import get_or_create_httpx_client
-from litellm_utils import prepare_litellm_kwargs
+from litellm_utils import LiteLLMOptions, prepare_litellm_kwargs
 
 
 def get_current_datetime_strings() -> tuple[str, str]:
@@ -172,8 +172,10 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 model=model,
                 messages=litellm_messages,
                 api_key=current_api_key,
-                base_url=base_url,
-                temperature=0.1,
+                options=LiteLLMOptions(
+                    base_url=base_url,
+                    temperature=0.1,
+                ),
             )
 
             # Make the LiteLLM call
