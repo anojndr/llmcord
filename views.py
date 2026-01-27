@@ -1,7 +1,6 @@
-"""Discord UI components (Views and Buttons) for llmcord.
-"""
+"""Discord UI components (Views and Buttons) for llmcord."""
 import logging
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 import discord
 import httpx
@@ -9,8 +8,12 @@ from bs4 import BeautifulSoup
 
 from config import get_config, get_or_create_httpx_client
 
+LOGGER = logging.getLogger(__name__)
+
 # Shared httpx client for text.is uploads - uses factory pattern for DRY
-_textis_client_holder: list = []
+_textis_client_holder: list[httpx.AsyncClient] = []
+HTTP_OK = 200
+URL_MAX_LENGTH = 150
 
 
 def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
@@ -28,6 +31,7 @@ def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
 
 async def upload_to_textis(text: str) -> str | None:
     """Upload text to text.is and return the paste URL.
+
     Returns None if upload fails.
     """
     try:
@@ -45,8 +49,12 @@ async def upload_to_textis(text: str) -> str | None:
         csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
         if not csrf_input:
             # Debug: log a snippet of the response to help diagnose
-            logging.error("Could not find CSRF token on text.is")
-            logging.debug(f"Response status: {response.status_code}, Content preview: {response.text[:500]}")
+            LOGGER.error("Could not find CSRF token on text.is")
+            LOGGER.debug(
+                "Response status: %s, Content preview: %s",
+                response.status_code,
+                response.text[:500],
+            )
             return None
 
         csrf_token = csrf_input.get("value")
@@ -83,22 +91,43 @@ async def upload_to_textis(text: str) -> str | None:
                 return paste_url
 
         # If we got a 200, the paste might have been created and we're on the page
-        if post_response.status_code == 200:
+        if post_response.status_code == HTTP_OK:
             # Check if the URL changed (we might be on the paste page)
             final_url = str(post_response.url)
             if final_url != "https://text.is/" and "text.is/" in final_url:
                 return final_url
 
-        logging.error(f"Unexpected response from text.is: {post_response.status_code}")
+        LOGGER.error(
+            "Unexpected response from text.is: %s",
+            post_response.status_code,
+        )
+    except Exception:
+        LOGGER.exception("Error uploading to text.is")
+    else:
         return None
 
-    except Exception as e:
-        logging.exception(f"Error uploading to text.is: {e}")
-        return None
+    return None
 
 
-def _get_grounding_queries(metadata: Any) -> list[str]:
+def _normalize_queries(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(query) for query in value if query]
+    if value:
+        return [str(value)]
+    return []
+
+
+def _extract_queries_from_mapping(mapping: Mapping[str, object]) -> list[str]:
+    for key in ("web_search_queries", "searchQueries", "webSearchQueries"):
+        value = mapping.get(key)
+        if value:
+            return _normalize_queries(value)
+    return []
+
+
+def _get_grounding_queries(metadata: object | None) -> list[str]:
     """Extract web search queries from grounding metadata.
+
     Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
     """
     if metadata is None:
@@ -108,33 +137,66 @@ def _get_grounding_queries(metadata: Any) -> list[str]:
     if isinstance(metadata, list):
         queries = []
         for item in metadata:
-            if isinstance(item, dict):
-                # Check for search queries in various formats
-                item_queries = (
-                    item.get("web_search_queries") or
-                    item.get("searchQueries") or
-                    item.get("webSearchQueries") or
-                    []
-                )
-                if isinstance(item_queries, list):
-                    queries.extend(item_queries)
-                elif item_queries:
-                    queries.append(str(item_queries))
+            if isinstance(item, Mapping):
+                queries.extend(_extract_queries_from_mapping(item))
         return queries
 
     # Handle dict format (LiteLLM)
-    if isinstance(metadata, dict):
-        return metadata.get("web_search_queries", []) or metadata.get("searchQueries", []) or metadata.get("webSearchQueries", []) or []
+    if isinstance(metadata, Mapping):
+        return _extract_queries_from_mapping(metadata)
 
     # Handle object format (GenAI GroundingMetadata)
     if hasattr(metadata, "web_search_queries"):
-        return metadata.web_search_queries or []
+        return _normalize_queries(getattr(metadata, "web_search_queries", None))
 
     return []
 
 
-def _get_grounding_chunks(metadata: Any) -> list[dict]:
+def _extract_chunks_from_mapping(mapping: Mapping[str, object]) -> list[object]:
+    for key in ("grounding_chunks", "groundingChunks", "chunks"):
+        value = mapping.get(key)
+        if value:
+            if isinstance(value, list):
+                return list(value)
+            return [value]
+    return []
+
+
+def _normalize_chunk(chunk: object) -> dict[str, str] | None:
+    if isinstance(chunk, Mapping):
+        web = chunk.get("web")
+        if isinstance(web, Mapping):
+            title = str(web.get("title") or "")
+            uri = str(web.get("uri") or "")
+            if title or uri:
+                return {"title": title, "uri": uri}
+        title = str(chunk.get("title") or "")
+        uri = str(chunk.get("uri") or "")
+        if title or uri:
+            return {"title": title, "uri": uri}
+        return None
+
+    web = getattr(chunk, "web", None)
+    if web:
+        title = str(getattr(web, "title", "") or "")
+        uri = str(getattr(web, "uri", "") or "")
+        if title or uri:
+            return {"title": title, "uri": uri}
+    return None
+
+
+def _normalize_chunks(chunks: Sequence[object]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for chunk in chunks:
+        result = _normalize_chunk(chunk)
+        if result:
+            normalized.append(result)
+    return normalized
+
+
+def _get_grounding_chunks(metadata: object | None) -> list[dict[str, str]]:
     """Extract grounding chunks from grounding metadata.
+
     Returns list of dicts with 'title' and 'uri' keys.
     Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
     """
@@ -143,86 +205,61 @@ def _get_grounding_chunks(metadata: Any) -> list[dict]:
 
     # Handle list format (LiteLLM streaming returns list of grounding results)
     if isinstance(metadata, list):
-        result = []
+        result: list[dict[str, str]] = []
         for item in metadata:
-            if isinstance(item, dict):
-                # Check for chunks in various formats
-                chunks = (
-                    item.get("grounding_chunks") or
-                    item.get("groundingChunks") or
-                    item.get("chunks") or
-                    []
-                )
-                for chunk in chunks:
-                    if isinstance(chunk, dict):
-                        web = chunk.get("web", {})
-                        if web:
-                            result.append({"title": web.get("title", ""), "uri": web.get("uri", "")})
-                        # Also check direct title/uri
-                        elif chunk.get("title") or chunk.get("uri"):
-                            result.append({"title": chunk.get("title", ""), "uri": chunk.get("uri", "")})
-                    elif hasattr(chunk, "web") and chunk.web:
-                        result.append({"title": chunk.web.title, "uri": chunk.web.uri})
-
+            if isinstance(item, Mapping):
+                chunks = _extract_chunks_from_mapping(item)
+                result.extend(_normalize_chunks(chunks))
         return result
 
     # Handle dict format (LiteLLM)
-    if isinstance(metadata, dict):
-        chunks = metadata.get("grounding_chunks", []) or metadata.get("groundingChunks", []) or []
-        result = []
-        for chunk in chunks:
-            if isinstance(chunk, dict):
-                # LiteLLM format
-                web = chunk.get("web", {})
-                if web:
-                    result.append({"title": web.get("title", ""), "uri": web.get("uri", "")})
-            elif hasattr(chunk, "web") and chunk.web:
-                # Object format
-                result.append({"title": chunk.web.title, "uri": chunk.web.uri})
-        return result
+    if isinstance(metadata, Mapping):
+        chunks = _extract_chunks_from_mapping(metadata)
+        return _normalize_chunks(chunks)
 
     # Handle object format (GenAI GroundingMetadata)
     if hasattr(metadata, "grounding_chunks"):
-        chunks = metadata.grounding_chunks or []
-        result = []
-        for chunk in chunks:
-            if hasattr(chunk, "web") and chunk.web:
-                result.append({"title": chunk.web.title, "uri": chunk.web.uri})
-        return result
+        chunks = getattr(metadata, "grounding_chunks", []) or []
+        return _normalize_chunks(chunks)
 
     return []
 
 
-def _has_grounding_data(metadata: Any) -> bool:
+def _has_grounding_data(metadata: object | None) -> bool:
     """Check if metadata has any grounding data (queries or chunks).
+
     Used to determine if the Show Sources button should be displayed.
     Only returns True if actual grounding queries or chunks exist.
     """
     if metadata is None:
         return False
 
-    # Check if we have actual queries or chunks
-    # This handles all formats: list, dict, and object types
-    if _get_grounding_queries(metadata):
-        return True
-    if _get_grounding_chunks(metadata):
-        return True
-
-    return False
+    return bool(_get_grounding_queries(metadata)) or bool(
+        _get_grounding_chunks(metadata),
+    )
 
 
 
 class RetryButton(discord.ui.Button):
-    """Button to retry the generation"""
+    """Button to retry the generation."""
 
-    def __init__(self, callback_fn, user_id):
+    def __init__(
+        self,
+        callback_fn: Callable[[], Awaitable[None]],
+        user_id: int,
+    ) -> None:
+        """Initialize a retry button for the given user."""
         super().__init__(style=discord.ButtonStyle.secondary, label="Retry", emoji="🔄")
         self.callback_fn = callback_fn
         self.user_id = user_id
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Retry the generation when allowed for the requesting user."""
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ You cannot retry this message.", ephemeral=True)
+            await interaction.response.send_message(
+                "❌ You cannot retry this message.",
+                ephemeral=True,
+            )
             return
 
         await interaction.response.defer()
@@ -230,9 +267,17 @@ class RetryButton(discord.ui.Button):
 
 
 class ResponseView(discord.ui.View):
-    """View with 'View Response Better' button that uploads to text.is"""
+    """View with a button that uploads responses to text.is."""
 
-    def __init__(self, full_response: str, metadata: Any | None = None, tavily_metadata: dict | None = None, retry_callback: Any | None = None, user_id: int | None = None):
+    def __init__(
+        self,
+        full_response: str,
+        metadata: object | None = None,
+        tavily_metadata: Mapping[str, object] | None = None,
+        retry_callback: Callable[[], Awaitable[None]] | None = None,
+        user_id: int | None = None,
+    ) -> None:
+        """Initialize the response view and its optional buttons."""
         super().__init__(timeout=None)
         self.full_response = full_response
         self.metadata = metadata
@@ -247,11 +292,22 @@ class ResponseView(discord.ui.View):
             self.add_item(SourceButton(metadata))
 
         # Add Tavily sources button if we have tavily metadata with URLs or queries
-        if tavily_metadata and (tavily_metadata.get("urls") or tavily_metadata.get("queries")):
+        if tavily_metadata and (
+            tavily_metadata.get("urls") or tavily_metadata.get("queries")
+        ):
             self.add_item(TavilySourceButton(tavily_metadata))
 
-    @discord.ui.button(label="View Response Better", style=discord.ButtonStyle.secondary, emoji="📄")
-    async def view_response_better(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="View Response Better",
+        style=discord.ButtonStyle.secondary,
+        emoji="📄",
+    )
+    async def view_response_better(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        """Upload the response to text.is and share the link."""
         await interaction.response.defer(ephemeral=True)
 
         paste_url = await upload_to_textis(self.full_response)
@@ -259,7 +315,10 @@ class ResponseView(discord.ui.View):
         if paste_url:
             embed = discord.Embed(
                 title="View Response",
-                description=f"Your response has been uploaded for better viewing:\n\n**[Click here to view]({paste_url})**",
+                description=(
+                    "Your response has been uploaded for better viewing:\n\n"
+                    f"**[Click here to view]({paste_url})**"
+                ),
                 color=discord.Color.green(),
             )
             embed.set_footer(text="Powered by text.is")
@@ -271,9 +330,14 @@ class ResponseView(discord.ui.View):
             )
 
 
-def add_chunked_embed_field(embed: discord.Embed, items: list[str], base_name: str, field_limit: int = 1024) -> None:
-    """Add items to embed fields, splitting into multiple fields if content exceeds limit.
-    
+def add_chunked_embed_field(
+    embed: discord.Embed,
+    items: list[str],
+    base_name: str,
+    field_limit: int = 1024,
+) -> None:
+    """Add items to embed fields, splitting into multiple fields if needed.
+
     Args:
         embed: The Discord embed to add fields to
         items: List of strings to add
@@ -289,7 +353,9 @@ def add_chunked_embed_field(embed: discord.Embed, items: list[str], base_name: s
 
     for item in items:
         if len(current_chunk) + len(item) + 1 > field_limit:
-            field_name = f"{base_name} ({field_count})" if field_count > 1 else base_name
+            field_name = (
+                f"{base_name} ({field_count})" if field_count > 1 else base_name
+            )
             embed.add_field(name=field_name, value=current_chunk, inline=False)
             current_chunk = item
             field_count += 1
@@ -301,12 +367,12 @@ def add_chunked_embed_field(embed: discord.Embed, items: list[str], base_name: s
         embed.add_field(name=field_name, value=current_chunk, inline=False)
 
 
-def build_grounding_sources_embed(metadata: Any) -> discord.Embed:
+def build_grounding_sources_embed(metadata: object) -> discord.Embed:
     """Build a Discord embed showing sources from grounding metadata.
-    
+
     Args:
         metadata: Grounding metadata (either GenAI GroundingMetadata or LiteLLM dict)
-    
+
     Returns:
         A Discord Embed with the formatted sources
 
@@ -323,60 +389,72 @@ def build_grounding_sources_embed(metadata: Any) -> discord.Embed:
 
     chunks = _get_grounding_chunks(metadata)
     if chunks:
-        sources = [
-            f"{i+1}. [{chunk['title']}]({chunk['uri']})"
-            for i, chunk in enumerate(chunks)
-            if chunk.get("uri")
-        ]
+        sources = []
+        for i, chunk in enumerate(chunks):
+            if chunk.get("uri"):
+                sources.append(f"{i+1}. [{chunk['title']}]({chunk['uri']})")
         add_chunked_embed_field(embed, sources, "Search Results")
 
     # Handle edge case where no content was added to the embed
     if not embed.fields:
-        embed.add_field(name="Sources", value="No source information available.", inline=False)
+        embed.add_field(
+            name="Sources",
+            value="No source information available.",
+            inline=False,
+        )
 
     return embed
 
 
 class SourceButton(discord.ui.Button):
-    """Button to show sources from grounding metadata"""
+    """Button to show sources from grounding metadata."""
 
-    def __init__(self, metadata: Any):
+    def __init__(self, metadata: object) -> None:
+        """Initialize the sources button."""
         super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary)
         self.metadata = metadata
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Show sources in an ephemeral embed."""
         embed = build_grounding_sources_embed(self.metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class TavilySourceButton(discord.ui.Button):
-    """Button to show sources from web search (supports Tavily and Exa)"""
+    """Button to show sources from web search (supports Tavily and Exa)."""
 
-    def __init__(self, search_metadata: dict):
-        super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary, emoji="🔍")
+    def __init__(self, search_metadata: Mapping[str, object]) -> None:
+        """Initialize the web-search sources button."""
+        super().__init__(
+            label="Show Sources",
+            style=discord.ButtonStyle.secondary,
+            emoji="🔍",
+        )
         self.search_metadata = search_metadata
 
-    async def callback(self, interaction: discord.Interaction):
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Show web-search sources in a paginated embed."""
         view = TavilySourcesView(self.search_metadata)
         embed = view.build_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 class TavilySourcesView(discord.ui.View):
-    """Paginated view for displaying web search sources (supports Tavily and Exa)"""
+    """Paginated view for displaying web search sources (supports Tavily and Exa)."""
 
     # Limits for embed content
     MAX_EMBED_SIZE = 5500  # Leave buffer below 6000
     FIELD_LIMIT = 1024
     SOURCES_PER_PAGE = 10  # Reasonable default
 
-    def __init__(self, search_metadata: dict):
+    def __init__(self, search_metadata: Mapping[str, object]) -> None:
+        """Initialize the paginated sources view."""
         super().__init__(timeout=300)  # 5 minute timeout
         # Handle None or malformed metadata
-        self.search_metadata = search_metadata or {}
+        self.search_metadata = dict(search_metadata or {})
         self.current_page = 0
 
-        # Detect provider from metadata (defaults to "tavily" for backwards compatibility)
+        # Detect provider from metadata (defaults to "tavily" for compatibility)
         self.provider = self.search_metadata.get("provider", "tavily")
 
         # Prepare source entries with defensive defaults
@@ -387,22 +465,22 @@ class TavilySourcesView(discord.ui.View):
         self.total_pages = len(self.pages)
 
         # Update button states
-        self._update_buttons()
+        self.update_buttons()
 
     def _prepare_sources(self) -> list[str]:
-        """Prepare formatted source strings"""
+        """Prepare formatted source strings."""
         sources = []
         for i, url_info in enumerate(self.urls):
-            title = url_info.get("title", "No title")[:80]  # Truncate long titles
-            url = url_info.get("url", "")
+            title = str(url_info.get("title", "No title"))[:80]
+            url = str(url_info.get("url", ""))
             # Truncate very long URLs
-            if len(url) > 150:
-                url = url[:150] + "..."
+            if len(url) > URL_MAX_LENGTH:
+                url = f"{url[:URL_MAX_LENGTH]}..."
             sources.append(f"{i+1}. [{title}]({url})")
         return sources
 
     def _paginate_sources(self) -> list[list[str]]:
-        """Split sources into pages that fit within embed limits"""
+        """Split sources into pages that fit within embed limits."""
         if not self.sources:
             return [[]]
 
@@ -414,15 +492,18 @@ class TavilySourcesView(discord.ui.View):
         queries_size = 0
         if self.queries:
             queries_text = "\n".join(f"• {q}" for q in self.queries)[:self.FIELD_LIMIT]
-            queries_size = len("Search Queries") + len(queries_text) + 50  # field overhead
+            queries_size = len("Search Queries") + len(queries_text) + 50
 
-        base_size = len("Web Search Sources") + queries_size + 100  # title + queries + buffer
+        base_size = len("Web Search Sources") + queries_size + 100
 
         for source in self.sources:
             source_size = len(source) + 2  # +2 for newline
 
             # Check if adding this source would exceed limits
-            if current_size + source_size > self.MAX_EMBED_SIZE - base_size or len(current_page) >= self.SOURCES_PER_PAGE:
+            if (
+                current_size + source_size > self.MAX_EMBED_SIZE - base_size
+                or len(current_page) >= self.SOURCES_PER_PAGE
+            ):
                 if current_page:
                     pages.append(current_page)
                 current_page = [source]
@@ -436,13 +517,13 @@ class TavilySourcesView(discord.ui.View):
 
         return pages if pages else [[]]
 
-    def _update_buttons(self):
-        """Update button disabled states based on current page"""
+    def update_buttons(self) -> None:
+        """Update button disabled states based on current page."""
         self.prev_button.disabled = self.current_page <= 0
         self.next_button.disabled = self.current_page >= self.total_pages - 1
 
     def build_embed(self) -> discord.Embed:
-        """Build the embed for the current page"""
+        """Build the embed for the current page."""
         embed = discord.Embed(title="Web Search Sources", color=discord.Color.blue())
 
         # Display search queries (on every page)
@@ -461,31 +542,62 @@ class TavilySourcesView(discord.ui.View):
 
         # Footer with pagination info - show provider name
         provider_name = "Exa Search" if self.provider == "exa" else "Tavily Search"
-        footer_text = f"Page {self.current_page + 1}/{self.total_pages} • {len(self.urls)} total sources • Powered by {provider_name}"
+        footer_text = (
+            f"Page {self.current_page + 1}/{self.total_pages} • "
+            f"{len(self.urls)} total sources • Powered by {provider_name}"
+        )
         embed.set_footer(text=footer_text)
 
         return embed
 
-    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, emoji="◀️", disabled=True)
-    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="Previous",
+        style=discord.ButtonStyle.secondary,
+        emoji="◀️",
+        disabled=True,
+    )
+    async def prev_button(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        """Show the previous page of sources."""
         self.current_page = max(0, self.current_page - 1)
-        self._update_buttons()
+        self.update_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, emoji="▶️")
-    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="Next",
+        style=discord.ButtonStyle.secondary,
+        emoji="▶️",
+    )
+    async def next_button(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        """Show the next page of sources."""
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
-        self._update_buttons()
+        self.update_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
-    @discord.ui.button(label="Go to Page", style=discord.ButtonStyle.primary, emoji="🔢")
-    async def goto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(
+        label="Go to Page",
+        style=discord.ButtonStyle.primary,
+        emoji="🔢",
+    )
+    async def goto_button(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        """Open a modal to select a page."""
         modal = GoToPageModal(self)
         await interaction.response.send_modal(modal)
 
 
 class GoToPageModal(discord.ui.Modal, title="Go to Page"):
-    """Modal for entering a specific page number"""
+    """Modal for entering a specific page number."""
 
     page_input = discord.ui.TextInput(
         label="Page Number",
@@ -495,24 +607,29 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
         max_length=5,
     )
 
-    def __init__(self, sources_view: TavilySourcesView):
+    def __init__(self, sources_view: TavilySourcesView) -> None:
+        """Initialize the modal for the specified sources view."""
         super().__init__()
         self.sources_view = sources_view
         self.page_input.placeholder = f"Enter 1-{sources_view.total_pages}"
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        """Validate the page number and update the embed."""
         try:
             page_num = int(self.page_input.value)
             if 1 <= page_num <= self.sources_view.total_pages:
                 self.sources_view.current_page = page_num - 1  # Convert to 0-indexed
-                self.sources_view._update_buttons()
+                self.sources_view.update_buttons()
                 await interaction.response.edit_message(
                     embed=self.sources_view.build_embed(),
                     view=self.sources_view,
                 )
             else:
                 await interaction.response.send_message(
-                    f"❌ Invalid page number. Please enter a number between 1 and {self.sources_view.total_pages}.",
+                    (
+                        "❌ Invalid page number. Please enter a number between 1 "
+                        f"and {self.sources_view.total_pages}."
+                    ),
                     ephemeral=True,
                 )
         except ValueError:
@@ -523,13 +640,19 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
 
 
 class SourceView(discord.ui.View):
-    """Legacy view for backwards compatibility - now using ResponseView instead"""
+    """Legacy view for backwards compatibility - now uses ResponseView."""
 
-    def __init__(self, metadata: Any):
+    def __init__(self, metadata: object) -> None:
+        """Initialize the legacy sources view."""
         super().__init__(timeout=None)
         self.metadata = metadata
 
     @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.secondary)
-    async def show_sources(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def show_sources(
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
+    ) -> None:
+        """Show sources for legacy responses."""
         embed = build_grounding_sources_embed(self.metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)
