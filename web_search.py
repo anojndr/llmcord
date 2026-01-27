@@ -550,7 +550,7 @@ async def exa_search(
                     return {"results": results, "query": query}
                 else:
                     # Fallback: treat the entire text as a single result
-                    logging.warning(f"Could not parse Exa text format, using as single result")
+                    logging.warning("Could not parse Exa text format, using as single result")
                     return {"results": [{"title": "Search Result", "url": "", "content": text_content}], "query": query}
         
         logging.warning(f"Exa MCP returned empty content for query '{query}'")

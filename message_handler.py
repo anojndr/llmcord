@@ -8,12 +8,12 @@ from datetime import datetime
 import io
 import logging
 import re
+import threading
 
 import asyncpraw
 from bs4 import BeautifulSoup
 import discord
 from discord.ui import LayoutView, TextDisplay
-import httpx
 import litellm
 from PIL import Image
 import tiktoken
@@ -21,7 +21,7 @@ from twscrape import gather
 import pymupdf4llm
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from bad_keys import get_bad_keys_db, KeyRotator
+from bad_keys import get_bad_keys_db
 from config import (
     get_config,
     ensure_list,
@@ -36,7 +36,7 @@ from config import (
     MAX_MESSAGE_NODES,
     BROWSER_HEADERS,
 )
-from litellm_utils import prepare_litellm_kwargs, build_litellm_model_name
+from litellm_utils import prepare_litellm_kwargs
 from models import MsgNode
 from views import ResponseView, SourceView, SourceButton, TavilySourceButton, _has_grounding_data
 from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
@@ -48,6 +48,31 @@ _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
 def _get_tiktoken_encoding():
     """Get the pre-loaded tiktoken encoding."""
     return _tiktoken_encoding
+
+
+_pymupdf_layout_activation_lock = threading.Lock()
+_pymupdf_layout_activated: bool | None = None
+
+
+def _ensure_pymupdf_layout_activated() -> bool:
+    """Activate PyMuPDF Layout if available, returning activation state."""
+    global _pymupdf_layout_activated
+    if _pymupdf_layout_activated is not None:
+        return _pymupdf_layout_activated
+
+    with _pymupdf_layout_activation_lock:
+        if _pymupdf_layout_activated is not None:
+            return _pymupdf_layout_activated
+        try:
+            import pymupdf.layout as pymupdf_layout
+
+            pymupdf_layout.activate()
+            _pymupdf_layout_activated = True
+        except Exception as exc:
+            _pymupdf_layout_activated = False
+            logging.debug("PyMuPDF Layout not available: %s", exc)
+
+    return _pymupdf_layout_activated
 
 
 def _get_embed_text(embed: discord.Embed) -> str:
@@ -84,6 +109,7 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
             doc = fitz.open(stream=pdf_content, filetype="pdf")
             
             # Use pymupdf4llm for clean markdown extraction
+            _ensure_pymupdf_layout_activated()
             md_text = pymupdf4llm.to_markdown(doc)
             doc.close()
             return md_text
@@ -804,7 +830,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         if msg.get("role") == "user":
                             msg["content"] = append_search_to_content(msg.get("content", ""), search_results)
                             
-                            logging.info(f"Web search results appended to user message")
+                            logging.info("Web search results appended to user message")
                             
                             # Save search results to database for persistence in chat history
                             get_bad_keys_db().save_message_search_data(new_msg.id, search_results, search_metadata)
@@ -904,9 +930,6 @@ async def generate_response(
     
     # Count input tokens (chat history + latest query)
     input_tokens = count_conversation_tokens(messages)
-
-    # Build LiteLLM model name (for display purposes in footer)
-    litellm_model = build_litellm_model_name(provider, actual_model)
 
     if use_plain_responses := config.get("use_plain_responses", False):
         max_message_length = 4000
@@ -1048,7 +1071,7 @@ async def generate_response(
                 # Second fallback: gemma
                 fallback_level = 2
                 next_fallback = ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it")
-                logging.warning(f"Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...")
+                logging.warning("Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...")
             
             if next_fallback:
                 new_provider, new_model, new_provider_slash_model = next_fallback
@@ -1057,7 +1080,6 @@ async def generate_response(
                 provider = new_provider
                 actual_model = new_model
                 provider_slash_model = new_provider_slash_model
-                litellm_model = build_litellm_model_name(provider, actual_model)
                 
                 # Get fallback provider configuration
                 fallback_provider_config = config.get("providers", {}).get(provider, {})
@@ -1107,7 +1129,7 @@ async def generate_response(
                         grounding_metadata = new_grounding_metadata
                         logging.info(f"Captured grounding metadata from stream: {type(grounding_metadata)}")
 
-                    if finish_reason != None:
+                    if finish_reason is not None:
                         break
 
                     finish_reason = new_finish_reason
@@ -1115,7 +1137,7 @@ async def generate_response(
                     prev_content = curr_content or ""
                     curr_content = delta_content
 
-                    new_content = prev_content if finish_reason == None else (prev_content + curr_content)
+                    new_content = prev_content if finish_reason is None else (prev_content + curr_content)
 
                     if response_contents == [] and new_content == "":
                         continue
@@ -1129,9 +1151,9 @@ async def generate_response(
                         time_delta = datetime.now().timestamp() - last_edit_time
 
                         ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
-                        msg_split_incoming = finish_reason == None and len(response_contents[-1] + curr_content) > max_message_length
-                        is_final_edit = finish_reason != None or msg_split_incoming
-                        is_good_finish = finish_reason != None and any(x in str(finish_reason).lower() for x in ("stop", "end_turn"))
+                        msg_split_incoming = finish_reason is None and len(response_contents[-1] + curr_content) > max_message_length
+                        is_final_edit = finish_reason is not None or msg_split_incoming
+                        is_good_finish = finish_reason is not None and any(x in str(finish_reason).lower() for x in ("stop", "end_turn"))
 
                         if start_next_msg or ready_to_edit or is_final_edit:
                             embed.description = response_contents[-1] if is_final_edit else (response_contents[-1] + STREAMING_INDICATOR)

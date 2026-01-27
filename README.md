@@ -122,6 +122,8 @@ Or run local models with:
 
 - If you're having issues, try my suggestions [here](https://github.com/jakobdylanc/llmcord/issues/19)
 
+- For improved PDF layout analysis, install [pymupdf-layout](https://pypi.org/project/pymupdf-layout/) and the bot will auto-activate it during PDF extraction.
+
 - Only models from OpenAI API and xAI API are "user identity aware" because only they support the "name" parameter in the message object. Hopefully more providers support this in the future.
 
 - PRs are welcome :)
