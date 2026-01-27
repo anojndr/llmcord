@@ -1,5 +1,4 @@
-"""Data models for llmcord.
-"""
+"""Data models for llmcord."""
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -10,7 +9,7 @@ import discord
 @dataclass(slots=True)
 class MsgNode:
     """Represents a message node in the conversation chain.
-    
+
     Uses __slots__ for memory efficiency since many instances are created.
     """
 
