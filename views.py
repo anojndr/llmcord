@@ -169,13 +169,6 @@ def _get_grounding_chunks(metadata: Any) -> list[dict]:
                     elif hasattr(chunk, "web") and chunk.web:
                         result.append({"title": chunk.web.title, "uri": chunk.web.uri})
                 
-                # Also check for grounding_supports or groundingSupports
-                supports = item.get("grounding_supports") or item.get("groundingSupports") or []
-                for support in supports:
-                    if isinstance(support, dict):
-                        # Grounding supports might have segment and ground_chunk_indices
-                        chunk_indices = support.get("groundingChunkIndices") or support.get("ground_chunk_indices") or []
-                        # The actual sources might be referenced elsewhere
         return result
     
     # Handle dict format (LiteLLM)
