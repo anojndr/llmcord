@@ -6,6 +6,10 @@
 
 !*.md
 !*.py
+!tests/
+!tests/**/*.py
+
+!pytest.ini
 
 !Dockerfile
 !config-example.yaml
