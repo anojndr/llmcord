@@ -1,5 +1,4 @@
-"""
-Utility functions and patches for llmcord.
+"""Utility functions and patches for llmcord.
 """
 import json
 import re
@@ -21,9 +20,9 @@ def patched_get_scripts_list(text: str):
             yield script_url(k, f"{v}a")
     except json.decoder.JSONDecodeError:
         fixed_scripts = re.sub(
-            r'([,\{])(\s*)([\w]+_[\w_]+)(\s*):',
+            r"([,\{])(\s*)([\w]+_[\w_]+)(\s*):",
             r'\1\2"\3"\4:',
-            scripts
+            scripts,
         )
         for k, v in json.loads(fixed_scripts).items():
             yield script_url(k, f"{v}a")

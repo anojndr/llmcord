@@ -1,21 +1,18 @@
-"""
-Configuration loading and constants for llmcord.
+"""Configuration loading and constants for llmcord.
 """
 import os
 import time
 from typing import Any
 
-import yaml
 import discord
-
+import yaml
 
 # Model and provider constants
 VISION_MODEL_TAGS = ("claude", "gemini", "gemma", "gpt-4", "gpt-5", "grok-4", "llama", "llava", "mistral", "o3", "o4", "vision", "vl")
 
 
 def is_gemini_model(model: str) -> bool:
-    """
-    Check if a model is an actual Gemini model (not Gemma or other models on the Gemini provider).
+    """Check if a model is an actual Gemini model (not Gemma or other models on the Gemini provider).
     
     Gemini models have special capabilities like native PDF handling, audio/video support,
     and grounding tools that Gemma models don't have even though they're served via the
@@ -26,6 +23,7 @@ def is_gemini_model(model: str) -> bool:
         
     Returns:
         True if this is a genuine Gemini model, False for Gemma and other models
+
     """
     model_lower = model.lower()
     # Gemma models contain "gemma" in their name
@@ -68,8 +66,7 @@ def get_or_create_httpx_client(
     proxy_url: str = None,
     follow_redirects: bool = True,
 ):
-    """
-    Get or create a shared httpx.AsyncClient with lazy initialization.
+    """Get or create a shared httpx.AsyncClient with lazy initialization.
     
     This factory function provides a consistent pattern for creating httpx clients
     across the codebase, avoiding duplication of client configuration.
@@ -92,16 +89,17 @@ def get_or_create_httpx_client(
         _my_client = []  # Container for lazy init
         def get_my_client():
             return get_or_create_httpx_client(_my_client, timeout=30.0)
+
     """
     import httpx
-    
+
     # Check if client exists and is not closed
     if client_holder and client_holder[0] is not None and not client_holder[0].is_closed:
         return client_holder[0]
-    
+
     # Create new client
     final_headers = {**BROWSER_HEADERS, **(headers or {})}
-    
+
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(timeout, connect=connect_timeout),
         limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_keepalive),
@@ -109,14 +107,14 @@ def get_or_create_httpx_client(
         proxy=proxy_url,
         follow_redirects=follow_redirects,
     )
-    
+
     # Store in holder
     if client_holder is not None:
         if len(client_holder) == 0:
             client_holder.append(client)
         else:
             client_holder[0] = client
-    
+
     return client
 
 
@@ -128,28 +126,27 @@ CONFIG_CACHE_TTL = 5  # Check file modification time every 5 seconds
 
 
 def get_config(filename: str = "config.yaml") -> dict[str, Any]:
-    """
-    Load configuration from YAML file with caching.
+    """Load configuration from YAML file with caching.
     Only reloads if file has been modified (checked every CONFIG_CACHE_TTL seconds).
     """
     global _config_cache, _config_mtime, _config_check_time
-    
+
     current_time = time.time()
-    
+
     # Only check file mtime periodically to avoid stat() on every call
     if current_time - _config_check_time > CONFIG_CACHE_TTL or not _config_cache:
         _config_check_time = current_time
-        
+
         try:
             filepath = filename
             if not os.path.exists(filepath):
                 filepath = os.path.join("/etc/secrets", filename)
-            
+
             if not os.path.exists(filepath):
                 raise FileNotFoundError(f"Config file not found: {filename}")
-            
+
             file_mtime = os.path.getmtime(filepath)
-            
+
             # Only reload if file was modified
             if file_mtime != _config_mtime or not _config_cache:
                 _config_mtime = file_mtime
@@ -170,7 +167,7 @@ def get_config(filename: str = "config.yaml") -> dict[str, Any]:
                     _config_cache = loaded_config
             except FileNotFoundError:
                 raise FileNotFoundError(f"Config file '{filename}' not found in current directory or /etc/secrets/") from e
-    
+
     return _config_cache
 
 
@@ -183,8 +180,7 @@ def clear_config_cache() -> None:
 
 
 def ensure_list(value: Any) -> list:
-    """
-    Convert a value to a list if it isn't one already.
+    """Convert a value to a list if it isn't one already.
     
     This is commonly needed for API keys which may be configured as either
     a single string or a list of strings.
@@ -204,6 +200,7 @@ def ensure_list(value: Any) -> list:
         ['key1', 'key2']
         >>> ensure_list(None)
         []
+
     """
     if value is None:
         return []

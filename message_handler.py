@@ -1,45 +1,54 @@
-"""
-Message handling logic for llmcord Discord bot.
+"""Message handling logic for llmcord Discord bot.
 Uses LiteLLM for unified LLM API access via shared litellm_utils.
 """
 import asyncio
-from base64 import b64encode
-from datetime import datetime
 import io
 import logging
 import re
 import threading
+from base64 import b64encode
+from datetime import datetime
 
 import asyncpraw
-from bs4 import BeautifulSoup
 import discord
-from discord.ui import LayoutView, TextDisplay
 import litellm
-from PIL import Image
-import tiktoken
-from twscrape import gather
 import pymupdf4llm
+import tiktoken
+from bs4 import BeautifulSoup
+from discord.ui import LayoutView, TextDisplay
+from PIL import Image
+from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from bad_keys import get_bad_keys_db
 from config import (
-    get_config,
-    ensure_list,
-    is_gemini_model,
-    VISION_MODEL_TAGS,
-    PROVIDERS_SUPPORTING_USERNAMES,
+    BROWSER_HEADERS,
+    EDIT_DELAY_SECONDS,
     EMBED_COLOR_COMPLETE,
     EMBED_COLOR_INCOMPLETE,
-    STREAMING_INDICATOR,
-    PROCESSING_MESSAGE,
-    EDIT_DELAY_SECONDS,
     MAX_MESSAGE_NODES,
-    BROWSER_HEADERS,
+    PROCESSING_MESSAGE,
+    PROVIDERS_SUPPORTING_USERNAMES,
+    STREAMING_INDICATOR,
+    VISION_MODEL_TAGS,
+    ensure_list,
+    get_config,
+    is_gemini_model,
 )
 from litellm_utils import prepare_litellm_kwargs
 from models import MsgNode
-from views import ResponseView, SourceView, SourceButton, TavilySourceButton, _has_grounding_data
-from web_search import decide_web_search, perform_web_search, get_current_datetime_strings
+from views import (
+    ResponseView,
+    SourceButton,
+    SourceView,
+    TavilySourceButton,
+    _has_grounding_data,
+)
+from web_search import (
+    decide_web_search,
+    get_current_datetime_strings,
+    perform_web_search,
+)
 
 # Pre-load tiktoken encoding at module load time to avoid first-message delay
 # This shifts the ~1-2s loading cost from first message to bot startup
@@ -90,8 +99,7 @@ def _get_embed_text(embed: discord.Embed) -> str:
 # =============================================================================
 
 async def extract_pdf_text(pdf_content: bytes) -> str | None:
-    """
-    Extract text content from a PDF file using pymupdf4llm.
+    """Extract text content from a PDF file using pymupdf4llm.
     
     This is used for non-Gemini models since they don't natively support PDF attachments.
     Runs in a thread pool since PyMuPDF operations are CPU-bound.
@@ -101,13 +109,14 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
         
     Returns:
         Extracted markdown text from the PDF, or None if extraction failed
+
     """
     def _extract():
         try:
             import fitz  # PyMuPDF
             # Open PDF from bytes (in-memory)
             doc = fitz.open(stream=pdf_content, filetype="pdf")
-            
+
             # Use pymupdf4llm for clean markdown extraction
             _ensure_pymupdf_layout_activated()
             md_text = pymupdf4llm.to_markdown(doc)
@@ -116,12 +125,12 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
         except Exception as e:
             logging.warning(f"Failed to extract PDF text: {e}")
             return None
-    
+
     try:
         # Run in thread pool with timeout to avoid blocking
         pdf_text = await asyncio.wait_for(
             asyncio.to_thread(_extract),
-            timeout=30  # 30 second timeout for large PDFs
+            timeout=30,  # 30 second timeout for large PDFs
         )
         return pdf_text
     except asyncio.TimeoutError:
@@ -136,10 +145,9 @@ async def fetch_tweet_with_replies(
     tweet_id: int,
     max_replies: int = 0,
     include_url: bool = False,
-    tweet_url: str = ""
+    tweet_url: str = "",
 ) -> str | None:
-    """
-    Fetch a tweet and optionally its replies, returning formatted text.
+    """Fetch a tweet and optionally its replies, returning formatted text.
     
     DRY: Consolidates the duplicated tweet fetching logic that appeared in:
     - Google Lens Twitter extraction
@@ -154,25 +162,26 @@ async def fetch_tweet_with_replies(
     
     Returns:
         Formatted tweet text or None if fetch failed
+
     """
     try:
         tweet = await asyncio.wait_for(twitter_api.tweet_details(tweet_id), timeout=10)
-        
+
         # Handle edge case where tweet or user is None
         if not tweet or not tweet.user:
             return None
-        
+
         username = tweet.user.username or "unknown"
-        
+
         if include_url and tweet_url:
             tweet_text = f"\n--- Tweet from @{username} ({tweet_url}) ---\n{tweet.rawContent or ''}"
         else:
             tweet_text = f"Tweet from @{username}:\n{tweet.rawContent or ''}"
-        
+
         if max_replies > 0:
             replies = await asyncio.wait_for(
                 gather(twitter_api.tweet_replies(tweet_id, limit=max_replies)),
-                timeout=10
+                timeout=10,
             )
             if replies:
                 tweet_text += "\n\nReplies:" if include_url else "\nReplies:"
@@ -180,7 +189,7 @@ async def fetch_tweet_with_replies(
                     if reply and reply.user:
                         reply_username = reply.user.username or "unknown"
                         tweet_text += f"\n- @{reply_username}: {reply.rawContent or ''}"
-        
+
         return tweet_text
     except Exception as e:
         logging.debug(f"Failed to fetch tweet {tweet_id}: {e}")
@@ -194,8 +203,7 @@ def build_node_text_parts(
     text_attachments: list[str] = None,
     extra_parts: list[str] = None,
 ) -> str:
-    """
-    Build node text from multiple content sources.
+    """Build node text from multiple content sources.
     
     DRY: Consolidates the duplicated text joining pattern that appeared twice
     in process_message for building curr_node.text.
@@ -209,37 +217,37 @@ def build_node_text_parts(
     
     Returns:
         Joined text content
+
     """
     parts = []
-    
+
     if cleaned_content:
         parts.append(cleaned_content)
-    
+
     # Add embed text
     for embed in embeds:
         embed_text = _get_embed_text(embed)
         if embed_text:
             parts.append(embed_text)
-    
+
     # Add text display components
     for component in components:
         if component.type == discord.ComponentType.text_display and component.content:
             parts.append(component.content)
-    
+
     # Add text attachments
     if text_attachments:
         parts.extend(text_attachments)
-    
+
     # Add extra parts (transcripts, tweets, reddit posts, etc.)
     if extra_parts:
         parts.extend(extra_parts)
-    
+
     return "\n".join(parts)
 
 
 def append_search_to_content(content, search_results: str):
-    """
-    Append search results to message content, handling both string and multimodal formats.
+    """Append search results to message content, handling both string and multimodal formats.
     
     Args:
         content: Either a string or a list of content parts (for multimodal messages)
@@ -247,10 +255,11 @@ def append_search_to_content(content, search_results: str):
     
     Returns:
         The modified content with search results appended
+
     """
     if not search_results:
         return content
-    
+
     if isinstance(content, list):
         # For multimodal content, append to the text part
         for part in content:
@@ -258,12 +267,12 @@ def append_search_to_content(content, search_results: str):
                 part["text"] += "\n\n" + search_results
                 break
         return content
-    elif content:
+    if content:
         return str(content) + "\n\n" + search_results
     return content
 
 
-async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddit_client, 
+async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddit_client,
                           msg_nodes, curr_model_lock, curr_model_ref):
     """Main message processing function."""
     # Per-request edit timing to avoid interference between concurrent requests
@@ -306,7 +315,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
 
     # Send processing message immediately after confirming bot should respond
     use_plain_responses = config.get("use_plain_responses", False)
-    
+
     if use_plain_responses:
         processing_msg = await new_msg.reply(view=LayoutView().add_item(TextDisplay(content=PROCESSING_MESSAGE)))
     else:
@@ -316,12 +325,12 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     # Thread-safe read of current model
     async with curr_model_lock:
         provider_slash_model = curr_model_ref[0]
-    
+
     # Validate provider/model format
     try:
         provider, model = provider_slash_model.removesuffix(":vision").split("/", 1)
     except ValueError:
-        logging.error(f"Invalid model format: {provider_slash_model}. Expected 'provider/model'.")
+        logging.exception(f"Invalid model format: {provider_slash_model}. Expected 'provider/model'.")
         embed = discord.Embed(description=f"❌ Invalid model configuration: '{provider_slash_model}'. Expected format: 'provider/model'.\nPlease contact an administrator.", color=EMBED_COLOR_INCOMPLETE)
         await processing_msg.edit(embed=embed)
         return
@@ -333,7 +342,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         embed = discord.Embed(description=f"❌ Provider '{provider}' is not configured. Please contact an administrator.", color=EMBED_COLOR_INCOMPLETE)
         await processing_msg.edit(embed=embed)
         return
-    
+
     provider_config = providers[provider]
 
     base_url = provider_config.get("base_url")
@@ -384,33 +393,33 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                             # Use shared browser headers (DRY)
                             params = {
                                 "rpt": "imageview",
-                                "url": image_url
+                                "url": image_url,
                             }
-                            
+
                             yandex_resp = await httpx_client.get("https://yandex.com/images/search", params=params, headers=BROWSER_HEADERS, follow_redirects=True, timeout=60)
                             soup = BeautifulSoup(yandex_resp.text, "lxml")  # lxml is faster than html.parser
-                            
+
                             lens_results = []
                             twitter_urls_found = []
                             sites_items = soup.select(".CbirSites-Item")
-                            
+
                             if sites_items:
                                 for item in sites_items:
                                     title_el = item.select_one(".CbirSites-ItemTitle a")
                                     domain_el = item.select_one(".CbirSites-ItemDomain")
                                     desc_el = item.select_one(".CbirSites-ItemDescription")
-                                    
+
                                     title = title_el.get_text(strip=True) if title_el else "N/A"
                                     link = title_el["href"] if title_el else "#"
                                     domain = domain_el.get_text(strip=True) if domain_el else ""
                                     desc = desc_el.get_text(strip=True) if desc_el else ""
-                                    
+
                                     lens_results.append(f"- [{title}]({link}) ({domain}) - {desc}")
-                                    
+
                                     # Check if the link is a Twitter/X URL and extract for later processing
                                     if re.search(r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+", link):
                                         twitter_urls_found.append(link)
-                            
+
                             # Extract tweet content from Twitter/X URLs found in Yandex results (using DRY helper)
                             twitter_content = []
                             if twitter_urls_found:
@@ -422,20 +431,20 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                             int(tweet_id_match.group(1)),
                                             max_replies=max_tweet_replies,
                                             include_url=True,
-                                            tweet_url=twitter_url
+                                            tweet_url=twitter_url,
                                         )
                                         if tweet_text:
                                             twitter_content.append(tweet_text)
-                            
+
                             if lens_results:
                                 result_text = "\n\nanswer the user's query based on the yandex reverse image results:\n" + "\n".join(lens_results)
                                 if twitter_content:
                                     result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(twitter_content)
                                 cleaned_content += result_text
-                                
+
                                 # Store lens results for persistence
                                 curr_node.lens_results = result_text
-                                
+
                                 # Save lens results to database for persistence in chat history
                                 get_bad_keys_db().save_message_search_data(curr_msg.id, lens_results=result_text)
                                 logging.info(f"Saved lens results for message {curr_msg.id}")
@@ -485,7 +494,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                     cleaned_content,
                     curr_msg.embeds,
                     curr_msg.components,
-                    text_attachments=[att["text"] for att in processed_attachments if att["content_type"].startswith("text") and att["text"]]
+                    text_attachments=[att["text"] for att in processed_attachments if att["content_type"].startswith("text") and att["text"]],
                 )
 
                 curr_node.images = [
@@ -516,7 +525,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         return f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\nTranscript:\n" + " ".join(x["text"] for x in transcript)
                     except Exception:
                         return None
-                
+
                 video_ids = re.findall(r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})", cleaned_content)
                 if video_ids:
                     yt_results = await asyncio.gather(*[fetch_yt_transcript(vid) for vid in video_ids])
@@ -531,7 +540,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                         twitter_api,
                         int(tweet_id),
                         max_replies=max_tweet_replies,
-                        include_url=False
+                        include_url=False,
                     )
                     if tweet_text:
                         tweets.append(tweet_text)
@@ -541,36 +550,36 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                     for post_url in re.findall(r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)|redd\.it\/[a-zA-Z0-9_]+))", cleaned_content):
                         try:
                             submission = await reddit_client.submission(url=post_url)
-                            
+
                             # Handle edge case where submission is missing key attributes
                             if not submission:
                                 continue
-                            
+
                             # Safely access attributes with defaults
-                            title = getattr(submission, 'title', 'Untitled')
-                            subreddit_name = submission.subreddit.display_name if submission.subreddit else 'unknown'
-                            author_name = submission.author.name if submission.author else '[deleted]'
-                            selftext = getattr(submission, 'selftext', '') or ''
-                            
+                            title = getattr(submission, "title", "Untitled")
+                            subreddit_name = submission.subreddit.display_name if submission.subreddit else "unknown"
+                            author_name = submission.author.name if submission.author else "[deleted]"
+                            selftext = getattr(submission, "selftext", "") or ""
+
                             post_text = f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\nAuthor: u/{author_name}\n\n{selftext}"
-                            
-                            if not getattr(submission, 'is_self', True) and getattr(submission, 'url', None):
+
+                            if not getattr(submission, "is_self", True) and getattr(submission, "url", None):
                                 post_text += f"\nLink: {submission.url}"
 
-                            submission.comment_sort = 'top'
+                            submission.comment_sort = "top"
                             await submission.comments()
                             comments_list = submission.comments.list() if submission.comments else []
                             top_comments = comments_list[:5]
-                            
+
                             if top_comments:
                                 post_text += "\n\nTop Comments:"
                                 for comment in top_comments:
                                     if isinstance(comment, asyncpraw.models.MoreComments):
                                         continue
-                                    comment_author = comment.author.name if comment.author else '[deleted]'
-                                    comment_body = getattr(comment, 'body', '') or ''
+                                    comment_author = comment.author.name if comment.author else "[deleted]"
+                                    comment_body = getattr(comment, "body", "") or ""
                                     post_text += f"\n- u/{comment_author}: {comment_body}"
-                            
+
                             reddit_posts.append(post_text)
                         except Exception:
                             pass
@@ -580,17 +589,17 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 pdf_texts = []
                 if not is_gemini_model(actual_model):
                     pdf_attachments = [
-                        att for att in processed_attachments 
+                        att for att in processed_attachments
                         if att["content_type"] == "application/pdf"
                     ]
                     if pdf_attachments:
                         # Extract text from PDFs in parallel
                         pdf_extraction_tasks = [
-                            extract_pdf_text(att["content"]) 
+                            extract_pdf_text(att["content"])
                             for att in pdf_attachments
                         ]
                         pdf_results = await asyncio.gather(*pdf_extraction_tasks)
-                        
+
                         for i, pdf_text in enumerate(pdf_results):
                             if pdf_text:
                                 # Format PDF content nicely for the LLM
@@ -598,14 +607,14 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                                 logging.info(f"Extracted text from PDF attachment ({len(pdf_text)} chars)")
                             else:
                                 logging.warning(f"Could not extract text from PDF attachment {i + 1}")
-                
+
                 # Final text building with all async content (using DRY helper)
                 curr_node.text = build_node_text_parts(
                     cleaned_content,
                     curr_msg.embeds,
                     curr_msg.components,
                     text_attachments=[resp.text for att, resp in zip(good_attachments, attachment_responses) if att.content_type.startswith("text") and resp.text],
-                    extra_parts=yt_transcripts + tweets + reddit_posts + pdf_texts
+                    extra_parts=yt_transcripts + tweets + reddit_posts + pdf_texts,
                 )
 
                 if not curr_node.text and curr_node.images:
@@ -663,34 +672,34 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
                 for att in curr_node.raw_attachments:
                     if att["content_type"].startswith(("audio", "video")) or att["content_type"] == "application/pdf":
                         # LiteLLM supports inline data format for Gemini
-                        encoded_data = b64encode(att["content"]).decode('utf-8')
+                        encoded_data = b64encode(att["content"]).decode("utf-8")
                         gemini_file_attachments.append({
                             "type": "file",
                             "file": {
-                                "file_data": f"data:{att['content_type']};base64,{encoded_data}"
-                            }
+                                "file_data": f"data:{att['content_type']};base64,{encoded_data}",
+                            },
                         })
-            
+
             # Determine if we need multimodal content format
             has_images = bool(curr_node.images[:max_images])
             has_gemini_files = bool(gemini_file_attachments)
-            
+
             if has_images or has_gemini_files:
                 # Build multimodal content array
                 content = []
-                
+
                 # Add text part if present
                 if curr_node.text[:max_text]:
                     content.append(dict(type="text", text=curr_node.text[:max_text]))
-                
+
                 # Add images
                 content.extend(curr_node.images[:max_images])
-                
+
                 # Add Gemini file attachments (audio, video, PDF)
                 content.extend(gemini_file_attachments)
                 if gemini_file_attachments:
                     logging.info(f"Added {len(gemini_file_attachments)} Gemini file attachment(s) (audio/video/PDF) to message")
-                
+
                 # Ensure we have at least some content
                 if not content:
                     content = [dict(type="text", text="What is in this file?")]
@@ -745,12 +754,10 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     tavily_api_keys = ensure_list(config.get("tavily_api_key"))
     exa_mcp_url = config.get("exa_mcp_url", "")
     web_search_provider = config.get("web_search_provider", "tavily")  # Default to Tavily
-    
+
     # Determine if web search is available based on provider config
     web_search_available = False
-    if web_search_provider == "tavily" and tavily_api_keys:
-        web_search_available = True
-    elif web_search_provider == "exa" and exa_mcp_url:
+    if (web_search_provider == "tavily" and tavily_api_keys) or (web_search_provider == "exa" and exa_mcp_url):
         web_search_available = True
     elif web_search_provider == "auto":
         # Auto-detect: prefer Tavily if keys are available, otherwise try Exa
@@ -760,7 +767,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         elif exa_mcp_url:
             web_search_provider = "exa"
             web_search_available = True
-    
+
     is_preview_model = "preview" in actual_model.lower()
     is_non_gemini = not is_gemini_model(actual_model)
     # Check for googlelens query - strip both mention and "at ai" prefix
@@ -768,7 +775,7 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
     if content_for_lens_check.startswith("at ai"):
         content_for_lens_check = content_for_lens_check[5:].strip()  # Remove "at ai" prefix
     is_googlelens_query = content_for_lens_check.startswith("googlelens")
-    
+
     search_metadata = None
 
     # Check for existing search results to handle retries correctly
@@ -784,57 +791,57 @@ async def process_message(new_msg, discord_bot, httpx_client, twitter_api, reddi
         user_id = str(new_msg.author.id)
         user_decider_model = db.get_user_search_decider_model(user_id)
         default_decider = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
-        
+
         # Use user preference if set and valid, otherwise use config default
         if user_decider_model and user_decider_model in config.get("models", {}):
             decider_model_str = user_decider_model
         else:
             decider_model_str = default_decider
-        
+
         decider_provider, decider_model = decider_model_str.split("/", 1) if "/" in decider_model_str else ("gemini", decider_model_str)
-        
+
         # Get provider config for the decider
         decider_provider_config = config.get("providers", {}).get(decider_provider, {})
         decider_api_keys = ensure_list(decider_provider_config.get("api_key"))
-        
+
         decider_config = {
             "provider": decider_provider,
             "model": decider_model,
             "api_keys": decider_api_keys,
             "base_url": decider_provider_config.get("base_url"),
         }
-        
+
         if decider_api_keys:
             # Run the search decider with chat history (uses all keys with rotation)
             search_decision = await decide_web_search(messages, decider_config)
-            
+
             if search_decision.get("needs_search") and search_decision.get("queries"):
                 queries = search_decision["queries"]
                 logging.info(f"Web search triggered with {web_search_provider}. Queries: {queries}")
-                
+
                 # Perform web search with the configured provider
                 search_depth = config.get("tavily_search_depth", "advanced")
                 search_results, search_metadata = await perform_web_search(
-                    queries, 
+                    queries,
                     api_keys=tavily_api_keys,
-                    max_results_per_query=5, 
-                    max_chars_per_url=2000, 
+                    max_results_per_query=5,
+                    max_chars_per_url=2000,
                     search_depth=search_depth,
                     web_search_provider=web_search_provider,
                     exa_mcp_url=exa_mcp_url or "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check",
                 )
-                
+
                 if search_results:
                     # Append search results to the first (most recent) user message
                     for i, msg in enumerate(messages):
                         if msg.get("role") == "user":
                             msg["content"] = append_search_to_content(msg.get("content", ""), search_results)
-                            
+
                             logging.info("Web search results appended to user message")
-                            
+
                             # Save search results to database for persistence in chat history
                             get_bad_keys_db().save_message_search_data(new_msg.id, search_results, search_metadata)
-                            
+
                             # Also update the cached MsgNode so follow-up requests in the same session get the data
                             if new_msg.id in msg_nodes:
                                 msg_nodes[new_msg.id].search_results = search_results
@@ -886,7 +893,7 @@ def count_conversation_tokens(messages: list) -> int:
         # Use cached encoding for performance
         enc = _get_tiktoken_encoding()
         total_tokens = 0
-        
+
         for msg in messages:
             content = msg.get("content", "")
             if isinstance(content, list):
@@ -896,10 +903,10 @@ def count_conversation_tokens(messages: list) -> int:
                         total_tokens += len(enc.encode(part.get("text", "")))
             elif isinstance(content, str):
                 total_tokens += len(enc.encode(content))
-            
+
             # Count role tokens (approximation)
             total_tokens += len(enc.encode(msg.get("role", "")))
-        
+
         return total_tokens
     except Exception:
         return 0
@@ -918,7 +925,7 @@ async def generate_response(
     new_msg, discord_bot, msg_nodes, messages, user_warnings,
     provider, model, actual_model, provider_slash_model, base_url, api_keys, model_parameters,
     extra_headers, extra_query, extra_body, system_prompt, config, max_text,
-    tavily_metadata, last_edit_time, processing_msg, retry_callback
+    tavily_metadata, last_edit_time, processing_msg, retry_callback,
 ):
     """Generate and stream the LLM response using LiteLLM."""
     curr_content = finish_reason = None
@@ -927,7 +934,7 @@ async def generate_response(
     msg_nodes[processing_msg.id] = MsgNode(parent_msg=new_msg)
     await msg_nodes[processing_msg.id].lock.acquire()
     response_contents = []
-    
+
     # Count input tokens (chat history + latest query)
     input_tokens = count_conversation_tokens(messages)
 
@@ -949,10 +956,10 @@ async def generate_response(
     async def get_stream(api_key):
         """Get streaming response from LiteLLM using shared configuration."""
         import re as regex_module
-        
+
         # Check if Gemini grounding should be enabled (no URL in message content)
         enable_grounding = not regex_module.search(r"https?://", new_msg.content)
-        
+
         # Use shared utility to prepare kwargs with all provider-specific config
         litellm_kwargs = prepare_litellm_kwargs(
             provider=provider,
@@ -965,56 +972,56 @@ async def generate_response(
             model_parameters=model_parameters,
             enable_grounding=enable_grounding,
         )
-        
+
         # Add timeout to prevent indefinite hangs (120 seconds for streaming)
         litellm_kwargs["timeout"] = 120
-        
+
         # Make the streaming call
         async for chunk in await litellm.acompletion(**litellm_kwargs):
             if not chunk.choices:
                 continue
-            
+
             choice = chunk.choices[0]
             delta_content = choice.delta.content or ""
             chunk_finish_reason = choice.finish_reason
-            
+
             # LiteLLM handles grounding metadata in various locations depending on provider
             grounding_metadata = None
-            
+
             # Check model_extra (common for Vertex AI / Gemini)
-            if hasattr(chunk, 'model_extra') and chunk.model_extra:
+            if hasattr(chunk, "model_extra") and chunk.model_extra:
                 grounding_metadata = (
-                    chunk.model_extra.get('vertex_ai_grounding_metadata') or 
-                    chunk.model_extra.get('google_grounding_metadata') or
-                    chunk.model_extra.get('grounding_metadata') or
-                    chunk.model_extra.get('groundingMetadata')
+                    chunk.model_extra.get("vertex_ai_grounding_metadata") or
+                    chunk.model_extra.get("google_grounding_metadata") or
+                    chunk.model_extra.get("grounding_metadata") or
+                    chunk.model_extra.get("groundingMetadata")
                 )
-            
+
             # Check the response object itself (some versions put it here)
-            if not grounding_metadata and hasattr(chunk, 'grounding_metadata'):
+            if not grounding_metadata and hasattr(chunk, "grounding_metadata"):
                 grounding_metadata = chunk.grounding_metadata
-            
+
             # Check _hidden_params (LiteLLM sometimes stores provider-specific data here)
-            if not grounding_metadata and hasattr(chunk, '_hidden_params') and chunk._hidden_params:
+            if not grounding_metadata and hasattr(chunk, "_hidden_params") and chunk._hidden_params:
                 grounding_metadata = (
-                    chunk._hidden_params.get('grounding_metadata') or
-                    chunk._hidden_params.get('google_grounding_metadata') or
-                    chunk._hidden_params.get('groundingMetadata')
+                    chunk._hidden_params.get("grounding_metadata") or
+                    chunk._hidden_params.get("google_grounding_metadata") or
+                    chunk._hidden_params.get("groundingMetadata")
                 )
-            
+
             # For Gemini, also check in choices[0] for grounding info
-            if not grounding_metadata and hasattr(choice, 'grounding_metadata'):
+            if not grounding_metadata and hasattr(choice, "grounding_metadata"):
                 grounding_metadata = choice.grounding_metadata
-            
+
             # Log the chunk attributes on finish to help debug
             if chunk_finish_reason and is_gemini_model(actual_model):
-                chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith('_')]
+                chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
                 logging.debug(f"Gemini chunk finish - attributes: {chunk_attrs}")
-                if hasattr(chunk, 'model_extra') and chunk.model_extra:
+                if hasattr(chunk, "model_extra") and chunk.model_extra:
                     logging.info(f"Gemini chunk model_extra keys: {list(chunk.model_extra.keys())}")
-                if hasattr(chunk, '_hidden_params') and chunk._hidden_params:
+                if hasattr(chunk, "_hidden_params") and chunk._hidden_params:
                     logging.info(f"Gemini chunk _hidden_params keys: {list(chunk._hidden_params.keys())}")
-            
+
             yield delta_content, chunk_finish_reason, grounding_metadata
 
     grounding_metadata = None
@@ -1024,17 +1031,17 @@ async def generate_response(
     original_model = actual_model
     last_error_msg = None
     overloaded_error_count = 0
-    
+
     # Determine if the original model is already mistral (skip to gemma fallback)
     is_original_mistral = original_provider == "mistral" and "mistral" in original_model.lower()
-    
+
     # Get good keys (filter out known bad ones - synced with search decider)
     try:
         good_keys = get_bad_keys_db().get_good_keys_synced(provider, api_keys)
     except Exception:
         logging.exception("Failed to get good keys, falling back to all keys")
         good_keys = api_keys.copy()
-    
+
     # If all keys are bad, reset and try again with all keys
     if not good_keys:
         logging.warning(f"All API keys for provider '{provider}' (synced) are marked as bad. Resetting...")
@@ -1043,19 +1050,19 @@ async def generate_response(
         except Exception:
             logging.exception("Failed to reset provider keys")
         good_keys = api_keys.copy()
-    
+
     initial_key_count = len(good_keys)
 
     while True:
         curr_content = finish_reason = None
         response_contents = []
         attempt_count += 1
-        
+
         # Get the next good key to try
         if not good_keys:
             # All good keys exhausted, try next fallback level
             next_fallback = None
-            
+
             if fallback_level == 0:
                 # First fallback: mistral (unless original was already mistral)
                 if is_original_mistral:
@@ -1072,20 +1079,20 @@ async def generate_response(
                 fallback_level = 2
                 next_fallback = ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it")
                 logging.warning("Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...")
-            
+
             if next_fallback:
                 new_provider, new_model, new_provider_slash_model = next_fallback
-                
+
                 # Switch to fallback provider
                 provider = new_provider
                 actual_model = new_model
                 provider_slash_model = new_provider_slash_model
-                
+
                 # Get fallback provider configuration
                 fallback_provider_config = config.get("providers", {}).get(provider, {})
                 base_url = fallback_provider_config.get("base_url")
                 fallback_api_keys = ensure_list(fallback_provider_config.get("api_key"))
-                
+
                 if fallback_api_keys:
                     api_keys = fallback_api_keys
                     good_keys = fallback_api_keys.copy()
@@ -1093,33 +1100,31 @@ async def generate_response(
                     attempt_count = 0  # Reset attempt count for new provider
                     overloaded_error_count = 0  # Reset overload counter for new provider
                     continue  # Try with the new provider
+                logging.error(f"No API keys available for fallback provider '{provider}'")
+                # Continue to try the next fallback level
+                good_keys = []
+                continue
+            logging.error("All fallback options exhausted (mistral and gemma)")
+            error_text = "❌ All API keys (including all fallbacks) exhausted. Please try again later."
+            if last_error_msg:
+                error_text += f"\nLast error: {last_error_msg}"
+            if use_plain_responses:
+                layout = LayoutView().add_item(TextDisplay(content=error_text))
+                if response_msgs:
+                    await response_msgs[-1].edit(view=layout)
                 else:
-                    logging.error(f"No API keys available for fallback provider '{provider}'")
-                    # Continue to try the next fallback level
-                    good_keys = []
-                    continue
+                    await reply_helper(view=layout)
+                response_contents = [error_text]
             else:
-                logging.error("All fallback options exhausted (mistral and gemma)")
-                error_text = "❌ All API keys (including all fallbacks) exhausted. Please try again later."
-                if last_error_msg:
-                    error_text += f"\nLast error: {last_error_msg}"
-                if use_plain_responses:
-                    layout = LayoutView().add_item(TextDisplay(content=error_text))
-                    if response_msgs:
-                        await response_msgs[-1].edit(view=layout)
-                    else:
-                        await reply_helper(view=layout)
-                    response_contents = [error_text]
+                embed.description = error_text
+                embed.color = EMBED_COLOR_INCOMPLETE
+                if response_msgs:
+                    await response_msgs[-1].edit(embed=embed, view=None)
                 else:
-                    embed.description = error_text
-                    embed.color = EMBED_COLOR_INCOMPLETE
-                    if response_msgs:
-                        await response_msgs[-1].edit(embed=embed, view=None)
-                    else:
-                        await reply_helper(embed=embed)
-                    response_contents = [error_text]
-                break
-        
+                    await reply_helper(embed=embed)
+                response_contents = [error_text]
+            break
+
         current_api_key = good_keys[(attempt_count - 1) % len(good_keys)]
 
         try:
@@ -1180,7 +1185,7 @@ async def generate_response(
                 for i, content in enumerate(response_contents):
                     # Build the LayoutView with text content
                     layout = LayoutView().add_item(TextDisplay(content=content))
-                    
+
                     # Add buttons only to the last message
                     if i == len(response_contents) - 1:
                         # Add Gemini grounding sources button if available
@@ -1189,7 +1194,7 @@ async def generate_response(
                         # Add Tavily sources button if available
                         if tavily_metadata and (tavily_metadata.get("urls") or tavily_metadata.get("queries")):
                             layout.add_item(TavilySourceButton(tavily_metadata))
-                    
+
                     if i < len(response_msgs):
                         # Edit existing message (first one is the processing message)
                         await response_msgs[i].edit(view=layout)
@@ -1202,12 +1207,12 @@ async def generate_response(
         except Exception as e:
             last_error_msg = str(e)
             logging.exception("Error while generating response")
-            
+
             # Determine if this is an API key error vs other error (timeout, network, etc.)
             is_key_error = False
             is_timeout_error = isinstance(e, asyncio.TimeoutError) or "timeout" in str(e).lower()
             is_empty_response = "no content" in str(e).lower()
-            
+
             # Check for typical API key/auth error patterns
             error_str = str(e).lower()
 
@@ -1218,7 +1223,7 @@ async def generate_response(
                     error_text = "❌ The model is currently overloaded. Please try again later."
                     if last_error_msg:
                         error_text += f"\nLast error: {last_error_msg}"
-                    
+
                     if use_plain_responses:
                         layout = LayoutView().add_item(TextDisplay(content=error_text))
                         if response_msgs:
@@ -1239,15 +1244,15 @@ async def generate_response(
                 overloaded_error_count = 0
 
             key_error_patterns = [
-                "unauthorized", "invalid_api_key", "invalid key", "api key", 
+                "unauthorized", "invalid_api_key", "invalid key", "api key",
                 "authentication", "forbidden", "401", "403", "quota", "rate limit",
-                "billing", "insufficient_quota", "expired"
+                "billing", "insufficient_quota", "expired",
             ]
             for pattern in key_error_patterns:
                 if pattern in error_str:
                     is_key_error = True
                     break
-            
+
             # Only mark the key as bad for actual key-related errors
             if is_key_error:
                 error_msg = str(e)[:200] if e else "Unknown error"
@@ -1255,7 +1260,7 @@ async def generate_response(
                     get_bad_keys_db().mark_key_bad_synced(provider, current_api_key, error_msg)
                 except Exception:
                     logging.exception("Failed to mark key as bad")
-                
+
                 # Remove the bad key from good_keys list for this session
                 if current_api_key in good_keys:
                     good_keys.remove(current_api_key)
@@ -1271,7 +1276,7 @@ async def generate_response(
                 if current_api_key in good_keys:
                     good_keys.remove(current_api_key)
                 logging.warning(f"Unknown error for provider '{provider}', {len(good_keys)} keys remaining")
-            
+
             # If no keys left, the main loop will handle fallback to mistral
             # Continue to the next iteration
 
@@ -1291,11 +1296,11 @@ async def generate_response(
     if not use_plain_responses and response_msgs and response_contents:
         full_response = "".join(response_contents)
         response_view = ResponseView(full_response, grounding_metadata, tavily_metadata, retry_callback, new_msg.author.id)
-        
+
         # Count output tokens and update footer with total
         output_tokens = count_text_tokens(full_response)
         total_tokens = input_tokens + output_tokens
-        
+
         # Update the last message with the final view
         last_msg_index = len(response_msgs) - 1
         if last_msg_index < len(response_contents):

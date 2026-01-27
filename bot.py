@@ -1,24 +1,22 @@
-"""
-Discord bot setup, commands, and event handlers for llmcord.
+"""Discord bot setup, commands, and event handlers for llmcord.
 """
 import asyncio
 import logging
 import os
 
-from aiohttp import web
 import asyncpraw
 import discord
+import httpx
+from aiohttp import web
 from discord.app_commands import Choice
 from discord.ext import commands
-import httpx
 from twscrape import API
-
-from bad_keys import get_bad_keys_db, init_bad_keys_db
-from config import get_config
-from message_handler import process_message
 
 # Import utils to apply the twscrape patch
 import utils  # noqa: F401
+from bad_keys import get_bad_keys_db, init_bad_keys_db
+from config import get_config
+from message_handler import process_message
 
 # Configure logging
 logging.basicConfig(
@@ -46,7 +44,7 @@ if config.get("reddit_client_id") and config.get("reddit_client_secret"):
     reddit_client = asyncpraw.Reddit(
         client_id=config.get("reddit_client_id"),
         client_secret=config.get("reddit_client_secret"),
-        user_agent=config.get("reddit_user_agent", "llmcord:v1.0 (by /u/llmcord)")
+        user_agent=config.get("reddit_user_agent", "llmcord:v1.0 (by /u/llmcord)"),
     )
 else:
     reddit_client = None
@@ -57,14 +55,14 @@ else:
 # =============================================================================
 
 def get_channel_locked_model(channel_id: int) -> str | None:
-    """
-    Check if a channel has a locked model override.
+    """Check if a channel has a locked model override.
     
     Args:
         channel_id: The Discord channel ID to check
         
     Returns:
         The model name if the channel has a locked model, None otherwise
+
     """
     overrides = config.get("channel_model_overrides", {})
     # Convert channel_id to string for comparison since YAML may parse keys as ints or strings
@@ -76,10 +74,9 @@ async def _handle_model_switch(
     get_current_model_fn,
     set_model_fn,
     get_default_fn,
-    model_type_label: str = "model"
+    model_type_label: str = "model",
 ) -> None:
-    """
-    Generic handler for model switching slash commands.
+    """Generic handler for model switching slash commands.
     
     DRY: Consolidates the shared logic between /model and /searchdecidermodel commands.
     
@@ -90,6 +87,7 @@ async def _handle_model_switch(
         set_model_fn: Function to set model for user (db method)
         get_default_fn: Function to get default model (returns model string)
         model_type_label: Label for logging/messages (e.g., "model" or "search decider model")
+
     """
     user_id = str(interaction.user.id)
 
@@ -100,10 +98,10 @@ async def _handle_model_switch(
     # Get user's current model preference (or default)
     current_user_model = get_current_model_fn(user_id)
     default_model = get_default_fn()
-    
+
     if current_user_model is None:
         current_user_model = default_model
-    
+
     if current_user_model is None:
         await interaction.followup.send(f"❌ No valid {model_type_label} configured. Please ask an administrator to check `config.yaml`.", ephemeral=True)
         return
@@ -122,10 +120,9 @@ def _build_model_autocomplete(
     curr_str: str,
     get_current_model_fn,
     get_default_fn,
-    user_id: str
+    user_id: str,
 ) -> list[Choice[str]]:
-    """
-    Generic builder for model autocomplete choices.
+    """Generic builder for model autocomplete choices.
     
     DRY: Consolidates the shared autocomplete logic between commands.
     
@@ -137,17 +134,18 @@ def _build_model_autocomplete(
     
     Returns:
         List of discord.app_commands.Choice objects
+
     """
     user_model = get_current_model_fn(user_id)
     default_model = get_default_fn()
-    
+
     if user_model is None:
         user_model = default_model
-    
+
     # Validate that user's saved model still exists in config
     if not user_model or user_model not in config.get("models", {}):
         user_model = default_model or next(iter(config.get("models", {})), "")
-    
+
     if not user_model:
         return []
 
@@ -164,7 +162,7 @@ def _build_model_autocomplete(
 @discord_bot.tree.command(name="model", description="View or switch your current model")
 async def model_command(interaction: discord.Interaction, model: str) -> None:
     await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
-    
+
     # Check if this channel has a locked model
     channel_id = interaction.channel_id
     locked_model = get_channel_locked_model(channel_id)
@@ -172,22 +170,22 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
         await interaction.followup.send(
             f"❌ This channel is locked to model `{locked_model}`. "
             f"The /model command is disabled here.",
-            ephemeral=True
+            ephemeral=True,
         )
         return
-    
+
     db = get_bad_keys_db()
-    
+
     def get_default():
         return next(iter(config.get("models", {})), None)
-    
+
     await _handle_model_switch(
         interaction=interaction,
         model=model,
         get_current_model_fn=db.get_user_model,
         set_model_fn=db.set_user_model,
         get_default_fn=get_default,
-        model_type_label="model"
+        model_type_label="model",
     )
 
 
@@ -199,30 +197,30 @@ async def model_autocomplete(interaction: discord.Interaction, curr_str: str) ->
 
     db = get_bad_keys_db()
     user_id = str(interaction.user.id)
-    
+
     def get_default():
         return next(iter(config.get("models", {})), None)
-    
+
     return _build_model_autocomplete(curr_str, db.get_user_model, get_default, user_id)
 
 
 @discord_bot.tree.command(name="searchdecidermodel", description="View or switch your search decider model")
 async def search_decider_model_command(interaction: discord.Interaction, model: str) -> None:
     await interaction.response.defer(ephemeral=(interaction.channel.type == discord.ChannelType.private))
-    
+
     db = get_bad_keys_db()
-    
+
     def get_default():
         default = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
         return default if default in config.get("models", {}) else None
-    
+
     await _handle_model_switch(
         interaction=interaction,
         model=model,
         get_current_model_fn=db.get_user_search_decider_model,
         set_model_fn=db.set_user_search_decider_model,
         get_default_fn=get_default,
-        model_type_label="search decider model"
+        model_type_label="search decider model",
     )
 
 
@@ -234,11 +232,11 @@ async def search_decider_model_autocomplete(interaction: discord.Interaction, cu
 
     db = get_bad_keys_db()
     user_id = str(interaction.user.id)
-    
+
     def get_default():
         default = config.get("web_search_decider_model", "gemini/gemini-3-flash-preview")
         return default if default in config.get("models", {}) else next(iter(config.get("models", {})), "")
-    
+
     return _build_model_autocomplete(curr_str, db.get_user_search_decider_model, get_default, user_id)
 
 
@@ -248,25 +246,25 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
     OWNER_USER_ID = 676735636656357396
     if interaction.user.id != OWNER_USER_ID:
         await interaction.response.send_message(
-            "❌ This command can only be used by the bot owner.", 
-            ephemeral=True
+            "❌ This command can only be used by the bot owner.",
+            ephemeral=True,
         )
         return
-    
+
     # Defer the response since database operations may take time
     await interaction.response.defer(ephemeral=True)
-    
+
     db = get_bad_keys_db()
-    
+
     # Reset both preferences
     model_count = db.reset_all_user_model_preferences()
     decider_count = db.reset_all_user_search_decider_preferences()
-    
+
     await interaction.followup.send(
         f"✅ Successfully reset all user preferences:\n"
         f"• **Main model preferences**: {model_count} user(s) reset\n"
         f"• **Search decider model preferences**: {decider_count} user(s) reset\n\n"
-        f"All users will now use the default models."
+        f"All users will now use the default models.",
     )
     logging.info(f"Owner {interaction.user.id} reset all user preferences (models: {model_count}, deciders: {decider_count})")
 
@@ -299,7 +297,7 @@ async def on_message(new_msg: discord.Message) -> None:
     # Check if this channel has a locked model override
     channel_id = new_msg.channel.id
     locked_model = get_channel_locked_model(channel_id)
-    
+
     if locked_model:
         # Use the channel's locked model (ignore user preference)
         if locked_model not in config.get("models", {}):
@@ -311,19 +309,19 @@ async def on_message(new_msg: discord.Message) -> None:
         user_id = str(new_msg.author.id)
         db = get_bad_keys_db()
         user_model = db.get_user_model(user_id)
-        
+
         # Fall back to default model if user hasn't set a preference or if their saved model is no longer valid
         default_model = next(iter(config.get("models", {})), None)
         if not default_model:
             logging.error("No models configured in config.yaml")
             return
-        
+
         if user_model is None or user_model not in config.get("models", {}):
             user_model = default_model
-    
+
     # Create a reference list to pass user's model by reference
     curr_model_ref = [user_model]
-    
+
     try:
         await process_message(
             new_msg=new_msg,
@@ -350,11 +348,11 @@ async def health_check(request):
 
 async def start_server():
     app = web.Application()
-    app.add_routes([web.get('/', health_check)])
+    app.add_routes([web.get("/", health_check)])
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 8000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
 
@@ -363,6 +361,6 @@ async def main() -> None:
     turso_url = config.get("turso_database_url")
     turso_token = config.get("turso_auth_token")
     init_bad_keys_db(db_url=turso_url, auth_token=turso_token)
-    
+
     await asyncio.gather(start_server(), discord_bot.start(config["bot_token"]))
 
