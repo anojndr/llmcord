@@ -1,5 +1,4 @@
-"""
-Web search functionality including search decision and web search provider integration.
+"""Web search functionality including search decision and web search provider integration.
 Supports both Tavily and Exa MCP as web search backends.
 Uses LiteLLM for unified LLM API access via shared litellm_utils.
 """
@@ -11,14 +10,13 @@ from datetime import datetime
 import httpx
 import litellm
 
-from bad_keys import get_bad_keys_db, KeyRotator
+from bad_keys import KeyRotator, get_bad_keys_db
 from config import get_or_create_httpx_client
 from litellm_utils import prepare_litellm_kwargs
 
 
 def get_current_datetime_strings() -> tuple[str, str]:
-    """
-    Get current date and time strings for system prompts.
+    """Get current date and time strings for system prompts.
     Returns (date_str, time_str) tuple.
     
     Date format: "January 21 2026"
@@ -31,13 +29,12 @@ def get_current_datetime_strings() -> tuple[str, str]:
 
 
 def convert_messages_to_openai_format(
-    messages: list, 
-    system_prompt: str = None, 
+    messages: list,
+    system_prompt: str = None,
     reverse: bool = True,
-    include_analysis_prompt: bool = False
+    include_analysis_prompt: bool = False,
 ) -> list[dict]:
-    """
-    Convert internal message format to OpenAI-compatible message format.
+    """Convert internal message format to OpenAI-compatible message format.
     
     Args:
         messages: List of message dicts with 'role' and 'content' keys
@@ -47,38 +44,39 @@ def convert_messages_to_openai_format(
     
     Returns:
         List of OpenAI-compatible message dicts
+
     """
     openai_messages = []
-    
+
     if system_prompt:
         openai_messages.append({"role": "system", "content": system_prompt})
-    
+
     message_list = messages[::-1] if reverse else messages
-    
+
     for msg in message_list:
         role = msg.get("role", "user")
         if role == "system":
             continue  # Skip system messages from chat history
-        
+
         content = msg.get("content", "")
         if isinstance(content, list):
             # Filter to only include types supported by OpenAI-compatible APIs
             # GitHub Copilot and others only accept 'text' and 'image_url' types
             filtered_content = [
-                part for part in content 
+                part for part in content
                 if isinstance(part, dict) and part.get("type") in ("text", "image_url")
             ]
             if filtered_content:
                 openai_messages.append({"role": role, "content": filtered_content})
         elif content:
             openai_messages.append({"role": role, "content": str(content)})
-    
+
     if include_analysis_prompt:
         openai_messages.append({
             "role": "user",
-            "content": "Based on the conversation above, analyze the last user query and respond with your JSON decision."
+            "content": "Based on the conversation above, analyze the last user query and respond with your JSON decision.",
         })
-    
+
     return openai_messages
 
 
@@ -130,8 +128,7 @@ Examples:
 
 
 async def decide_web_search(messages: list, decider_config: dict) -> dict:
-    """
-    Uses a configurable model to decide if web search is needed and generates optimized queries.
+    """Uses a configurable model to decide if web search is needed and generates optimized queries.
     Uses LiteLLM for unified API access across all providers.
     Uses KeyRotator for consistent key rotation and bad key tracking.
     Returns: {"needs_search": bool, "queries": list[str]} or {"needs_search": False}
@@ -146,29 +143,29 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     model = decider_config.get("model", "gemini-3-flash-preview")
     api_keys = decider_config.get("api_keys", [])
     base_url = decider_config.get("base_url")
-    
+
     if not api_keys:
         return {"needs_search": False}
-    
+
     # Use KeyRotator for consistent key rotation with synced bad key tracking
     rotator = KeyRotator(provider, api_keys)
-    
+
     async for current_api_key in rotator.get_keys_async():
         try:
             date_str, time_str = get_current_datetime_strings()
             system_prompt_with_date = f"{SEARCH_DECIDER_SYSTEM_PROMPT}\n\nCurrent date: {date_str}. Current time: {time_str}."
-            
+
             # Convert messages to OpenAI format (LiteLLM uses OpenAI format)
             litellm_messages = convert_messages_to_openai_format(
-                messages, 
+                messages,
                 system_prompt=system_prompt_with_date,
                 reverse=True,
-                include_analysis_prompt=True
+                include_analysis_prompt=True,
             )
-            
+
             if len(litellm_messages) <= 2:  # Only system prompt and analysis instruction
                 return {"needs_search": False}
-            
+
             # Use shared utility to prepare kwargs with all provider-specific config
             litellm_kwargs = prepare_litellm_kwargs(
                 provider=provider,
@@ -178,20 +175,19 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 base_url=base_url,
                 temperature=0.1,
             )
-            
+
             # Make the LiteLLM call
             response = await litellm.acompletion(**litellm_kwargs)
-            
+
             response_text = (response.choices[0].message.content or "").strip()
-            
+
             # Parse response
             if response_text.startswith("```"):
                 # Remove markdown code blocks if present
                 response_text = response_text.split("```")[1]
-                if response_text.startswith("json"):
-                    response_text = response_text[4:]
+                response_text = response_text.removeprefix("json")
                 response_text = response_text.strip()
-            
+
             try:
                 result = json.loads(response_text)
                 # Validate response structure
@@ -208,7 +204,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
         except Exception as e:
             logging.exception(f"Error in web search decider: {e}")
             rotator.mark_current_bad(str(e))
-    
+
     # All keys exhausted
     logging.error("Web search decider failed after exhausting all keys, skipping web search")
     return {"needs_search": False}
@@ -232,13 +228,12 @@ def _get_tavily_client() -> httpx.AsyncClient:
 
 
 async def tavily_search(
-    query: str, 
-    tavily_api_key: str, 
-    max_results: int = 5, 
-    search_depth: str = "basic"
+    query: str,
+    tavily_api_key: str,
+    max_results: int = 5,
+    search_depth: str = "basic",
 ) -> dict:
-    """
-    Execute a single Tavily search query.
+    """Execute a single Tavily search query.
     Returns the search results with page content or an error dict.
     
     Best practices applied:
@@ -250,10 +245,11 @@ async def tavily_search(
         tavily_api_key: Tavily API key
         max_results: Maximum results to return (1-20)
         search_depth: "basic", "advanced", "fast", or "ultra-fast"
+
     """
     try:
         client = _get_tavily_client()
-        
+
         # Build request payload
         payload = {
             "query": query,
@@ -262,27 +258,27 @@ async def tavily_search(
             "include_answer": False,
             "include_raw_content": "markdown",  # Get full page content in markdown format
         }
-        
+
         # Increase timeout for advanced depth which takes longer
         timeout = 45.0 if search_depth == "advanced" else 30.0
-        
+
         logging.info(f"Tavily API request for query '{query}': depth={search_depth}, max_results={max_results}")
-        
+
         response = await client.post(
             "https://api.tavily.com/search",
             json=payload,
             headers={
                 "Authorization": f"Bearer {tavily_api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             },
             timeout=timeout,
         )
         logging.info(f"Tavily API response status: {response.status_code}")
-        
+
         # Log raw response for debugging (first 1000 chars)
         raw_text = response.text[:1000] if len(response.text) > 1000 else response.text
         logging.debug(f"Tavily API raw response: {raw_text}")
-        
+
         response.raise_for_status()
         result = response.json()
         logging.info(f"Tavily API response for query '{query}': {len(result.get('results', []))} results")
@@ -290,13 +286,13 @@ async def tavily_search(
             logging.warning(f"Tavily returned empty results for query '{query}'. Full response: {result}")
         return result
     except httpx.HTTPStatusError as e:
-        logging.error(f"Tavily HTTP error for query '{query}': {e.response.status_code} - {e.response.text[:500]}")
+        logging.exception(f"Tavily HTTP error for query '{query}': {e.response.status_code} - {e.response.text[:500]}")
         return {"error": f"HTTP {e.response.status_code}: {e.response.text[:200]}", "query": query}
     except httpx.TimeoutException as e:
-        logging.error(f"Tavily timeout for query '{query}': {e}")
+        logging.exception(f"Tavily timeout for query '{query}': {e}")
         return {"error": f"Timeout: {e}", "query": query}
     except httpx.RequestError as e:
-        logging.error(f"Tavily connection error for query '{query}': {e}")
+        logging.exception(f"Tavily connection error for query '{query}': {e}")
         return {"error": f"Connection error: {e}", "query": query}
     except Exception as e:
         logging.exception(f"Tavily search error for query '{query}': {e}")
@@ -321,8 +317,7 @@ def _get_exa_client() -> httpx.AsyncClient:
 
 
 def parse_exa_text_format(text_content: str) -> list[dict]:
-    """
-    Parse Exa MCP's structured text response format into a list of result dicts.
+    """Parse Exa MCP's structured text response format into a list of result dicts.
     
     Exa returns results in this format (multiple results separated by blank lines):
     Title: ...
@@ -335,13 +330,13 @@ def parse_exa_text_format(text_content: str) -> list[dict]:
     """
     if not text_content:
         return []
-    
+
     results = []
-    
+
     # Split by double newlines to separate individual results
     # Each result block starts with "Title:"
     blocks = text_content.split("\n\nTitle:")
-    
+
     for i, block in enumerate(blocks):
         # Add back "Title:" prefix for all blocks except the first if it starts with "Title:"
         if i == 0:
@@ -350,16 +345,16 @@ def parse_exa_text_format(text_content: str) -> list[dict]:
             current_block = block.strip()
         else:
             current_block = "Title:" + block
-        
+
         # Parse the block
         title = ""
         url = ""
         content = ""
-        
+
         lines = current_block.split("\n")
         text_started = False
         text_lines = []
-        
+
         for line in lines:
             if line.startswith("Title:"):
                 title = line[6:].strip()
@@ -371,16 +366,16 @@ def parse_exa_text_format(text_content: str) -> list[dict]:
             elif text_started:
                 text_lines.append(line)
             # Skip Author and Published Date as they're not needed
-        
+
         content = "\n".join(text_lines).strip()
-        
+
         if title or url:  # Only add if we have at least a title or URL
             results.append({
                 "title": title or "Untitled",
                 "url": url,
                 "content": content,
             })
-    
+
     return results
 
 
@@ -389,8 +384,7 @@ async def exa_search(
     exa_mcp_url: str = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check",
     max_results: int = 5,
 ) -> dict:
-    """
-    Execute a single Exa MCP web search query.
+    """Execute a single Exa MCP web search query.
     Uses the Exa MCP HTTP endpoint for web search.
     Handles SSE (Server-Sent Events) streaming responses.
     Returns the search results with page content or an error dict.
@@ -399,10 +393,11 @@ async def exa_search(
         query: Search query
         exa_mcp_url: The Exa MCP endpoint URL (default: https://mcp.exa.ai/mcp)
         max_results: Maximum results to return
+
     """
     try:
         client = _get_exa_client()
-        
+
         # MCP uses JSON-RPC 2.0 format for tool calls
         # The web_search_exa tool is enabled by default on Exa MCP
         payload = {
@@ -414,12 +409,12 @@ async def exa_search(
                 "arguments": {
                     "query": query,
                     "numResults": max_results,
-                }
-            }
+                },
+            },
         }
-        
+
         logging.info(f"Exa MCP request for query '{query}': max_results={max_results}")
-        
+
         # Use streaming request to handle SSE responses
         async with client.stream(
             "POST",
@@ -432,112 +427,111 @@ async def exa_search(
             timeout=60.0,
         ) as response:
             logging.info(f"Exa MCP response status: {response.status_code}")
-            
+
             if response.status_code != 200:
                 error_text = await response.aread()
                 error_text = error_text.decode("utf-8", errors="replace")[:500]
                 logging.error(f"Exa MCP HTTP error for query '{query}': {response.status_code} - {error_text}")
                 return {"error": f"HTTP {response.status_code}: {error_text[:200]}", "query": query}
-            
+
             # Check content type to determine how to parse
             content_type = response.headers.get("content-type", "")
-            
+
             if "text/event-stream" in content_type:
                 # Handle SSE stream - collect events and find the result
                 full_response = ""
                 current_event_data = []
-                
+
                 async for line in response.aiter_lines():
-                    line = line.rstrip('\n').rstrip('\r')
-                    
+                    line = line.rstrip("\n").rstrip("\r")
+
                     if not line:
                         # End of event (blank line)
                         if current_event_data:
                             # Join without newlines to reconstruct split JSON without injecting invalid control chars
                             event_body = "".join(current_event_data)
                             logging.debug(f"Exa MCP SSE event body length: {len(event_body)}")
-                            
+
                             # We are looking for the JSON result. It should start with {
                             if event_body.strip().startswith("{"):
                                 full_response = event_body
-                            
+
                             current_event_data = []
                     elif line.startswith("data:"):
                         # Extract data, handling optional space
                         data = line[5:]
-                        if data.startswith(" "):
-                            data = data[1:]
+                        data = data.removeprefix(" ")
                         current_event_data.append(data)
                     elif line.startswith("event:"):
                         # Log event type for debugging
                         event_type = line[6:].strip()
                         logging.debug(f"Exa MCP SSE event: {event_type}")
-                
+
                 # Check if there's any remaining data after the loop finishes
                 if current_event_data and not full_response:
                     full_response = "".join(current_event_data)
-                
+
                 if not full_response:
                     logging.warning(f"Exa MCP returned empty SSE stream for query '{query}'")
                     return {"results": [], "query": query}
-                
+
                 try:
                     result = json.loads(full_response)
                 except json.JSONDecodeError as e:
-                    logging.error(f"Exa MCP SSE JSON parse error: {e}, data: {full_response[:500]}")
+                    logging.exception(f"Exa MCP SSE JSON parse error: {e}, data: {full_response[:500]}")
                     return {"error": f"JSON parse error: {e}", "query": query}
             else:
                 # Regular JSON response
                 response_text = await response.aread()
                 response_text = response_text.decode("utf-8")
-                
+
                 if not response_text:
                     logging.warning(f"Exa MCP returned empty response for query '{query}'")
                     return {"results": [], "query": query}
-                
+
                 try:
                     result = json.loads(response_text)
                 except json.JSONDecodeError as e:
-                    logging.error(f"Exa MCP JSON parse error: {e}, response: {response_text[:500]}")
+                    logging.exception(f"Exa MCP JSON parse error: {e}, response: {response_text[:500]}")
                     return {"error": f"JSON parse error: {e}", "query": query}
-        
+
         # MCP JSON-RPC response format
         if "error" in result:
             error_msg = result.get("error", {}).get("message", "Unknown MCP error")
             logging.error(f"Exa MCP error for query '{query}': {error_msg}")
             return {"error": error_msg, "query": query}
-        
+
         # Log the full result structure for debugging
         logging.debug(f"Exa MCP full result keys: {result.keys() if isinstance(result, dict) else type(result)}")
-        
+
         # Extract results from the MCP response
         # The result is in result.result.content[0].text as JSON
         mcp_result = result.get("result", {})
         logging.debug(f"Exa MCP mcp_result keys: {mcp_result.keys() if isinstance(mcp_result, dict) else type(mcp_result)}")
-        
+
         content = mcp_result.get("content", [])
         logging.debug(f"Exa MCP content type: {type(content)}, length: {len(content) if isinstance(content, list) else 'N/A'}")
-        
+
         if content and isinstance(content, list) and len(content) > 0:
             # Log first content item structure
             first_content = content[0]
             logging.debug(f"Exa MCP first content item: {first_content.keys() if isinstance(first_content, dict) else type(first_content)}")
-            
+
             # Parse the text content which contains the actual search results
             text_content = first_content.get("text", "") if isinstance(first_content, dict) else str(first_content)
             logging.info(f"Exa MCP text_content preview: {text_content[:500] if text_content else 'empty'}...")
-            
+
             try:
                 search_data = json.loads(text_content) if text_content else {}
                 logging.debug(f"Exa MCP search_data keys: {search_data.keys() if isinstance(search_data, dict) else type(search_data)}")
-                
+
                 # Normalize to match Tavily response format
                 # Exa might return results directly or under a different key
                 results = search_data.get("results", [])
                 if not results and isinstance(search_data, list):
                     # If search_data is a list directly, use it as results
                     results = search_data
-                
+
                 logging.info(f"Exa MCP response for query '{query}': {len(results)} results")
                 return {"results": results, "query": query}
             except json.JSONDecodeError:
@@ -548,19 +542,18 @@ async def exa_search(
                 if results:
                     logging.info(f"Exa MCP parsed {len(results)} results from text format")
                     return {"results": results, "query": query}
-                else:
-                    # Fallback: treat the entire text as a single result
-                    logging.warning("Could not parse Exa text format, using as single result")
-                    return {"results": [{"title": "Search Result", "url": "", "content": text_content}], "query": query}
-        
+                # Fallback: treat the entire text as a single result
+                logging.warning("Could not parse Exa text format, using as single result")
+                return {"results": [{"title": "Search Result", "url": "", "content": text_content}], "query": query}
+
         logging.warning(f"Exa MCP returned empty content for query '{query}'")
         return {"results": [], "query": query}
-        
+
     except httpx.TimeoutException as e:
-        logging.error(f"Exa MCP timeout for query '{query}': {e}")
+        logging.exception(f"Exa MCP timeout for query '{query}': {e}")
         return {"error": f"Timeout: {e}", "query": query}
     except httpx.RequestError as e:
-        logging.error(f"Exa MCP connection error for query '{query}': {e}")
+        logging.exception(f"Exa MCP connection error for query '{query}': {e}")
         return {"error": f"Connection error: {e}", "query": query}
     except Exception as e:
         logging.exception(f"Exa MCP search error for query '{query}': {e}")
@@ -568,17 +561,16 @@ async def exa_search(
 
 
 async def perform_web_search(
-    queries: list[str], 
+    queries: list[str],
     api_keys: list[str] = None,
-    max_results_per_query: int = 5, 
+    max_results_per_query: int = 5,
     max_chars_per_url: int = 2000,
     min_score: float = 0.3,
     search_depth: str = "advanced",
     web_search_provider: str = "tavily",
     exa_mcp_url: str = "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check",
 ) -> tuple[str, dict]:
-    """
-    Perform concurrent web searches for multiple queries.
+    """Perform concurrent web searches for multiple queries.
     Supports both Tavily and Exa MCP as search providers.
     Returns a tuple of (formatted_results, metadata).
     
@@ -599,39 +591,40 @@ async def perform_web_search(
     
     Returns:
         tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...], "provider": "..."})
+
     """
     if not queries:
         return "", {}
-    
+
     # Validate provider and requirements
     if web_search_provider == "tavily":
         if not api_keys:
             logging.warning("Tavily requires API keys but none provided")
             return "", {}
-    
+
     db = get_bad_keys_db()
-    
+
     # Provider-specific search functions
     async def search_single_query_tavily(query: str, depth: str, keys: list[str]) -> dict:
         """Search with Tavily using retry logic and key rotation."""
         for key in keys:
             result = await tavily_search(query, key, max_results_per_query, depth)
-            
+
             if "error" not in result:
                 return result
-            
+
             # Mark the key as bad
             error_msg = result.get("error", "Unknown error")[:200]
             db.mark_key_bad_synced("tavily", key, error_msg)
-        
+
         # All keys failed
         logging.error(f"All Tavily API keys failed for query '{query}'")
         return {"error": "All API keys exhausted", "query": query}
-    
+
     async def search_single_query_exa(query: str) -> dict:
         """Search with Exa MCP."""
         return await exa_search(query, exa_mcp_url, max_results_per_query)
-    
+
     async def execute_searches() -> tuple[list, list]:
         """Execute searches with the configured provider and return results and URLs."""
         if web_search_provider == "tavily":
@@ -640,7 +633,7 @@ async def perform_web_search(
             if not good_keys:
                 db.reset_provider_keys_synced("tavily")
                 good_keys = api_keys.copy()
-            
+
             search_tasks = [
                 search_single_query_tavily(query, search_depth, good_keys)
                 for query in queries
@@ -650,65 +643,65 @@ async def perform_web_search(
                 search_single_query_exa(query)
                 for query in queries
             ]
-        
+
         results = await asyncio.gather(*search_tasks)
-        
+
         formatted = []
         urls = []
-        
+
         provider_name = web_search_provider.capitalize()
         logging.info(f"{provider_name} search returned {len(results)} result sets for {len(queries)} queries")
-        
+
         for i, result in enumerate(results):
             if "error" in result:
                 logging.warning(f"{provider_name} search error for query '{queries[i]}': {result.get('error')}")
                 continue
-            
+
             query = queries[i]
             query_results = []
-            
+
             result_items = result.get("results", [])
             logging.info(f"Query '{query}' returned {len(result_items)} items")
-            
+
             for item in result_items:
                 # Handle both Tavily and Exa result formats
                 score = item.get("score", 0)
-                
+
                 title = item.get("title", "No title")
                 url = item.get("url", "")
-                
+
                 if url:
                     urls.append({"title": title, "url": url, "score": score})
-                
+
                 # Prefer raw_content (full page content) over content (snippet)
                 # Tavily uses raw_content, Exa might use text or content
                 raw_content = item.get("raw_content", "")
                 content = item.get("content", "") or item.get("text", "")
-                
+
                 page_content = raw_content if raw_content else content
                 page_content = page_content[:max_chars_per_url] if page_content else ""
-                
+
                 # Format score display - handle missing scores gracefully
                 score_str = f" (relevance: {score:.2f})" if score else ""
                 result_text = f"\n**{title}**{score_str}\n{url}\n{page_content}\n"
                 query_results.append(result_text)
-            
+
             if query_results:
                 formatted.append(f"\n### Search Results for: {query}")
                 formatted.extend(query_results)
-        
+
         logging.info(f"Total URLs collected: {len(urls)}")
         return formatted, urls
-    
+
     # Execute the searches
     formatted_results, all_urls = await execute_searches()
-    
+
     metadata = {
         "queries": queries,
         "urls": all_urls,
         "provider": web_search_provider,
     }
-    
+
     if formatted_results:
         return "\n\n---\nHere are the web search results in case the user asked you to search the net or something:\n\n**Web Search Results:**" + "".join(formatted_results), metadata
     return "", metadata
