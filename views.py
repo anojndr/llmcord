@@ -541,7 +541,13 @@ class TavilySourcesView(discord.ui.View):
             embed.add_field(name="Sources", value="No URLs available", inline=False)
 
         # Footer with pagination info - show provider name
-        provider_name = "Exa Search" if self.provider == "exa" else "Tavily Search"
+        mode = self.search_metadata.get("mode")
+        if self.provider == "exa":
+            provider_name = "Exa Search"
+        elif mode == "research":
+            provider_name = "Tavily Research"
+        else:
+            provider_name = "Tavily Search"
         footer_text = (
             f"Page {self.current_page + 1}/{self.total_pages} • "
             f"{len(self.urls)} total sources • Powered by {provider_name}"

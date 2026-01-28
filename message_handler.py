@@ -52,6 +52,7 @@ from views import (
 from web_search import (
     decide_web_search,
     get_current_datetime_strings,
+    perform_tavily_research,
     perform_web_search,
 )
 
@@ -349,6 +350,45 @@ def append_search_to_content(
     if content:
         return str(content) + "\n\n" + search_results
     return content
+
+
+def replace_content_text(
+    content: str | list[dict[str, object]],
+    new_text: str,
+) -> str | list[dict[str, object]]:
+    """Replace text content in a message while preserving multimodal structure."""
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                part["text"] = new_text
+                return content
+        content.append({"type": "text", "text": new_text})
+        return content
+    return new_text
+
+
+def _strip_trigger_prefix(content: str, bot_mention: str) -> str:
+    """Remove bot mention and "at ai" prefix for command detection."""
+    stripped = content.strip()
+    if bot_mention and stripped.lower().startswith(bot_mention.lower()):
+        stripped = stripped[len(bot_mention):].strip()
+    if stripped.lower().startswith("at ai"):
+        stripped = stripped[5:].strip()
+    return stripped
+
+
+def extract_research_command(
+    content: str,
+    bot_mention: str,
+) -> tuple[str | None, str]:
+    """Extract Tavily research command and query from user content."""
+    stripped = _strip_trigger_prefix(content, bot_mention)
+    lowered = stripped.lower()
+    if lowered.startswith("researchpro"):
+        return "pro", stripped[len("researchpro"):].strip()
+    if lowered.startswith("researchmini"):
+        return "mini", stripped[len("researchmini"):].strip()
+    return None, stripped
 
 
 async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
@@ -1174,6 +1214,10 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
     is_googlelens_query = content_for_lens_check.startswith("googlelens")
 
     search_metadata = None
+    research_model, research_query = extract_research_command(
+        new_msg.content,
+        discord_bot.user.mention if discord_bot.user else "",
+    )
 
     # Check for existing search results to handle retries correctly
     if new_msg.id in msg_nodes and msg_nodes[new_msg.id].search_results:
@@ -1182,8 +1226,54 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
     else:
         has_existing_search = False
 
+    if research_model and not has_existing_search:
+        if not research_query:
+            user_warnings.add(
+                "⚠️ Provide a research query after researchpro/researchmini",
+            )
+        elif not tavily_api_keys:
+            user_warnings.add("⚠️ Tavily API key missing for research")
+        else:
+            for msg in messages:
+                if msg.get("role") == "user":
+                    msg["content"] = replace_content_text(
+                        msg.get("content", ""),
+                        research_query,
+                    )
+                    break
+
+            research_results, search_metadata = await perform_tavily_research(
+                query=research_query,
+                api_keys=tavily_api_keys,
+                model=research_model,
+            )
+
+            if research_results:
+                for msg in messages:
+                    if msg.get("role") == "user":
+                        msg["content"] = append_search_to_content(
+                            msg.get("content", ""),
+                            research_results,
+                        )
+
+                        logger.info(
+                            "Tavily research results appended to user message",
+                        )
+
+                        get_bad_keys_db().save_message_search_data(
+                            new_msg.id,
+                            research_results,
+                            search_metadata,
+                        )
+
+                        if new_msg.id in msg_nodes:
+                            msg_nodes[new_msg.id].search_results = research_results
+                            msg_nodes[new_msg.id].tavily_metadata = search_metadata
+                        break
+
     if (
-        web_search_available
+        not research_model
+        and web_search_available
         and (is_non_gemini or is_preview_model)
         and not is_googlelens_query
         and not has_existing_search
