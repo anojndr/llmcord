@@ -214,6 +214,13 @@ def _configure_gemini_kwargs(
     is_gemini_3 = "gemini-3" in model
     is_preview = "preview" in model
 
+    if model_parameters:
+        safety_settings = model_parameters.get("safety_settings")
+        if safety_settings is None:
+            safety_settings = model_parameters.get("safetySettings")
+        if safety_settings is not None:
+            kwargs["safety_settings"] = safety_settings
+
     # Add thinking config for Gemini 3 models
     thinking_level = (
         model_parameters.get("thinking_level") if model_parameters else None
