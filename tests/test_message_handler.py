@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 
 import discord
+import pytest
 
 import message_handler
 
@@ -62,3 +63,17 @@ def test_append_search_to_content_list() -> None:
 
     updated = message_handler.append_search_to_content(content, "search")
     assert updated[0]["text"].endswith("\n\nsearch")
+
+
+def test_raise_empty_response_message() -> None:
+    """Ensure empty response error uses the expected message."""
+    with pytest.raises(message_handler.EmptyResponseError) as exc:
+        message_handler._raise_empty_response()  # noqa: SLF001
+
+    assert str(exc.value) == message_handler.EMPTY_RESPONSE_MESSAGE
+
+
+def test_first_token_timeout_error_default_message() -> None:
+    """Use the default first-token timeout message."""
+    err = message_handler.FirstTokenTimeoutError()
+    assert str(err) == message_handler.FIRST_TOKEN_TIMEOUT_MESSAGE
