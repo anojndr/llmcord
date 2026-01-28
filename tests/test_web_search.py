@@ -141,3 +141,51 @@ async def test_perform_web_search_exa(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert "Exa Title" in formatted
     assert metadata["provider"] == "exa"
+
+
+@pytest.mark.asyncio
+async def test_perform_tavily_research(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Handle Tavily research results with key rotation."""
+    temp_db = bad_keys.BadKeysDB(local_db_path=":memory:")
+    monkeypatch.setattr(web_search, "get_bad_keys_db", lambda: temp_db)
+
+    async def fake_research_create(
+        _input_text: str,
+        _model: str,
+        api_key: str,
+    ) -> dict:
+        if api_key == "bad":
+            return {"error": "Unauthorized", "status_code": 401}
+        return {"request_id": "req-123", "status": "pending"}
+
+    async def fake_research_get(_request_id: str, _api_key: str) -> dict:
+        return {
+            "request_id": "req-123",
+            "status": "completed",
+            "content": "Research report",
+            "sources": [
+                {
+                    "title": "Source",
+                    "url": "https://example.com",
+                    "favicon": "https://example.com/favicon.ico",
+                },
+            ],
+            "response_time": 1,
+        }
+
+    monkeypatch.setattr(web_search, "tavily_research_create", fake_research_create)
+    monkeypatch.setattr(web_search, "tavily_research_get", fake_research_get)
+
+    formatted, metadata = await web_search.perform_tavily_research(
+        query="topic",
+        api_keys=["bad", "good"],
+        model="pro",
+        poll_interval=0.0,
+        timeout_seconds=1.0,
+    )
+
+    assert "Research report" in formatted
+    assert metadata["provider"] == "tavily"
+    assert metadata["mode"] == "research"
+    assert metadata["urls"][0]["url"] == "https://example.com"
+    assert temp_db.is_key_bad_synced("tavily", "bad") is True
