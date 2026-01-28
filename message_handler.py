@@ -69,12 +69,22 @@ except ImportError:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 EMPTY_RESPONSE_MESSAGE = "Response stream ended with no content"
+FIRST_TOKEN_TIMEOUT_MESSAGE = "No first token received within timeout window"  # noqa: S105
 MAX_OVERLOADED_ERRORS = 3
 LITELLM_TIMEOUT_SECONDS = 60
+FIRST_TOKEN_TIMEOUT_SECONDS = 60
 
 
 class EmptyResponseError(RuntimeError):
     """Raised when the response stream ends without content."""
+
+
+class FirstTokenTimeoutError(RuntimeError):
+    """Raised when no first token arrives within the timeout window."""
+
+    def __init__(self, message: str | None = None) -> None:
+        """Initialize the timeout error with a default message."""
+        super().__init__(message or FIRST_TOKEN_TIMEOUT_MESSAGE)
 
 
 class TweetUserProtocol(Protocol):
@@ -1552,7 +1562,26 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
         litellm_kwargs["timeout"] = LITELLM_TIMEOUT_SECONDS
 
         # Make the streaming call
-        async for chunk in await litellm.acompletion(**litellm_kwargs):
+        stream = await litellm.acompletion(**litellm_kwargs)
+
+        async def _iter_stream_with_first_chunk(
+            stream_iter: AsyncIterator[object],
+        ) -> AsyncIterator[object]:
+            try:
+                first_chunk = await asyncio.wait_for(
+                    stream_iter.__anext__(),
+                    timeout=FIRST_TOKEN_TIMEOUT_SECONDS,
+                )
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError as exc:
+                raise FirstTokenTimeoutError from exc
+
+            yield first_chunk
+            async for chunk in stream_iter:
+                yield chunk
+
+        async for chunk in _iter_stream_with_first_chunk(stream):
             if not chunk.choices:
                 continue
 
@@ -1911,10 +1940,20 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
             # Determine if this is an API key error vs other error (timeout, network, etc.)
             is_key_error = False
+            is_first_token_timeout = isinstance(e, FirstTokenTimeoutError)
             is_timeout_error = (
                 isinstance(e, asyncio.TimeoutError) or "timeout" in str(e).lower()
             )
             is_empty_response = "no content" in str(e).lower()
+
+            if is_first_token_timeout:
+                logger.warning(
+                    "No first token within %s seconds for provider '%s'; forcing fallback model.",
+                    FIRST_TOKEN_TIMEOUT_SECONDS,
+                    provider,
+                )
+                good_keys = []
+                continue
 
             # Check for typical API key/auth error patterns
             error_str = str(e).lower()
