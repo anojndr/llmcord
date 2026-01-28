@@ -1609,43 +1609,6 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
             yield delta_content, chunk_finish_reason, grounding_metadata
 
-    async def get_completion(
-        api_key: str,
-    ) -> tuple[str | None, object | None]:
-        """Get non-streaming response from LiteLLM using shared configuration."""
-        enable_grounding = not re.search(r"https?://", new_msg.content)
-
-        litellm_kwargs = prepare_litellm_kwargs(
-            provider=provider,
-            model=actual_model,
-            messages=messages[::-1],
-            api_key=api_key,
-            options=LiteLLMOptions(
-                base_url=base_url,
-                extra_headers=extra_headers,
-                stream=False,
-                model_parameters=model_parameters,
-                enable_grounding=enable_grounding,
-            ),
-        )
-
-        litellm_kwargs["timeout"] = LITELLM_TIMEOUT_SECONDS
-        response = await litellm.acompletion(**litellm_kwargs)
-
-        if not response.choices:
-            return None, _extract_grounding_metadata(response)
-
-        choice = response.choices[0]
-        message = getattr(choice, "message", None)
-        content = None
-        if message is not None:
-            content = getattr(message, "content", None)
-            if content is None and isinstance(message, dict):
-                content = message.get("content")
-
-        grounding_metadata = _extract_grounding_metadata(response, choice)
-        return content, grounding_metadata
-
     grounding_metadata = None
     attempt_count = 0
     fallback_level = 0  # 0 = original, 1 = mistral, 2 = gemma
@@ -1852,61 +1815,8 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
                             last_edit_time = datetime.now(timezone.utc).timestamp()
 
-            fallback_used = False
-            if (
-                finish_reason is None
-                and provider == "gemini"
-                and is_gemini_model(actual_model)
-            ):
-                logger.warning(
-                    "Gemini stream ended without finish reason. Falling back to non-streaming request.",
-                )
-                non_stream_content, non_stream_grounding = await get_completion(
-                    current_api_key,
-                )
-                if non_stream_grounding:
-                    grounding_metadata = non_stream_grounding
-                if non_stream_content:
-                    response_contents = _split_response_content(
-                        non_stream_content,
-                        max_message_length,
-                    )
-                    fallback_used = True
-                elif not response_contents:
-                    _raise_empty_response()
-                else:
-                    logger.warning(
-                        "Gemini non-streaming fallback returned empty content; keeping partial stream output.",
-                    )
-
             if not response_contents:
-                if provider == "gemini" and is_gemini_model(actual_model):
-                    logger.warning(
-                        "Empty streaming response from Gemini. Falling back to non-streaming request.",
-                    )
-                    non_stream_content, non_stream_grounding = await get_completion(
-                        current_api_key,
-                    )
-                    if non_stream_grounding:
-                        grounding_metadata = non_stream_grounding
-                    if non_stream_content:
-                        response_contents = _split_response_content(
-                            non_stream_content,
-                            max_message_length,
-                        )
-                    else:
-                        _raise_empty_response()
-                else:
-                    _raise_empty_response()
-
-            if fallback_used and not use_plain_responses:
-                for i, content in enumerate(response_contents):
-                    embed.description = content
-                    embed.color = EMBED_COLOR_COMPLETE
-                    if i < len(response_msgs):
-                        await response_msgs[i].edit(embed=embed, view=None)
-                    else:
-                        await reply_helper(embed=embed, silent=True, view=None)
+                _raise_empty_response()
 
             if use_plain_responses:
                 for i, content in enumerate(response_contents):
@@ -1950,6 +1860,14 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 logger.warning(
                     "No first token within %s seconds for provider '%s'; forcing fallback model.",
                     FIRST_TOKEN_TIMEOUT_SECONDS,
+                    provider,
+                )
+                good_keys = []
+                continue
+
+            if is_empty_response:
+                logger.warning(
+                    "Empty response for provider '%s'; forcing fallback model.",
                     provider,
                 )
                 good_keys = []
