@@ -1622,7 +1622,6 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
     original_provider = provider  # Store original for logging
     original_model = actual_model
     last_error_msg = None
-    overloaded_error_count = 0
 
     # Determine if the original model is already mistral (skip to gemma fallback)
     is_original_mistral = (
@@ -1705,7 +1704,6 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     good_keys = fallback_api_keys.copy()
                     initial_key_count = len(good_keys)
                     attempt_count = 0  # Reset attempt count for new provider
-                    overloaded_error_count = 0  # Reset overload counter for new provider
                     continue  # Try with the new provider
                 logger.error(
                     "No API keys available for fallback provider '%s'",
@@ -1919,19 +1917,6 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
             # Check for typical API key/auth error patterns
             error_str = str(e).lower()
-
-            if "overloaded" in error_str or "503" in error_str:
-                overloaded_error_count += 1
-                if overloaded_error_count >= MAX_OVERLOADED_ERRORS:
-                    logger.warning(
-                        "Abort retry loop due to consecutive overloaded errors",
-                    )
-                    # Force fallback by exhausting keys for this provider.
-                    # This avoids stopping the request when the primary model is overloaded.
-                    good_keys = []
-                    continue
-            else:
-                overloaded_error_count = 0
 
             key_error_patterns = [
                 "unauthorized", "invalid_api_key", "invalid key", "api key",
