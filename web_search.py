@@ -13,7 +13,7 @@ import httpx
 import litellm
 
 from bad_keys import KeyRotator, get_bad_keys_db
-from config import get_or_create_httpx_client
+from config import ensure_list, get_config, get_or_create_httpx_client
 from litellm_utils import LiteLLMOptions, prepare_litellm_kwargs
 
 logger = logging.getLogger(__name__)
@@ -188,29 +188,15 @@ SEARCH_DECIDER_SYSTEM_PROMPT = "\n".join(  # noqa: FLY002
 )
 
 
-async def decide_web_search(messages: list, decider_config: dict) -> dict:
-    """Decide whether web search is needed and generate optimized queries.
-
-    Uses LiteLLM for unified API access across all providers. Uses KeyRotator
-    for consistent key rotation and bad key tracking.
-
-    Returns: {"needs_search": bool, "queries": list[str]} or
-    {"needs_search": False}.
-
-    decider_config should contain:
-        - provider: "gemini", "github_copilot", or other (OpenAI-compatible)
-        - model: model name
-        - api_keys: list of API keys
-        - base_url: (optional) for OpenAI-compatible providers
-    """
-    provider = decider_config.get("provider", "gemini")
-    model = decider_config.get("model", "gemini-3-flash-preview")
-    api_keys = decider_config.get("api_keys", [])
-    base_url = decider_config.get("base_url")
-
-    default_result = {"needs_search": False}
+async def _run_decider_once(
+    messages: list,
+    provider: str,
+    model: str,
+    api_keys: list[str],
+    base_url: str | None,
+) -> tuple[dict | None, bool]:
     if not api_keys:
-        return default_result
+        return None, True
 
     # Use KeyRotator for consistent key rotation with synced bad key tracking
     rotator = KeyRotator(provider, api_keys)
@@ -265,7 +251,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 result = json.loads(response_text)
                 # Validate response structure
                 if isinstance(result, dict):
-                    return result
+                    return result, False
                 logger.warning(
                     "Web search decider returned non-dict response: %s",
                     response_text[:100],
@@ -296,13 +282,124 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
         exhausted_keys = False
         break
 
-    # All keys exhausted
-    if exhausted_keys:
-        logger.error(
-            "Web search decider failed after exhausting all keys, skipping web "
-            "search",
+    return None, exhausted_keys
+
+
+def _get_next_decider_fallback(
+    fallback_level: int,
+    *,
+    is_original_mistral: bool,
+    original_provider: str,
+    original_model: str,
+) -> tuple[int, tuple[str, str, str] | None, str | None]:
+    if fallback_level == 0:
+        # First fallback: mistral (unless original was already mistral)
+        if is_original_mistral:
+            return (
+                2,
+                ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
+                (
+                    "Search decider exhausted all keys for mistral/"
+                    f"{original_model}. Falling back to gemini/gemma-3-27b-it..."
+                ),
+            )
+        return (
+            1,
+            ("mistral", "mistral-large-latest", "mistral/mistral-large-latest"),
+            (
+                "Search decider exhausted all keys for provider "
+                f"'{original_provider}'. "
+                "Falling back to mistral/mistral-large-latest..."
+            ),
         )
-    return default_result
+
+    if fallback_level == 1:
+        # Second fallback: gemma
+        return (
+            2,
+            ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
+            (
+                "Search decider mistral fallback failed. "
+                "Falling back to gemini/gemma-3-27b-it..."
+            ),
+        )
+
+    return fallback_level, None, None
+
+
+async def decide_web_search(messages: list, decider_config: dict) -> dict:
+    """Decide whether web search is needed and generate optimized queries.
+
+    Uses LiteLLM for unified API access across all providers. Uses KeyRotator
+    for consistent key rotation and bad key tracking.
+
+    Returns: {"needs_search": bool, "queries": list[str]} or
+    {"needs_search": False}.
+
+    decider_config should contain:
+        - provider: "gemini", "github_copilot", or other (OpenAI-compatible)
+        - model: model name
+        - api_keys: list of API keys
+        - base_url: (optional) for OpenAI-compatible providers
+    """
+    provider = decider_config.get("provider", "gemini")
+    model = decider_config.get("model", "gemini-3-flash-preview")
+    api_keys = decider_config.get("api_keys", [])
+    base_url = decider_config.get("base_url")
+
+    default_result = {"needs_search": False}
+    config = get_config()
+
+    fallback_level = 0  # 0 = original, 1 = mistral, 2 = gemma
+    original_provider = provider
+    original_model = model
+    is_original_mistral = (
+        original_provider == "mistral" and "mistral" in original_model.lower()
+    )
+
+    while True:
+        result, exhausted_keys = await _run_decider_once(
+            messages,
+            provider,
+            model,
+            api_keys,
+            base_url,
+        )
+        if result is not None:
+            return result
+        if not exhausted_keys:
+            return default_result
+
+        fallback_level, next_fallback, log_message = _get_next_decider_fallback(
+            fallback_level,
+            is_original_mistral=is_original_mistral,
+            original_provider=original_provider,
+            original_model=original_model,
+        )
+        if log_message:
+            logger.warning(log_message)
+        if not next_fallback:
+            logger.error(
+                "Search decider fallback options exhausted (mistral and gemma), "
+                "skipping web search",
+            )
+            return default_result
+
+        new_provider, new_model, _ = next_fallback
+        provider = new_provider
+        model = new_model
+
+        fallback_provider_config = config.get("providers", {}).get(provider, {})
+        base_url = fallback_provider_config.get("base_url")
+        api_keys = ensure_list(fallback_provider_config.get("api_key"))
+
+        if api_keys:
+            continue
+
+        logger.error(
+            "No API keys available for search decider fallback provider '%s'",
+            provider,
+        )
 
 
 # Shared httpx client for Tavily API calls - uses DRY factory pattern
