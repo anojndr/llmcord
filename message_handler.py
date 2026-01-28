@@ -70,6 +70,7 @@ logger = logging.getLogger(__name__)
 
 EMPTY_RESPONSE_MESSAGE = "Response stream ended with no content"
 MAX_OVERLOADED_ERRORS = 3
+LITELLM_TIMEOUT_SECONDS = 60
 
 
 class EmptyResponseError(RuntimeError):
@@ -1547,8 +1548,8 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
             ),
         )
 
-        # Add timeout to prevent indefinite hangs (120 seconds for streaming)
-        litellm_kwargs["timeout"] = 120
+        # Add timeout to prevent indefinite hangs (60 seconds for streaming)
+        litellm_kwargs["timeout"] = LITELLM_TIMEOUT_SECONDS
 
         # Make the streaming call
         async for chunk in await litellm.acompletion(**litellm_kwargs):
@@ -1599,7 +1600,7 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
             ),
         )
 
-        litellm_kwargs["timeout"] = 120
+        litellm_kwargs["timeout"] = LITELLM_TIMEOUT_SECONDS
         response = await litellm.acompletion(**litellm_kwargs)
 
         if not response.choices:
