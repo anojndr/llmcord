@@ -70,6 +70,44 @@ Or run local models with:
 - Fully asynchronous
 - Modular codebase for easy customization
 
+## Architecture overview
+
+- **Entry point:** [llmcord.py](llmcord.py) starts the bot via [bot.py](bot.py).
+- **Discord layer:** [bot.py](bot.py) wires slash commands, events, and health check server.
+- **Message pipeline:** [message_handler.py](message_handler.py) builds conversation context, fetches attachments, runs web search, and streams model responses.
+- **Provider glue:** [litellm_utils.py](litellm_utils.py) centralizes LiteLLM provider setup (Gemini, GitHub Copilot, OpenAI-compatible).
+- **Persistence:** [bad_keys.py](bad_keys.py) tracks bad API keys and user model preferences in Turso/libSQL or local SQLite.
+- **UI components:** [views.py](views.py) renders the “View Response Better” and “Show Sources” buttons.
+
+## Commands
+
+- `/model` — view or change your active model.
+- `/searchdecidermodel` — view or change the model used to decide when web search is needed.
+- `/resetallpreferences` — owner-only reset for saved model preferences.
+
+## Configuration notes
+
+### Provider/model naming
+- Models are configured as `provider/model` keys under `models:` in [config-example.yaml](config-example.yaml).
+- The first entry in `models` becomes the default.
+- Add `:vision` at the end of the model key when you want to force image support.
+
+### Channel model overrides
+You can lock a channel to a specific model via `channel_model_overrides` in config. When set, `/model` is disabled in that channel.
+
+### Web search
+- **Tavily** (API keys) and **Exa MCP** (endpoint) are supported.
+- `web_search_provider: auto` prefers Tavily when keys exist, otherwise Exa.
+- A separate “search decider” model decides when search is needed.
+
+### Attachments
+- Images are supported for vision-capable models.
+- PDFs are extracted for non-Gemini models; Gemini models handle PDFs natively.
+- Gemini models can also accept audio/video files.
+
+### Health check
+A small HTTP server responds on `HOST`/`PORT` (defaults: `127.0.0.1:8000`) for liveness checks.
+
 ## Instructions
 
 1. Clone the repo:
@@ -78,7 +116,14 @@ Or run local models with:
    cd llmcord
    ```
 
-2. Create a copy of "config-example.yaml" named "config.yaml" and set it up:
+2. Create a virtual environment and install dependencies:
+  ```bash
+  python -m venv .venv
+  .\.venv\Scripts\activate
+  python -m pip install -U -r requirements.txt
+  ```
+
+3. Create a copy of "config-example.yaml" named "config.yaml" and set it up:
 
 ### Discord settings:
 
@@ -112,11 +157,15 @@ Or run local models with:
 | **models** | Add the models you want to use in `<provider>/<model>: <parameters>` format (examples are included). When you run `/model` these models will show up as autocomplete suggestions.<br /><br />**Refer to each provider's documentation for supported parameters.**<br /><br />**The first model in your `models` list will be the default model at startup.**<br /><br />**Some vision models may need `:vision` added to the end of their name to enable image support.** |
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
 
-3. Run the bot:
+4. Run the bot:
    ```bash
-   python -m pip install -U -r requirements.txt
    python llmcord.py
    ```
+
+## Development
+
+- Run tests with `pytest`.
+- Lint with `ruff check --select ALL .`.
 
 ## Notes
 
