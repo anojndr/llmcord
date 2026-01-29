@@ -1,0 +1,9 @@
+[run]
+source = llmcord
+omit =
+    */__init__.py
+    */__main__.py
+    */bot.py
+    */logic/processor.py
+    */services/search.py
+    */ui/views.py

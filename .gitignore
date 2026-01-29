@@ -9,3 +9,4 @@ bad_keys.db-wal
 config.yaml
 __pycache__
 *.egg-info/
+.coverage
