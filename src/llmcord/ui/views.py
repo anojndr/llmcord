@@ -249,7 +249,11 @@ class RetryButton(discord.ui.Button):
         user_id: int,
     ) -> None:
         """Initialize a retry button for the given user."""
-        super().__init__(style=discord.ButtonStyle.secondary, label="Retry", emoji="🔄")
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="Retry with stable model",
+            emoji="🔄",
+        )
         self.callback_fn = callback_fn
         self.user_id = user_id
 

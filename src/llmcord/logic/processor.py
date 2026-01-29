@@ -411,6 +411,8 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
     msg_nodes: dict[int, MsgNode],
     curr_model_lock: asyncio.Lock,
     curr_model_ref: list[str],
+    override_provider_slash_model: str | None = None,
+    fallback_chain: list[tuple[str, str, str]] | None = None,
 ) -> None:
     """Process a message."""
     # Per-request edit timing to avoid interference between concurrent requests
@@ -489,9 +491,12 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
         processing_embed = discord.Embed(description=PROCESSING_MESSAGE, color=EMBED_COLOR_INCOMPLETE)
         processing_msg = await new_msg.reply(embed=processing_embed, silent=True)
 
-    # Thread-safe read of current model
-    async with curr_model_lock:
-        provider_slash_model = curr_model_ref[0]
+    # Thread-safe read of current model (unless an override is provided)
+    if override_provider_slash_model:
+        provider_slash_model = override_provider_slash_model
+    else:
+        async with curr_model_lock:
+            provider_slash_model = curr_model_ref[0]
 
     # Validate provider/model format
     try:
@@ -1382,6 +1387,14 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
             msg_nodes=msg_nodes,
             curr_model_lock=curr_model_lock,
             curr_model_ref=curr_model_ref,
+            override_provider_slash_model="gemini/gemma-3-27b-it",
+            fallback_chain=[
+                (
+                    "mistral",
+                    "mistral-large-latest",
+                    "mistral/mistral-large-latest",
+                ),
+            ],
         )
 
     await generate_response(
@@ -1407,6 +1420,7 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
         last_edit_time=last_edit_time,
         processing_msg=processing_msg,
         retry_callback=retry_callback,
+        fallback_chain=fallback_chain,
     )
 
 
@@ -1467,6 +1481,7 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
     last_edit_time: float,
     processing_msg: discord.Message,
     retry_callback: Callable[[], Awaitable[None]],
+    fallback_chain: list[tuple[str, str, str]] | None = None,
 ) -> None:
     """Generate and stream the LLM response using LiteLLM."""
     curr_content = finish_reason = None
@@ -1615,6 +1630,9 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
     original_provider = provider  # Store original for logging
     original_model = actual_model
     last_error_msg = None
+    use_custom_fallbacks = fallback_chain is not None
+    fallback_chain = fallback_chain or []
+    fallback_index = 0
 
     # Determine if the original model is already mistral (skip to gemma fallback)
     is_original_mistral = (
@@ -1652,32 +1670,55 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
             # All good keys exhausted, try next fallback level
             next_fallback = None
 
-            if fallback_level == 0:
-                # First fallback: mistral (unless original was already mistral)
-                if is_original_mistral:
-                    # Skip mistral, go directly to gemma
+            if use_custom_fallbacks:
+                if fallback_index < len(fallback_chain):
+                    next_fallback = fallback_chain[fallback_index]
+                    fallback_index += 1
+                    logger.warning(
+                        "All %s keys exhausted for provider '%s'. Falling back to %s...",
+                        initial_key_count,
+                        provider,
+                        next_fallback[2],
+                    )
+            else:
+                if fallback_level == 0:
+                    # First fallback: mistral (unless original was already mistral)
+                    if is_original_mistral:
+                        # Skip mistral, go directly to gemma
+                        fallback_level = 2
+                        next_fallback = (
+                            "gemini",
+                            "gemma-3-27b-it",
+                            "gemini/gemma-3-27b-it",
+                        )
+                        logger.warning(
+                            "All %s keys exhausted for mistral/%s. Falling back to gemini/gemma-3-27b-it...",
+                            initial_key_count,
+                            original_model,
+                        )
+                    else:
+                        fallback_level = 1
+                        next_fallback = (
+                            "mistral",
+                            "mistral-large-latest",
+                            "mistral/mistral-large-latest",
+                        )
+                        logger.warning(
+                            "All %s keys exhausted for provider '%s'. Falling back to mistral/mistral-large-latest...",
+                            initial_key_count,
+                            original_provider,
+                        )
+                elif fallback_level == 1:
+                    # Second fallback: gemma
                     fallback_level = 2
-                    next_fallback = ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it")
-                    logger.warning(
-                        "All %s keys exhausted for mistral/%s. Falling back to gemini/gemma-3-27b-it...",
-                        initial_key_count,
-                        original_model,
+                    next_fallback = (
+                        "gemini",
+                        "gemma-3-27b-it",
+                        "gemini/gemma-3-27b-it",
                     )
-                else:
-                    fallback_level = 1
-                    next_fallback = ("mistral", "mistral-large-latest", "mistral/mistral-large-latest")
                     logger.warning(
-                        "All %s keys exhausted for provider '%s'. Falling back to mistral/mistral-large-latest...",
-                        initial_key_count,
-                        original_provider,
+                        "Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...",
                     )
-            elif fallback_level == 1:
-                # Second fallback: gemma
-                fallback_level = 2
-                next_fallback = ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it")
-                logger.warning(
-                    "Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...",
-                )
 
             if next_fallback:
                 new_provider, new_model, new_provider_slash_model = next_fallback
@@ -1705,7 +1746,10 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                 # Continue to try the next fallback level
                 good_keys = []
                 continue
-            logger.error("All fallback options exhausted (mistral and gemma)")
+            if use_custom_fallbacks:
+                logger.error("All custom fallback options exhausted")
+            else:
+                logger.error("All fallback options exhausted (mistral and gemma)")
             error_text = (
                 "❌ All API keys (including all fallbacks) exhausted. Please try again later."
             )
