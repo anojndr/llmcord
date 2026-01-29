@@ -146,7 +146,12 @@ class RetryButton(discord.ui.Button):
         user_id: int,
     ) -> None:
         """Initialize a retry button for the given user."""
-        super().__init__(style=discord.ButtonStyle.secondary, label="Retry", emoji="🔄")
+        super().__init__(
+            style=discord.ButtonStyle.secondary,
+            label="Retry",
+            emoji="🔄",
+            custom_id="llmcord:retry",
+        )
         self.callback_fn = callback_fn
         self.user_id = user_id
 
@@ -198,6 +203,7 @@ class ResponseView(discord.ui.View):
         label="View Response Better",
         style=discord.ButtonStyle.secondary,
         emoji="📄",
+        custom_id="llmcord:view_response_better",
     )
     async def view_response_better(
         self,
@@ -206,6 +212,13 @@ class ResponseView(discord.ui.View):
     ) -> None:
         """Upload the response to text.is and share the link."""
         await interaction.response.defer(ephemeral=True)
+
+        if not self.full_response:
+            await interaction.followup.send(
+                "❌ No stored response content is available for this message.",
+                ephemeral=True,
+            )
+            return
 
         paste_url = await upload_to_textis(self.full_response)
 
@@ -236,6 +249,7 @@ class TavilySourceButton(discord.ui.Button):
             label="Show Sources",
             style=discord.ButtonStyle.secondary,
             emoji="🔍",
+            custom_id="llmcord:web_sources",
         )
         self.search_metadata = search_metadata
 

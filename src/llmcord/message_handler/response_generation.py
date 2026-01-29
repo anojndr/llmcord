@@ -513,9 +513,10 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
         msg_nodes[response_msg.id].text = "".join(response_contents)
         msg_nodes[response_msg.id].lock.release()
 
+    full_response = "".join(response_contents)
+
     # Update the last message with ResponseView for "View Response Better" button
     if not use_plain_responses and response_msgs and response_contents:
-        full_response = "".join(response_contents)
         response_view = ResponseView(
             full_response,
             grounding_metadata,
@@ -536,7 +537,41 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
             embed.set_footer(
                 text=f"{provider_slash_model} | total tokens: {total_tokens:,}",
             )
-            await response_msgs[last_msg_index].edit(embed=embed, view=response_view)
+            last_response_msg = response_msgs[last_msg_index]
+            await last_response_msg.edit(embed=embed, view=response_view)
+            try:
+                get_bad_keys_db().save_message_response_data(
+                    response_message_id=str(last_response_msg.id),
+                    user_message_id=str(new_msg.id),
+                    channel_id=str(new_msg.channel.id),
+                    user_id=str(new_msg.author.id),
+                    full_response=full_response,
+                    grounding_metadata=grounding_metadata,
+                    tavily_metadata=tavily_metadata,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist response data for message %s",
+                    last_response_msg.id,
+                )
+
+    if use_plain_responses and response_msgs and response_contents:
+        last_response_msg = response_msgs[-1]
+        try:
+            get_bad_keys_db().save_message_response_data(
+                response_message_id=str(last_response_msg.id),
+                user_message_id=str(new_msg.id),
+                channel_id=str(new_msg.channel.id),
+                user_id=str(new_msg.author.id),
+                full_response=full_response,
+                grounding_metadata=grounding_metadata,
+                tavily_metadata=tavily_metadata,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist response data for message %s",
+                last_response_msg.id,
+            )
 
     if (num_nodes := len(msg_nodes)) > MAX_MESSAGE_NODES:
         # Get keys to remove (oldest first based on insertion order)

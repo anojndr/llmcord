@@ -23,6 +23,36 @@ T = TypeVar("T")
 LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception))
 
 
+def _metadata_json_default(obj: object) -> object:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
+def _serialize_metadata(metadata: object | None) -> str | None:
+    if metadata is None:
+        return None
+    try:
+        return json.dumps(metadata, default=_metadata_json_default)
+    except (TypeError, ValueError) as exc:
+        logger.warning("Failed to serialize metadata: %s", exc)
+        return None
+
+
+def _deserialize_metadata(raw: str | None) -> object | None:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("Failed to decode metadata JSON")
+        return None
+
+
 def _with_reconnect(
     method: Callable[Concatenate[BadKeysDB, P], T],
 ) -> Callable[Concatenate[BadKeysDB, P], T]:
@@ -152,6 +182,21 @@ class BadKeysDB:
                 search_results TEXT,
                 tavily_metadata TEXT,
                 lens_results TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+        )
+        # Message response data for persistent response views.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS message_response_data (
+                response_message_id TEXT PRIMARY KEY,
+                user_message_id TEXT,
+                channel_id TEXT,
+                user_id TEXT,
+                full_response TEXT,
+                grounding_metadata TEXT,
+                tavily_metadata TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """,
@@ -544,3 +589,135 @@ class BadKeysDB:
             )
             return search_results, tavily_metadata, lens_results
         return None, None, None
+
+    # Message response data methods for persistent response views
+    @_with_reconnect
+    def save_message_response_data(
+        self,
+        response_message_id: str,
+        user_message_id: str | None = None,
+        channel_id: str | None = None,
+        user_id: str | None = None,
+        full_response: str | None = None,
+        grounding_metadata: object | None = None,
+        tavily_metadata: object | None = None,
+    ) -> None:
+        """Save response data for persistent response view callbacks."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        grounding_json = _serialize_metadata(grounding_metadata)
+        tavily_json = _serialize_metadata(tavily_metadata)
+
+        cursor.execute(
+            """
+            INSERT INTO message_response_data (
+                response_message_id,
+                user_message_id,
+                channel_id,
+                user_id,
+                full_response,
+                grounding_metadata,
+                tavily_metadata
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(response_message_id) DO UPDATE SET
+                user_message_id = COALESCE(?, user_message_id),
+                channel_id = COALESCE(?, channel_id),
+                user_id = COALESCE(?, user_id),
+                full_response = COALESCE(?, full_response),
+                grounding_metadata = COALESCE(?, grounding_metadata),
+                tavily_metadata = COALESCE(?, tavily_metadata)
+            """,
+            (
+                str(response_message_id),
+                str(user_message_id) if user_message_id else None,
+                str(channel_id) if channel_id else None,
+                str(user_id) if user_id else None,
+                full_response,
+                grounding_json,
+                tavily_json,
+                str(user_message_id) if user_message_id else None,
+                str(channel_id) if channel_id else None,
+                str(user_id) if user_id else None,
+                full_response,
+                grounding_json,
+                tavily_json,
+            ),
+        )
+        conn.commit()
+        try:
+            self._sync()
+        except libsql.LibsqlError as exc:
+            logger.debug("Background sync after response save failed: %s", exc)
+        logger.info("Saved response data for message %s", response_message_id)
+
+    @_with_reconnect
+    def get_message_response_data(
+        self,
+        response_message_id: str,
+    ) -> tuple[
+        str | None,
+        str | None,
+        str | None,
+        str | None,
+        object | None,
+        object | None,
+    ]:
+        """Get persisted response data for a response message."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT user_message_id, channel_id, user_id, full_response, "
+            "grounding_metadata, tavily_metadata "
+            "FROM message_response_data WHERE response_message_id = ?",
+            (str(response_message_id),),
+        )
+        result = cursor.fetchone()
+        if result:
+            grounding_metadata = _deserialize_metadata(result[4])
+            tavily_metadata = _deserialize_metadata(result[5])
+            return (
+                result[0],
+                result[1],
+                result[2],
+                result[3],
+                grounding_metadata,
+                tavily_metadata,
+            )
+        return None, None, None, None, None, None
+
+    @_with_reconnect
+    def list_message_response_data(
+        self,
+        limit: int | None = None,
+    ) -> list[dict[str, object]]:
+        """List persisted response data for rehydrating views on startup."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        base_query = (
+            "SELECT response_message_id, user_message_id, channel_id, user_id, "
+            "full_response, grounding_metadata, tavily_metadata "
+            "FROM message_response_data"
+        )
+        params: tuple[object, ...] = ()
+        if limit:
+            base_query += " ORDER BY created_at DESC LIMIT ?"
+            params = (limit,)
+
+        cursor.execute(base_query, params)
+        rows = cursor.fetchall()
+        records: list[dict[str, object]] = []
+        for row in rows:
+            records.append(
+                {
+                    "response_message_id": row[0],
+                    "user_message_id": row[1],
+                    "channel_id": row[2],
+                    "user_id": row[3],
+                    "full_response": row[4],
+                    "grounding_metadata": _deserialize_metadata(row[5]),
+                    "tavily_metadata": _deserialize_metadata(row[6]),
+                },
+            )
+        return records

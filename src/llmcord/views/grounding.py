@@ -216,7 +216,11 @@ class SourceButton(discord.ui.Button):
 
     def __init__(self, metadata: object) -> None:
         """Initialize the sources button."""
-        super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label="Show Sources",
+            style=discord.ButtonStyle.secondary,
+            custom_id="llmcord:grounding_sources",
+        )
         self.metadata = metadata
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -233,7 +237,11 @@ class SourceView(discord.ui.View):
         super().__init__(timeout=None)
         self.metadata = metadata
 
-    @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="Show Sources",
+        style=discord.ButtonStyle.secondary,
+        custom_id="llmcord:grounding_sources",
+    )
     async def show_sources(
         self,
         interaction: discord.Interaction,
