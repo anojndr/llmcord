@@ -7,7 +7,7 @@ import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from llmcord.config import get_config, get_or_create_httpx_client
+from llmcord.config import get_or_create_httpx_client
 from llmcord.services.database import get_bad_keys_db
 
 LOGGER = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def _get_response_data(message_id: int) -> ResponseData:
     )
 
 
-def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
+def _get_textis_client() -> httpx.AsyncClient:
     """Get or create the shared text.is httpx client using the DRY factory pattern."""
     return get_or_create_httpx_client(
         _textis_client_holder,
@@ -72,7 +72,7 @@ def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
         connect_timeout=10.0,
         max_connections=10,
         max_keepalive=5,
-        proxy_url=proxy_url,
+        proxy_url=None,
         follow_redirects=False,  # text.is needs redirect handling
     )
 
@@ -83,11 +83,7 @@ async def upload_to_textis(text: str) -> str | None:
     Returns None if upload fails.
     """
     try:
-        # Proxy configuration from config (optional)
-        config = get_config()
-        proxy_url = config.get("proxy_url") or None
-
-        client = _get_textis_client(proxy_url)
+        client = _get_textis_client()
 
         # Get the CSRF token from the main page
         response = await client.get("https://text.is/", timeout=30)
