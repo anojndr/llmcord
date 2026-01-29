@@ -20,6 +20,7 @@ from llmcord.logic import utils  # noqa: F401
 from llmcord.services.database import get_bad_keys_db, init_bad_keys_db
 from llmcord.config import get_config
 from llmcord.logic.processor import process_message
+from llmcord.ui.views import PersistentResponseView, set_retry_handler
 
 # Configure logging
 logging.basicConfig(
@@ -386,6 +387,12 @@ async def on_ready() -> None:
 
     await discord_bot.tree.sync()
 
+    # Register persistent views for response buttons
+    discord_bot.add_view(PersistentResponseView())
+
+    # Register retry handler for persistent buttons
+    set_retry_handler(_handle_retry_request)
+
     if twitter_accounts := config.get("twitter_accounts"):
         for acc in twitter_accounts:
             if await twitter_api.pool.get_account(acc["username"]):
@@ -403,6 +410,11 @@ async def on_ready() -> None:
 @discord_bot.event
 async def on_message(new_msg: discord.Message) -> None:
     """Handle inbound Discord messages."""
+    await _process_user_message(new_msg)
+
+
+async def _process_user_message(new_msg: discord.Message) -> None:
+    """Shared handler for normal messages and retries."""
     # Check if this channel has a locked model override
     channel_id = new_msg.channel.id
     locked_model = get_channel_locked_model(channel_id)
@@ -455,6 +467,39 @@ async def on_message(new_msg: discord.Message) -> None:
                 "❌ An internal error occurred while processing your request.\n"
                 f"Error: {exc}",
             )
+
+
+async def _handle_retry_request(
+    interaction: discord.Interaction,
+    request_message_id: int,
+    request_user_id: int,
+) -> None:
+    """Retry a previous prompt using its original message."""
+    if interaction.user.id != request_user_id:
+        await interaction.followup.send(
+            "❌ You cannot retry this message.",
+            ephemeral=True,
+        )
+        return
+
+    channel = interaction.channel
+    if channel is None or not hasattr(channel, "fetch_message"):
+        await interaction.followup.send(
+            "❌ Unable to locate the original channel for this message.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        request_msg = await channel.fetch_message(request_message_id)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        await interaction.followup.send(
+            "❌ Unable to fetch the original message for retry.",
+            ephemeral=True,
+        )
+        return
+
+    await _process_user_message(request_msg)
 
 
 async def health_check(_request: web.Request) -> web.Response:

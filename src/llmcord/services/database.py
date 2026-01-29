@@ -146,6 +146,55 @@ class BadKeysDB:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Response data table stores rendered response payloads for UI actions.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS message_response_data (
+                message_id TEXT PRIMARY KEY,
+                request_message_id TEXT,
+                request_user_id TEXT,
+                full_response TEXT,
+                grounding_metadata TEXT,
+                tavily_metadata TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # Migration: ensure message_response_data has the expected schema.
+        with contextlib.suppress(LIBSQL_ERROR, ValueError):
+            cursor.execute("PRAGMA table_info(message_response_data)")
+            columns = {row[1] for row in cursor.fetchall()}
+
+            required_columns = {
+                "message_id": "TEXT",
+                "request_message_id": "TEXT",
+                "request_user_id": "TEXT",
+                "full_response": "TEXT",
+                "grounding_metadata": "TEXT",
+                "tavily_metadata": "TEXT",
+                "created_at": "TIMESTAMP",
+            }
+
+            if columns and "message_id" not in columns:
+                cursor.execute("DROP TABLE message_response_data")
+                cursor.execute("""
+                    CREATE TABLE message_response_data (
+                        message_id TEXT PRIMARY KEY,
+                        request_message_id TEXT,
+                        request_user_id TEXT,
+                        full_response TEXT,
+                        grounding_metadata TEXT,
+                        tavily_metadata TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                columns = set(required_columns)
+
+            for column_name, column_type in required_columns.items():
+                if column_name not in columns:
+                    cursor.execute(
+                        "ALTER TABLE message_response_data ADD COLUMN "
+                        f"{column_name} {column_type}",
+                    )
+            conn.commit()
         # Migration: Add lens_results column if it doesn't exist.
         with contextlib.suppress(LIBSQL_ERROR, ValueError):
             cursor.execute(
@@ -534,6 +583,123 @@ class BadKeysDB:
             )
             return search_results, tavily_metadata, lens_results
         return None, None, None
+
+    @_with_reconnect
+    def save_message_response_data(
+        self,
+        message_id: str,
+        request_message_id: str,
+        request_user_id: str,
+        full_response: str | None = None,
+        grounding_metadata: dict[str, Any] | list[Any] | None = None,
+        tavily_metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Save response payloads for a Discord message.
+
+        Stores the full response plus any source metadata so buttons can work
+        after a bot restart.
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT INTO message_response_data (
+                   message_id,
+                   request_message_id,
+                   request_user_id,
+                   full_response,
+                   grounding_metadata,
+                   tavily_metadata
+               )
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(message_id) DO UPDATE SET
+                   request_message_id = COALESCE(?, request_message_id),
+                   request_user_id = COALESCE(?, request_user_id),
+                   full_response = COALESCE(?, full_response),
+                   grounding_metadata = COALESCE(?, grounding_metadata),
+                   tavily_metadata = COALESCE(?, tavily_metadata)""",
+            (
+                str(message_id),
+                str(request_message_id),
+                str(request_user_id),
+                full_response,
+                json.dumps(grounding_metadata) if grounding_metadata else None,
+                json.dumps(tavily_metadata) if tavily_metadata else None,
+                str(request_message_id),
+                str(request_user_id),
+                full_response,
+                json.dumps(grounding_metadata) if grounding_metadata else None,
+                json.dumps(tavily_metadata) if tavily_metadata else None,
+            ),
+        )
+        conn.commit()
+        try:
+            self._sync()
+        except libsql.LibsqlError as exc:
+            logger.debug("Background sync after save failed: %s", exc)
+        logger.info("Saved response data for message %s", message_id)
+
+    @_with_reconnect
+    def get_message_response_data(
+        self,
+        message_id: str,
+    ) -> tuple[
+        str | None,
+        dict[str, Any] | list[Any] | None,
+        dict[str, Any] | None,
+        str | None,
+        str | None,
+    ]:
+        """Get response data for a Discord message.
+
+        Returns (full_response, grounding_metadata, tavily_metadata,
+        request_message_id, request_user_id) or (None, None, None, None, None).
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT full_response, grounding_metadata, tavily_metadata, "
+            "request_message_id, request_user_id "
+            "FROM message_response_data WHERE message_id = ?",
+            (str(message_id),),
+        )
+        result = cursor.fetchone()
+        if not result:
+            return None, None, None, None, None
+
+        full_response = result[0]
+        grounding_metadata_raw = result[1]
+        tavily_metadata_raw = result[2]
+        request_message_id = result[3]
+        request_user_id = result[4]
+
+        grounding_metadata = None
+        tavily_metadata = None
+
+        if grounding_metadata_raw:
+            try:
+                grounding_metadata = json.loads(grounding_metadata_raw)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode grounding_metadata for message %s",
+                    message_id,
+                )
+
+        if tavily_metadata_raw:
+            try:
+                tavily_metadata = json.loads(tavily_metadata_raw)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode tavily_metadata for message %s",
+                    message_id,
+                )
+
+        return (
+            full_response,
+            grounding_metadata,
+            tavily_metadata,
+            request_message_id,
+            request_user_id,
+        )
 
 
 class KeyRotator:
