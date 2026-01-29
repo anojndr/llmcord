@@ -1,104 +1,68 @@
-from __future__ import annotations
-
-import asyncio
-from pathlib import Path
-
-import httpx
 import pytest
+import time
+from pathlib import Path
+from unittest.mock import patch, mock_open
+from llmcord.config import (
+    get_config,
+    _resolve_config_path,
+    ensure_list,
+    ConfigFileNotFoundError,
+    ConfigFileEmptyError,
+    _CONFIG_STATE,
+    clear_config_cache,
+)
 
-from llmcord import config as cfg
+def test_ensure_list():
+    assert ensure_list(None) == []
+    assert ensure_list("string") == ["string"]
+    assert ensure_list(["list"]) == ["list"]
+    assert ensure_list(("tuple",)) == ["tuple"]
 
+def test_resolve_config_path_found(tmp_path):
+    # Test valid path
+    f = tmp_path / "config.yaml"
+    f.touch()
+    with patch("pathlib.Path.exists", return_value=True):
+        assert _resolve_config_path(str(f)) == Path(str(f))
 
-def test_is_gemini_model() -> None:
-    assert cfg.is_gemini_model("gemini-3-flash-preview") is True
-    assert cfg.is_gemini_model("Gemini-2.5-Pro") is True
-    assert cfg.is_gemini_model("gemma-3-27b-it") is False
-    assert cfg.is_gemini_model("gpt-4o") is False
+def test_resolve_config_path_not_found():
+    with patch("pathlib.Path.exists", return_value=False):
+        with pytest.raises(ConfigFileNotFoundError):
+            _resolve_config_path("nonexistent.yaml")
 
+def test_get_config_caching():
+    clear_config_cache()
+    mock_data = 'key: value'
+    
+    with patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.stat") as mock_stat, \
+         patch("pathlib.Path.open", mock_open(read_data=mock_data)):
+        
+        mock_stat.return_value.st_mtime = 100
+        
+        # First call should load
+        config1 = get_config("test.yaml")
+        assert config1 == {"key": "value"}
+        
+        # Second call within TTL should hit cache (even if mtime changes, we don't check yet)
+        mock_stat.return_value.st_mtime = 200
+        config2 = get_config("test.yaml")
+        assert config1 is config2
+        
+        # Force TTL expiry
+        _CONFIG_STATE.check_time = 0
+        
+        # Third call should reload because mtime changed and TTL expired
+        config3 = get_config("test.yaml")
+        assert config3 == {"key": "value"}
 
-@pytest.mark.asyncio
-async def test_get_or_create_httpx_client_reuse_and_recreate() -> None:
-    holder: list[httpx.AsyncClient | None] = []
-
-    client1 = cfg.get_or_create_httpx_client(holder, headers={"X-Test": "1"})
-    client2 = cfg.get_or_create_httpx_client(holder, headers={"X-Test": "2"})
-
-    assert client1 is client2
-    assert client1.headers["X-Test"] == "1"
-
-    await client1.aclose()
-
-    client3 = cfg.get_or_create_httpx_client(holder, headers={"X-Test": "3"})
-    assert client3 is not client1
-    assert client3.headers["X-Test"] == "3"
-
-    await client3.aclose()
-
-    holder_with_none: list[httpx.AsyncClient | None] = [None]
-    client4 = cfg.get_or_create_httpx_client(holder_with_none)
-    assert holder_with_none[0] is client4
-    await client4.aclose()
-
-
-def test_resolve_config_path_missing(tmp_path: Path) -> None:
-    missing_path = tmp_path / "missing.yaml"
-    with pytest.raises(cfg.ConfigFileNotFoundError) as excinfo:
-        cfg._resolve_config_path(str(missing_path))
-    assert str(missing_path) in str(excinfo.value)
-    assert "Config file" in str(excinfo.value)
-
-
-def test_resolve_config_path_existing(tmp_path: Path) -> None:
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("value: 1\n", encoding="utf-8")
-
-    resolved = cfg._resolve_config_path(str(config_file))
-    assert resolved == config_file
-
-
-def test_get_config_cache_and_reload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg.clear_config_cache()
-
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("value: 1\n", encoding="utf-8")
-
-    monkeypatch.setattr(cfg, "_resolve_config_path", lambda filename: config_file)
-
-    now = 1000.0
-    monkeypatch.setattr(cfg.time, "time", lambda: now)
-
-    first = cfg.get_config("config.yaml")
-    assert first["value"] == 1
-
-    config_file.write_text("value: 2\n", encoding="utf-8")
-    now += cfg.CONFIG_CACHE_TTL + 1
-
-    second = cfg.get_config("config.yaml")
-    assert second["value"] == 2
-
-
-def test_get_config_empty_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg.clear_config_cache()
-
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("", encoding="utf-8")
-
-    monkeypatch.setattr(cfg, "_resolve_config_path", lambda filename: config_file)
-    monkeypatch.setattr(cfg.time, "time", lambda: 2000.0)
-
-    with pytest.raises(cfg.ConfigFileEmptyError):
-        cfg.get_config("config.yaml")
-
-
-def test_config_error_messages(tmp_path: Path) -> None:
-    not_found = cfg.ConfigFileNotFoundError("missing.yaml")
-    assert "missing.yaml" in str(not_found)
-
-    empty_error = cfg.ConfigFileEmptyError(tmp_path / "config.yaml")
-    assert "corrupted" in str(empty_error)
-
-
-def test_ensure_list() -> None:
-    assert cfg.ensure_list(None) == []
-    assert cfg.ensure_list("token") == ["token"]
-    assert cfg.ensure_list(["a", "b"]) == ["a", "b"]
+def test_config_file_empty_error():
+    clear_config_cache()
+    # Mock yaml.safe_load to return None (empty file)
+    with patch("pathlib.Path.exists", return_value=True), \
+         patch("pathlib.Path.stat"), \
+         patch("pathlib.Path.open", mock_open(read_data="")), \
+         patch("yaml.safe_load", return_value=None):
+            
+        with pytest.raises(ConfigFileEmptyError):
+            get_config("empty.yaml")

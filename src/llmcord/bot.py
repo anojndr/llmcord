@@ -19,7 +19,7 @@ from twscrape import API
 from llmcord.logic import utils  # noqa: F401
 from llmcord.services.database import get_bad_keys_db, init_bad_keys_db
 from llmcord.config import get_config
-from llmcord.logic.processor import process_message
+from llmcord.logic.message import process_message
 from llmcord.ui.views import PersistentResponseView, set_retry_handler
 
 # Configure logging
