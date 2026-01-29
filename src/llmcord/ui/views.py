@@ -6,7 +6,7 @@ import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from config import get_config, get_or_create_httpx_client
+from llmcord.config import get_config, get_or_create_httpx_client
 
 LOGGER = logging.getLogger(__name__)
 

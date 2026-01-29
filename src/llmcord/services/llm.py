@@ -13,7 +13,7 @@ from typing import Any
 
 import requests
 
-from config import is_gemini_model
+from llmcord.config import is_gemini_model
 
 HTTP_STATUS_OK = 200
 logger = logging.getLogger(__name__)
