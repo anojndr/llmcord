@@ -9,8 +9,11 @@ config.yaml
 __pycache__
 *.egg-info/
 .coverage
+<<<<<<< HEAD
 /.agent
 /.github
 /tmp
 *_cache/
 rules.md
+=======
+>>>>>>> 82b946a (Refactors message processing for modularity)
