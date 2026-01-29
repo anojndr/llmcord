@@ -1,7 +1,7 @@
 """Provide web search decision and provider integration.
 
 Supports both Tavily and Exa MCP as web search backends. Uses LiteLLM for
-unified LLM API access via shared litellm_utils.
+unified LLM API access via shared services.llm helpers.
 """
 import asyncio
 import json
@@ -12,9 +12,9 @@ from datetime import datetime
 import httpx
 import litellm
 
-from bad_keys import KeyRotator, get_bad_keys_db
-from config import ensure_list, get_config, get_or_create_httpx_client
-from litellm_utils import LiteLLMOptions, prepare_litellm_kwargs
+from llmcord.services.database import KeyRotator, get_bad_keys_db
+from llmcord.config import ensure_list, get_config, get_or_create_httpx_client
+from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 
 logger = logging.getLogger(__name__)
 

@@ -16,10 +16,10 @@ from discord.ext import commands
 from twscrape import API
 
 # Import utils to apply the twscrape patch
-import utils  # noqa: F401
-from bad_keys import get_bad_keys_db, init_bad_keys_db
-from config import get_config
-from message_handler import process_message
+from llmcord.logic import utils  # noqa: F401
+from llmcord.services.database import get_bad_keys_db, init_bad_keys_db
+from llmcord.config import get_config
+from llmcord.logic.processor import process_message
 
 # Configure logging
 logging.basicConfig(

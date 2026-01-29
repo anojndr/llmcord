@@ -1,6 +1,6 @@
 """Message handling logic for llmcord Discord bot.
 
-Uses LiteLLM for unified LLM API access via shared litellm_utils.
+Uses LiteLLM for unified LLM API access via shared services.llm helpers.
 """
 # ruff: noqa: E501
 import asyncio
@@ -25,8 +25,8 @@ from PIL import Image
 from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from bad_keys import get_bad_keys_db
-from config import (
+from llmcord.services.database import get_bad_keys_db
+from llmcord.config import (
     BROWSER_HEADERS,
     EDIT_DELAY_SECONDS,
     EMBED_COLOR_COMPLETE,
@@ -40,16 +40,16 @@ from config import (
     get_config,
     is_gemini_model,
 )
-from litellm_utils import LiteLLMOptions, prepare_litellm_kwargs
-from models import MsgNode
-from views import (
+from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
+from llmcord.models import MsgNode
+from llmcord.ui.views import (
     ResponseView,
     SourceButton,
     SourceView,
     TavilySourceButton,
     _has_grounding_data,
 )
-from web_search import (
+from llmcord.services.search import (
     decide_web_search,
     get_current_datetime_strings,
     perform_tavily_research,
