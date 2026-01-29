@@ -1,5 +1,6 @@
 """Discord UI components (Views and Buttons) for llmcord."""
 import logging
+from dataclasses import dataclass
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
 import discord
@@ -7,6 +8,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from llmcord.config import get_config, get_or_create_httpx_client
+from llmcord.services.database import get_bad_keys_db
 
 LOGGER = logging.getLogger(__name__)
 
@@ -14,6 +16,52 @@ LOGGER = logging.getLogger(__name__)
 _textis_client_holder: list[httpx.AsyncClient] = []
 HTTP_OK = 200
 URL_MAX_LENGTH = 150
+
+VIEW_RESPONSE_BETTER_ID = "llmcord:response:better"
+RETRY_RESPONSE_ID = "llmcord:response:retry"
+GROUNDING_SOURCES_ID = "llmcord:response:sources:grounding"
+TAVILY_SOURCES_ID = "llmcord:response:sources:tavily"
+
+RetryHandler = Callable[[discord.Interaction, int, int], Awaitable[None]]
+_retry_handler: RetryHandler | None = None
+
+
+def set_retry_handler(handler: RetryHandler | None) -> None:
+    """Set the global retry handler used by persistent buttons."""
+    global _retry_handler
+    _retry_handler = handler
+
+
+@dataclass(slots=True)
+class ResponseData:
+    full_response: str | None
+    grounding_metadata: object | None
+    tavily_metadata: Mapping[str, object] | None
+    request_message_id: int | None
+    request_user_id: int | None
+
+
+def _get_response_data(message_id: int) -> ResponseData:
+    db = get_bad_keys_db()
+    (
+        full_response,
+        grounding_metadata,
+        tavily_metadata,
+        request_message_id,
+        request_user_id,
+    ) = db.get_message_response_data(str(message_id))
+
+    return ResponseData(
+        full_response=full_response,
+        grounding_metadata=grounding_metadata,
+        tavily_metadata=tavily_metadata,
+        request_message_id=int(request_message_id)
+        if request_message_id and str(request_message_id).isdigit()
+        else None,
+        request_user_id=int(request_user_id)
+        if request_user_id and str(request_user_id).isdigit()
+        else None,
+    )
 
 
 def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
@@ -245,21 +293,27 @@ class RetryButton(discord.ui.Button):
 
     def __init__(
         self,
-        callback_fn: Callable[[], Awaitable[None]],
-        user_id: int,
+        callback_fn: Callable[[], Awaitable[None]] | None = None,
+        user_id: int | None = None,
     ) -> None:
         """Initialize a retry button for the given user."""
         super().__init__(
             style=discord.ButtonStyle.secondary,
             label="Retry with stable model",
             emoji="🔄",
+            custom_id=RETRY_RESPONSE_ID,
         )
         self.callback_fn = callback_fn
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Retry the generation when allowed for the requesting user."""
-        if interaction.user.id != self.user_id:
+        response_data = None
+        if self.callback_fn is None or self.user_id is None:
+            response_data = _get_response_data(interaction.message.id)
+            self.user_id = response_data.request_user_id
+
+        if not self.user_id or interaction.user.id != self.user_id:
             await interaction.response.send_message(
                 "❌ You cannot retry this message.",
                 ephemeral=True,
@@ -267,7 +321,81 @@ class RetryButton(discord.ui.Button):
             return
 
         await interaction.response.defer()
-        await self.callback_fn()
+
+        if self.callback_fn:
+            await self.callback_fn()
+            return
+
+        if not _retry_handler:
+            await interaction.followup.send(
+                "❌ Retry is unavailable right now. Please try again later.",
+                ephemeral=True,
+            )
+            return
+
+        if not response_data:
+            response_data = _get_response_data(interaction.message.id)
+
+        if not response_data.request_message_id or not response_data.request_user_id:
+            await interaction.followup.send(
+                "❌ Missing retry context for this message.",
+                ephemeral=True,
+            )
+            return
+
+        await _retry_handler(
+            interaction,
+            response_data.request_message_id,
+            response_data.request_user_id,
+        )
+
+
+class ViewResponseBetterButton(discord.ui.Button):
+    """Button to upload and view the full response."""
+
+    def __init__(self, full_response: str | None = None) -> None:
+        super().__init__(
+            label="View Response Better",
+            style=discord.ButtonStyle.secondary,
+            emoji="📄",
+            custom_id=VIEW_RESPONSE_BETTER_ID,
+        )
+        self.full_response = full_response
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Upload the response to text.is and share the link."""
+        await interaction.response.defer(ephemeral=True)
+
+        full_response = self.full_response
+        if not full_response:
+            response_data = _get_response_data(interaction.message.id)
+            full_response = response_data.full_response
+
+        if not full_response:
+            await interaction.followup.send(
+                "❌ Missing response content for this message.",
+                ephemeral=True,
+            )
+            return
+
+        paste_url = await upload_to_textis(full_response)
+
+        if paste_url:
+            embed = discord.Embed(
+                title="View Response",
+                description=(
+                    "Your response has been uploaded for better viewing:\n\n"
+                    f"**[Click here to view]({paste_url})**"
+                ),
+                color=discord.Color.green(),
+            )
+            embed.set_footer(text="Powered by text.is")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(
+                "❌ Failed to upload response to text.is. Please try again later.",
+                ephemeral=True,
+            )
 
 
 class ResponseView(discord.ui.View):
@@ -287,6 +415,9 @@ class ResponseView(discord.ui.View):
         self.metadata = metadata
         self.tavily_metadata = tavily_metadata
 
+        # View Response Better button (always present)
+        self.add_item(ViewResponseBetterButton(full_response))
+
         # Add Retry button if callback is provided
         if retry_callback and user_id:
             self.add_item(RetryButton(retry_callback, user_id))
@@ -301,37 +432,16 @@ class ResponseView(discord.ui.View):
         ):
             self.add_item(TavilySourceButton(tavily_metadata))
 
-    @discord.ui.button(
-        label="View Response Better",
-        style=discord.ButtonStyle.secondary,
-        emoji="📄",
-    )
-    async def view_response_better(
-        self,
-        interaction: discord.Interaction,
-        _button: discord.ui.Button,
-    ) -> None:
-        """Upload the response to text.is and share the link."""
-        await interaction.response.defer(ephemeral=True)
 
-        paste_url = await upload_to_textis(self.full_response)
+class PersistentResponseView(discord.ui.View):
+    """Persistent view to handle response buttons after restarts."""
 
-        if paste_url:
-            embed = discord.Embed(
-                title="View Response",
-                description=(
-                    "Your response has been uploaded for better viewing:\n\n"
-                    f"**[Click here to view]({paste_url})**"
-                ),
-                color=discord.Color.green(),
-            )
-            embed.set_footer(text="Powered by text.is")
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        else:
-            await interaction.followup.send(
-                "❌ Failed to upload response to text.is. Please try again later.",
-                ephemeral=True,
-            )
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+        self.add_item(ViewResponseBetterButton())
+        self.add_item(RetryButton())
+        self.add_item(SourceButton())
+        self.add_item(TavilySourceButton())
 
 
 def add_chunked_embed_field(
@@ -413,32 +523,61 @@ def build_grounding_sources_embed(metadata: object) -> discord.Embed:
 class SourceButton(discord.ui.Button):
     """Button to show sources from grounding metadata."""
 
-    def __init__(self, metadata: object) -> None:
+    def __init__(self, metadata: object | None = None) -> None:
         """Initialize the sources button."""
-        super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary)
+        super().__init__(
+            label="Show Sources",
+            style=discord.ButtonStyle.secondary,
+            custom_id=GROUNDING_SOURCES_ID,
+        )
         self.metadata = metadata
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Show sources in an ephemeral embed."""
-        embed = build_grounding_sources_embed(self.metadata)
+        metadata = self.metadata
+        if metadata is None:
+            response_data = _get_response_data(interaction.message.id)
+            metadata = response_data.grounding_metadata
+
+        if not metadata:
+            await interaction.response.send_message(
+                "❌ No source information available for this message.",
+                ephemeral=True,
+            )
+            return
+
+        embed = build_grounding_sources_embed(metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class TavilySourceButton(discord.ui.Button):
     """Button to show sources from web search (supports Tavily and Exa)."""
 
-    def __init__(self, search_metadata: Mapping[str, object]) -> None:
+    def __init__(self, search_metadata: Mapping[str, object] | None = None) -> None:
         """Initialize the web-search sources button."""
         super().__init__(
             label="Show Sources",
             style=discord.ButtonStyle.secondary,
             emoji="🔍",
+            custom_id=TAVILY_SOURCES_ID,
         )
         self.search_metadata = search_metadata
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Show web-search sources in a paginated embed."""
-        view = TavilySourcesView(self.search_metadata)
+        search_metadata = self.search_metadata
+        if search_metadata is None:
+            response_data = _get_response_data(interaction.message.id)
+            search_metadata = response_data.tavily_metadata
+
+        if not search_metadata:
+            await interaction.response.send_message(
+                "❌ No web search sources available for this message.",
+                ephemeral=True,
+            )
+            return
+
+        view = TavilySourcesView(search_metadata)
         embed = view.build_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -657,12 +796,28 @@ class SourceView(discord.ui.View):
         super().__init__(timeout=None)
         self.metadata = metadata
 
-    @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(
+        label="Show Sources",
+        style=discord.ButtonStyle.secondary,
+        custom_id=GROUNDING_SOURCES_ID,
+    )
     async def show_sources(
         self,
         interaction: discord.Interaction,
         _button: discord.ui.Button,
     ) -> None:
         """Show sources for legacy responses."""
-        embed = build_grounding_sources_embed(self.metadata)
+        metadata = self.metadata
+        if metadata is None:
+            response_data = _get_response_data(interaction.message.id)
+            metadata = response_data.grounding_metadata
+
+        if not metadata:
+            await interaction.response.send_message(
+                "❌ No source information available for this message.",
+                ephemeral=True,
+            )
+            return
+
+        embed = build_grounding_sources_embed(metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)

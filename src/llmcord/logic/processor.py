@@ -47,6 +47,8 @@ from llmcord.ui.views import (
     SourceButton,
     SourceView,
     TavilySourceButton,
+    _get_grounding_chunks,
+    _get_grounding_queries,
     _has_grounding_data,
 )
 from llmcord.services.search import (
@@ -1986,9 +1988,36 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
         msg_nodes[response_msg.id].text = "".join(response_contents)
         msg_nodes[response_msg.id].lock.release()
 
+    full_response = "".join(response_contents) if response_contents else ""
+
+    grounding_payload = None
+    if grounding_metadata and _has_grounding_data(grounding_metadata):
+        grounding_payload = {
+            "web_search_queries": _get_grounding_queries(grounding_metadata),
+            "grounding_chunks": [
+                {"web": {"title": chunk.get("title", ""), "uri": chunk.get("uri", "")}}
+                for chunk in _get_grounding_chunks(grounding_metadata)
+            ],
+        }
+
+    # Persist response payloads so buttons work after restarts
+    if response_msgs and response_contents:
+        last_msg_index = len(response_msgs) - 1
+        if last_msg_index < len(response_msgs):
+            try:
+                get_bad_keys_db().save_message_response_data(
+                    message_id=str(response_msgs[last_msg_index].id),
+                    request_message_id=str(new_msg.id),
+                    request_user_id=str(new_msg.author.id),
+                    full_response=full_response,
+                    grounding_metadata=grounding_payload,
+                    tavily_metadata=tavily_metadata,
+                )
+            except Exception:
+                logger.exception("Failed to persist response data")
+
     # Update the last message with ResponseView for "View Response Better" button
     if not use_plain_responses and response_msgs and response_contents:
-        full_response = "".join(response_contents)
         response_view = ResponseView(
             full_response,
             grounding_metadata,
