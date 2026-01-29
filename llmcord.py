@@ -1,11 +1,16 @@
-"""llmcord - A Discord bot for LLM interactions.
+"""Root entry point for running llmcord without installing the package."""
+from __future__ import annotations
 
-Main entry point.
-"""
 import asyncio
 import contextlib
+import sys
+from pathlib import Path
 
-from bot import main
+SRC_PATH = Path(__file__).resolve().parent / "src"
+if SRC_PATH.is_dir():
+    sys.path.insert(0, str(SRC_PATH))
+
+from llmcord.runtime import main  # noqa: E402
 
 with contextlib.suppress(KeyboardInterrupt):
     asyncio.run(main())

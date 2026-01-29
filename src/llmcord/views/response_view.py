@@ -1,25 +1,32 @@
-"""Discord UI components (Views and Buttons) for llmcord."""
+"""Response view and web-search source views."""
+
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 
 import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from config import get_config, get_or_create_httpx_client
+from llmcord.config import get_config, get_or_create_httpx_client
+
+from .grounding import SourceButton, _has_grounding_data, add_chunked_embed_field
 
 LOGGER = logging.getLogger(__name__)
 
-# Shared httpx client for text.is uploads - uses factory pattern for DRY
-_textis_client_holder: list[httpx.AsyncClient] = []
+# Shared httpx clients for text.is uploads - uses factory pattern for DRY
+_textis_proxy_client_holder: list[httpx.AsyncClient] = []
+_textis_direct_client_holder: list[httpx.AsyncClient] = []
 HTTP_OK = 200
 URL_MAX_LENGTH = 150
 
 
 def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
     """Get or create the shared text.is httpx client using the DRY factory pattern."""
+    client_holder = (
+        _textis_proxy_client_holder if proxy_url else _textis_direct_client_holder
+    )
     return get_or_create_httpx_client(
-        _textis_client_holder,
+        client_holder,
         timeout=30.0,
         connect_timeout=10.0,
         max_connections=10,
@@ -29,215 +36,105 @@ def _get_textis_client(proxy_url: str | None = None) -> httpx.AsyncClient:
     )
 
 
+async def _upload_to_textis_with_client(
+    client: httpx.AsyncClient,
+    text: str,
+) -> str | None:
+    """Upload text to text.is using the provided client."""
+    # Get the CSRF token from the main page
+    response = await client.get("https://text.is/", timeout=30)
+
+    # Extract CSRF token from the form
+    soup = BeautifulSoup(response.text, "lxml")  # lxml is faster than html.parser
+    csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
+    if not csrf_input:
+        # Debug: log a snippet of the response to help diagnose
+        LOGGER.error("Could not find CSRF token on text.is")
+        LOGGER.debug(
+            "Response status: %s, Content preview: %s",
+            response.status_code,
+            response.text[:500],
+        )
+        return None
+
+    csrf_token = csrf_input.get("value")
+
+    # Get cookies from the response
+    cookies = response.cookies
+
+    # POST the text content
+    form_data = {
+        "csrfmiddlewaretoken": csrf_token,
+        "text": text,
+    }
+
+    headers = {
+        "Referer": "https://text.is/",
+        "Origin": "https://text.is",
+    }
+
+    post_response = await client.post(
+        "https://text.is/",
+        data=form_data,
+        headers=headers,
+        cookies=cookies,
+        timeout=30,
+    )
+
+    # The response should be a redirect (302) to the paste URL
+    if post_response.status_code in (301, 302, 303, 307, 308):
+        paste_url = post_response.headers.get("Location")
+        if paste_url:
+            # Handle relative URLs
+            if paste_url.startswith("/"):
+                paste_url = f"https://text.is{paste_url}"
+            return paste_url
+
+    # If we got a 200, the paste might have been created and we're on the page
+    if post_response.status_code == HTTP_OK:
+        # Check if the URL changed (we might be on the paste page)
+        final_url = str(post_response.url)
+        if final_url != "https://text.is/" and "text.is/" in final_url:
+            return final_url
+
+    LOGGER.error(
+        "Unexpected response from text.is: %s",
+        post_response.status_code,
+    )
+
+    return None
+
+
 async def upload_to_textis(text: str) -> str | None:
     """Upload text to text.is and return the paste URL.
 
     Returns None if upload fails.
     """
+    # Proxy configuration from config (optional)
+    config = get_config()
+    proxy_url = config.get("proxy_url") or None
+
     try:
-        # Proxy configuration from config (optional)
-        config = get_config()
-        proxy_url = config.get("proxy_url") or None
-
         client = _get_textis_client(proxy_url)
-
-        # Get the CSRF token from the main page
-        response = await client.get("https://text.is/", timeout=30)
-
-        # Extract CSRF token from the form
-        soup = BeautifulSoup(response.text, "lxml")  # lxml is faster than html.parser
-        csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
-        if not csrf_input:
-            # Debug: log a snippet of the response to help diagnose
-            LOGGER.error("Could not find CSRF token on text.is")
-            LOGGER.debug(
-                "Response status: %s, Content preview: %s",
-                response.status_code,
-                response.text[:500],
+        return await _upload_to_textis_with_client(client, text)
+    except httpx.ConnectError as exc:
+        if proxy_url:
+            LOGGER.warning(
+                "Proxy connection to text.is failed; retrying without proxy: %s",
+                exc,
             )
-            return None
+            try:
+                direct_client = _get_textis_client(None)
+                return await _upload_to_textis_with_client(direct_client, text)
+            except Exception:
+                LOGGER.exception("Error uploading to text.is without proxy")
+                return None
 
-        csrf_token = csrf_input.get("value")
-
-        # Get cookies from the response
-        cookies = response.cookies
-
-        # POST the text content
-        form_data = {
-            "csrfmiddlewaretoken": csrf_token,
-            "text": text,
-        }
-
-        headers = {
-            "Referer": "https://text.is/",
-            "Origin": "https://text.is",
-        }
-
-        post_response = await client.post(
-            "https://text.is/",
-            data=form_data,
-            headers=headers,
-            cookies=cookies,
-            timeout=30,
-        )
-
-        # The response should be a redirect (302) to the paste URL
-        if post_response.status_code in (301, 302, 303, 307, 308):
-            paste_url = post_response.headers.get("Location")
-            if paste_url:
-                # Handle relative URLs
-                if paste_url.startswith("/"):
-                    paste_url = f"https://text.is{paste_url}"
-                return paste_url
-
-        # If we got a 200, the paste might have been created and we're on the page
-        if post_response.status_code == HTTP_OK:
-            # Check if the URL changed (we might be on the paste page)
-            final_url = str(post_response.url)
-            if final_url != "https://text.is/" and "text.is/" in final_url:
-                return final_url
-
-        LOGGER.error(
-            "Unexpected response from text.is: %s",
-            post_response.status_code,
-        )
+        LOGGER.exception("Error uploading to text.is")
     except Exception:
         LOGGER.exception("Error uploading to text.is")
-    else:
-        return None
 
     return None
-
-
-def _normalize_queries(value: object) -> list[str]:
-    if isinstance(value, list):
-        return [str(query) for query in value if query]
-    if value:
-        return [str(value)]
-    return []
-
-
-def _extract_queries_from_mapping(mapping: Mapping[str, object]) -> list[str]:
-    for key in ("web_search_queries", "searchQueries", "webSearchQueries"):
-        value = mapping.get(key)
-        if value:
-            return _normalize_queries(value)
-    return []
-
-
-def _get_grounding_queries(metadata: object | None) -> list[str]:
-    """Extract web search queries from grounding metadata.
-
-    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
-    """
-    if metadata is None:
-        return []
-
-    # Handle list format (LiteLLM streaming returns list of grounding results)
-    if isinstance(metadata, list):
-        queries = []
-        for item in metadata:
-            if isinstance(item, Mapping):
-                queries.extend(_extract_queries_from_mapping(item))
-        return queries
-
-    # Handle dict format (LiteLLM)
-    if isinstance(metadata, Mapping):
-        return _extract_queries_from_mapping(metadata)
-
-    # Handle object format (GenAI GroundingMetadata)
-    if hasattr(metadata, "web_search_queries"):
-        return _normalize_queries(getattr(metadata, "web_search_queries", None))
-
-    return []
-
-
-def _extract_chunks_from_mapping(mapping: Mapping[str, object]) -> list[object]:
-    for key in ("grounding_chunks", "groundingChunks", "chunks"):
-        value = mapping.get(key)
-        if value:
-            if isinstance(value, list):
-                return list(value)
-            return [value]
-    return []
-
-
-def _normalize_chunk(chunk: object) -> dict[str, str] | None:
-    if isinstance(chunk, Mapping):
-        web = chunk.get("web")
-        if isinstance(web, Mapping):
-            title = str(web.get("title") or "")
-            uri = str(web.get("uri") or "")
-            if title or uri:
-                return {"title": title, "uri": uri}
-        title = str(chunk.get("title") or "")
-        uri = str(chunk.get("uri") or "")
-        if title or uri:
-            return {"title": title, "uri": uri}
-        return None
-
-    web = getattr(chunk, "web", None)
-    if web:
-        title = str(getattr(web, "title", "") or "")
-        uri = str(getattr(web, "uri", "") or "")
-        if title or uri:
-            return {"title": title, "uri": uri}
-    return None
-
-
-def _normalize_chunks(chunks: Sequence[object]) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
-    for chunk in chunks:
-        result = _normalize_chunk(chunk)
-        if result:
-            normalized.append(result)
-    return normalized
-
-
-def _get_grounding_chunks(metadata: object | None) -> list[dict[str, str]]:
-    """Extract grounding chunks from grounding metadata.
-
-    Returns list of dicts with 'title' and 'uri' keys.
-    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
-    """
-    if metadata is None:
-        return []
-
-    # Handle list format (LiteLLM streaming returns list of grounding results)
-    if isinstance(metadata, list):
-        result: list[dict[str, str]] = []
-        for item in metadata:
-            if isinstance(item, Mapping):
-                chunks = _extract_chunks_from_mapping(item)
-                result.extend(_normalize_chunks(chunks))
-        return result
-
-    # Handle dict format (LiteLLM)
-    if isinstance(metadata, Mapping):
-        chunks = _extract_chunks_from_mapping(metadata)
-        return _normalize_chunks(chunks)
-
-    # Handle object format (GenAI GroundingMetadata)
-    if hasattr(metadata, "grounding_chunks"):
-        chunks = getattr(metadata, "grounding_chunks", []) or []
-        return _normalize_chunks(chunks)
-
-    return []
-
-
-def _has_grounding_data(metadata: object | None) -> bool:
-    """Check if metadata has any grounding data (queries or chunks).
-
-    Used to determine if the Show Sources button should be displayed.
-    Only returns True if actual grounding queries or chunks exist.
-    """
-    if metadata is None:
-        return False
-
-    return bool(_get_grounding_queries(metadata)) or bool(
-        _get_grounding_chunks(metadata),
-    )
-
 
 
 class RetryButton(discord.ui.Button):
@@ -328,96 +225,6 @@ class ResponseView(discord.ui.View):
                 "❌ Failed to upload response to text.is. Please try again later.",
                 ephemeral=True,
             )
-
-
-def add_chunked_embed_field(
-    embed: discord.Embed,
-    items: list[str],
-    base_name: str,
-    field_limit: int = 1024,
-) -> None:
-    """Add items to embed fields, splitting into multiple fields if needed.
-
-    Args:
-        embed: The Discord embed to add fields to
-        items: List of strings to add
-        base_name: Base name for the field (e.g., "Sources", "Search Results")
-        field_limit: Maximum characters per field (default: 1024)
-
-    """
-    if not items:
-        return
-
-    current_chunk = ""
-    field_count = 1
-
-    for item in items:
-        if len(current_chunk) + len(item) + 1 > field_limit:
-            field_name = (
-                f"{base_name} ({field_count})" if field_count > 1 else base_name
-            )
-            embed.add_field(name=field_name, value=current_chunk, inline=False)
-            current_chunk = item
-            field_count += 1
-        else:
-            current_chunk = (current_chunk + "\n" + item) if current_chunk else item
-
-    if current_chunk:
-        field_name = f"{base_name} ({field_count})" if field_count > 1 else base_name
-        embed.add_field(name=field_name, value=current_chunk, inline=False)
-
-
-def build_grounding_sources_embed(metadata: object) -> discord.Embed:
-    """Build a Discord embed showing sources from grounding metadata.
-
-    Args:
-        metadata: Grounding metadata (either GenAI GroundingMetadata or LiteLLM dict)
-
-    Returns:
-        A Discord Embed with the formatted sources
-
-    """
-    embed = discord.Embed(title="Sources", color=discord.Color.blue())
-
-    queries = _get_grounding_queries(metadata)
-    if queries:
-        embed.add_field(
-            name="Search Queries",
-            value="\n".join(f"• {q}" for q in queries),
-            inline=False,
-        )
-
-    chunks = _get_grounding_chunks(metadata)
-    if chunks:
-        sources = []
-        for i, chunk in enumerate(chunks):
-            if chunk.get("uri"):
-                sources.append(f"{i+1}. [{chunk['title']}]({chunk['uri']})")
-        add_chunked_embed_field(embed, sources, "Search Results")
-
-    # Handle edge case where no content was added to the embed
-    if not embed.fields:
-        embed.add_field(
-            name="Sources",
-            value="No source information available.",
-            inline=False,
-        )
-
-    return embed
-
-
-class SourceButton(discord.ui.Button):
-    """Button to show sources from grounding metadata."""
-
-    def __init__(self, metadata: object) -> None:
-        """Initialize the sources button."""
-        super().__init__(label="Show Sources", style=discord.ButtonStyle.secondary)
-        self.metadata = metadata
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Show sources in an ephemeral embed."""
-        embed = build_grounding_sources_embed(self.metadata)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 class TavilySourceButton(discord.ui.Button):
@@ -643,22 +450,3 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
                 "❌ Please enter a valid number.",
                 ephemeral=True,
             )
-
-
-class SourceView(discord.ui.View):
-    """Legacy view for backwards compatibility - now uses ResponseView."""
-
-    def __init__(self, metadata: object) -> None:
-        """Initialize the legacy sources view."""
-        super().__init__(timeout=None)
-        self.metadata = metadata
-
-    @discord.ui.button(label="Show Sources", style=discord.ButtonStyle.secondary)
-    async def show_sources(
-        self,
-        interaction: discord.Interaction,
-        _button: discord.ui.Button,
-    ) -> None:
-        """Show sources for legacy responses."""
-        embed = build_grounding_sources_embed(self.metadata)
-        await interaction.response.send_message(embed=embed, ephemeral=True)

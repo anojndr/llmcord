@@ -34,4 +34,3 @@ class MsgNode:
     lens_results: str | None = None
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-

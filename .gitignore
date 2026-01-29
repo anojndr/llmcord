@@ -1,17 +1,50 @@
-# This gitignore is a whitelist. Inspired by https://rgbcu.be/blog/gitignore
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
 
-*
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
 
-!.gitignore
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+*.log
 
-!*.md
-!*.py
-!tests/
-!tests/**/*.py
+# IDE/editor settings
+.vscode/
+.idea/
 
-!pytest.ini
+# GitHub meta
+.github/
 
-!Dockerfile
-!config-example.yaml
-!docker-compose.yaml
-!requirements.txt
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local config and secrets
+config.yaml
+.env
+.env.*
+
+# SQLite and local data
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+bad_keys.db-info
+bad_keys.db-shm
+bad_keys.db-wal
+
+# Build artifacts
+dist/
+build/
+*.egg-info/

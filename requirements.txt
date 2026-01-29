@@ -12,5 +12,3 @@ libsql
 tiktoken
 requests
 pymupdf4llm
-pytest
-pytest-asyncio

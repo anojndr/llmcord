@@ -72,12 +72,12 @@ Or run local models with:
 
 ## Architecture overview
 
-- **Entry point:** [llmcord.py](llmcord.py) starts the bot via [bot.py](bot.py).
-- **Discord layer:** [bot.py](bot.py) wires slash commands, events, and health check server.
-- **Message pipeline:** [message_handler.py](message_handler.py) builds conversation context, fetches attachments, runs web search, and streams model responses.
-- **Provider glue:** [litellm_utils.py](litellm_utils.py) centralizes LiteLLM provider setup (Gemini, GitHub Copilot, OpenAI-compatible).
-- **Persistence:** [bad_keys.py](bad_keys.py) tracks bad API keys and user model preferences in Turso/libSQL or local SQLite.
-- **UI components:** [views.py](views.py) renders the “View Response Better” and “Show Sources” buttons.
+- **Entry point:** [llmcord.py](llmcord.py) starts the bot via the package entry at [src/llmcord/__main__.py](src/llmcord/__main__.py).
+- **Discord layer:** The [bot package](src/llmcord/bot) wires slash commands, events, and the health check server.
+- **Message pipeline:** The [message handler package](src/llmcord/message_handler) builds conversation context, fetches attachments, runs web search, and streams model responses.
+- **Provider glue:** The [LiteLLM utilities](src/llmcord/litellm_utils) centralize provider setup (Gemini, GitHub Copilot, OpenAI-compatible).
+- **Persistence:** The [bad keys package](src/llmcord/bad_keys) tracks bad API keys and user model preferences in Turso/libSQL or local SQLite.
+- **UI components:** The [views package](src/llmcord/views) renders the “View Response Better” and “Show Sources” buttons.
 
 ## Commands
 
@@ -106,7 +106,7 @@ You can lock a channel to a specific model via `channel_model_overrides` in conf
 - Gemini models can also accept audio/video files.
 
 ### Health check
-A small HTTP server responds on `HOST`/`PORT` (defaults: `127.0.0.1:8000`) for liveness checks.
+A small HTTP server responds on `health_check_host`/`health_check_port` from config (defaults: `127.0.0.1:8000`) for liveness checks.
 
 ## Instructions
 
@@ -157,9 +157,13 @@ A small HTTP server responds on `HOST`/`PORT` (defaults: `127.0.0.1:8000`) for l
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
 
 4. Run the bot:
-   ```bash
-   python llmcord.py
-   ```
+  ```bash
+  python llmcord.py
+  ```
+  Or with the package entry point:
+  ```bash
+  python -m llmcord
+  ```
 
 ## Development
 

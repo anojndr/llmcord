@@ -1,66 +1,17 @@
-"""Discord bot setup, commands, and event handlers for llmcord."""
-import asyncio
+"""Slash commands and related helpers for the bot."""
 import logging
-import os
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
-import asyncpraw
 import discord
-import httpx
-from aiohttp import web
 from discord.app_commands import Choice
-from discord.ext import commands
-from twscrape import API
 
-# Import utils to apply the twscrape patch
-import utils  # noqa: F401
-from bad_keys import get_bad_keys_db, init_bad_keys_db
-from config import get_config
-from message_handler import process_message
+from llmcord.bad_keys import get_bad_keys_db
+from llmcord.bot.app import config, discord_bot, get_channel_locked_model
+from llmcord.config import get_config
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s: %(message)s",
-)
 logger = logging.getLogger(__name__)
-
-# Global state
-config = get_config()
-curr_model_lock = asyncio.Lock()  # Lock for thread-safe model operations
-
-msg_nodes = {}
-msg_nodes_lock = asyncio.Lock()
-
-# Initialize clients
-intents = discord.Intents.default()
-intents.message_content = True
-status_message = (
-    config.get("status_message") or "github.com/jakobdylanc/llmcord"
-)[:128]
-activity = discord.CustomActivity(name=status_message)
-discord_bot = commands.Bot(
-    intents=intents,
-    activity=activity,
-    command_prefix=None,
-    allowed_mentions=discord.AllowedMentions(replied_user=False),
-)
-
-httpx_client = httpx.AsyncClient()
-twitter_api = API(proxy=config.get("twitter_proxy"))
-
-if config.get("reddit_client_id") and config.get("reddit_client_secret"):
-    reddit_client = asyncpraw.Reddit(
-        client_id=config.get("reddit_client_id"),
-        client_secret=config.get("reddit_client_secret"),
-        user_agent=config.get("reddit_user_agent", "llmcord:v1.0 (by /u/llmcord)"),
-    )
-else:
-    reddit_client = None
-
 
 # =============================================================================
 # DRY Helper Functions for Slash Commands
@@ -86,22 +37,6 @@ class ModelAutocompleteHandlers:
 
     get_current: GetModelFn
     get_default: GetDefaultFn
-
-
-def get_channel_locked_model(channel_id: int) -> str | None:
-    """Check whether a channel has a locked model override.
-
-    Args:
-        channel_id: The Discord channel ID to check.
-
-    Returns:
-        The model name if the channel has a locked model, or None otherwise.
-
-    """
-    overrides = config.get("channel_model_overrides", {})
-    # Convert channel_id to string for comparison since YAML may parse keys as ints
-    # or strings.
-    return overrides.get(channel_id) or overrides.get(str(channel_id))
 
 
 async def _handle_model_switch(
@@ -371,115 +306,3 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
         model_count,
         decider_count,
     )
-
-
-@discord_bot.event
-async def on_ready() -> None:
-    """Log readiness and sync slash commands."""
-    # Generate bot invite link using the bot's application ID
-    client_id = discord_bot.user.id
-    invite_url = (
-        "https://discord.com/oauth2/authorize?client_id="
-        f"{client_id}&permissions=412317191168&scope=bot"
-    )
-    logger.info("\n\nBOT INVITE URL:\n%s\n", invite_url)
-
-    await discord_bot.tree.sync()
-
-    if twitter_accounts := config.get("twitter_accounts"):
-        for acc in twitter_accounts:
-            if await twitter_api.pool.get_account(acc["username"]):
-                continue
-            await twitter_api.pool.add_account(
-                acc["username"],
-                acc["password"],
-                acc["email"],
-                acc["email_password"],
-                cookies=acc.get("cookies"),
-            )
-        await twitter_api.pool.login_all()
-
-
-@discord_bot.event
-async def on_message(new_msg: discord.Message) -> None:
-    """Handle inbound Discord messages."""
-    # Check if this channel has a locked model override
-    channel_id = new_msg.channel.id
-    locked_model = get_channel_locked_model(channel_id)
-
-    if locked_model:
-        # Use the channel's locked model (ignore user preference)
-        if locked_model not in config.get("models", {}):
-            logger.error(
-                "Channel %s has locked model '%s' but it's not in config.yaml models",
-                channel_id,
-                locked_model,
-            )
-            return
-        user_model = locked_model
-    else:
-        # Get user's model preference from database (or use default)
-        user_id = str(new_msg.author.id)
-        db = get_bad_keys_db()
-        user_model = db.get_user_model(user_id)
-
-        # Fall back to default model if user hasn't set a preference
-        # or if their saved model is no longer valid.
-        default_model = next(iter(config.get("models", {})), None)
-        if not default_model:
-            logger.error("No models configured in config.yaml")
-            return
-
-        if user_model is None or user_model not in config.get("models", {}):
-            user_model = default_model
-
-    # Create a reference list to pass user's model by reference
-    curr_model_ref = [user_model]
-
-    try:
-        await process_message(
-            new_msg=new_msg,
-            discord_bot=discord_bot,
-            httpx_client=httpx_client,
-            twitter_api=twitter_api,
-            reddit_client=reddit_client,
-            msg_nodes=msg_nodes,
-            curr_model_lock=curr_model_lock,
-            curr_model_ref=curr_model_ref,
-        )
-    except Exception as exc:
-        logger.exception("Error processing message")
-        # Try to notify the user about the error
-        with suppress(Exception):
-            await new_msg.reply(
-                "❌ An internal error occurred while processing your request.\n"
-                f"Error: {exc}",
-            )
-
-
-async def health_check(_request: web.Request) -> web.Response:
-    """Return a basic liveness response."""
-    return web.Response(text="I'm alive")
-
-
-async def start_server() -> None:
-    """Start a small HTTP health-check server."""
-    app = web.Application()
-    app.add_routes([web.get("/", health_check)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", "8000"))
-    host = os.environ.get("HOST", "127.0.0.1")
-    site = web.TCPSite(runner, host, port)
-    await site.start()
-
-
-async def main() -> None:
-    """Initialize dependencies and start background services."""
-    # Initialize Turso database with credentials from config
-    turso_url = config.get("turso_database_url")
-    turso_token = config.get("turso_auth_token")
-    init_bad_keys_db(db_url=turso_url, auth_token=turso_token)
-
-    await asyncio.gather(start_server(), discord_bot.start(config["bot_token"]))
-
