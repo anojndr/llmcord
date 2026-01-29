@@ -294,7 +294,7 @@ async def perform_yandex_lookup(
     return lens_results, twitter_content
 
 
-async def fetch_yt_transcript(
+async def extract_youtube_transcript(
     video_id: str,
     httpx_client: httpx.AsyncClient,
 ) -> str | None:

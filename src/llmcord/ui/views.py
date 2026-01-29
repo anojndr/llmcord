@@ -817,3 +817,24 @@ class SourceView(discord.ui.View):
 
         embed = build_grounding_sources_embed(metadata)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+class TextDisplay(discord.ui.Button):
+    """A button that displays text content (simulation)."""
+
+    def __init__(self, content: str) -> None:
+        """Initialize the text display button."""
+        super().__init__(
+            label=content[:80] if content else "...",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+        )
+        self.content = content
+        self.type = discord.ComponentType.text_display if hasattr(discord.ComponentType, "text_display") else discord.ComponentType.button
+
+
+class LayoutView(discord.ui.View):
+    """View to hold text displays."""
+
+    def __init__(self) -> None:
+        """Initialize the layout view."""
+        super().__init__(timeout=None)
