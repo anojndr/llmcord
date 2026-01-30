@@ -2,14 +2,16 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 import discord
-from llmcord.bot import (
+from llmcord.commands import (
     model_command,
     search_decider_model_command,
     model_autocomplete,
     search_decider_model_autocomplete,
+    reset_all_preferences_command,
+)
+from llmcord.processing import (
     _handle_retry_request,
     _process_user_message,
-    reset_all_preferences_command,
 )
 
 def run_async(coro):
@@ -55,6 +57,6 @@ def test_retry_request_different_user(mock_interaction):
     assert "cannot retry this message" in args[0]
 
 def test_process_user_message_success(mock_message, mock_dependencies):
-    with patch("llmcord.bot.process_message", new_callable=AsyncMock) as mock_process:
+    with patch("llmcord.processing.process_message", new_callable=AsyncMock) as mock_process:
         run_async(_process_user_message(mock_message))
         mock_process.assert_called_once()

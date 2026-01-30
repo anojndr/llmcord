@@ -73,7 +73,10 @@ def mock_interaction(mock_message):
 def mock_dependencies(monkeypatch, mock_config):
     # Mock config
     monkeypatch.setattr("llmcord.config.get_config", lambda: mock_config)
-    monkeypatch.setattr("llmcord.bot.config", mock_config)
+    monkeypatch.setattr("llmcord.globals.config", mock_config)
+    monkeypatch.setattr("llmcord.helpers.config", mock_config)
+    monkeypatch.setattr("llmcord.commands.config", mock_config)
+    monkeypatch.setattr("llmcord.processing.config", mock_config)
     
     # Mock Database
     mock_db_instance = MagicMock()
