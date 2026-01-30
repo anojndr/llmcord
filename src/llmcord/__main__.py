@@ -5,7 +5,7 @@ Main entry point.
 import asyncio
 import contextlib
 
-from .bot import main
+from .entrypoint import main
 
 with contextlib.suppress(KeyboardInterrupt):
     asyncio.run(main())
