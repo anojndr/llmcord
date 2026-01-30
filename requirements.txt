@@ -15,3 +15,4 @@ pymupdf4llm
 pytest
 pytest-asyncio
 pytest-cov
+playwright
