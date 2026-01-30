@@ -3,9 +3,9 @@ import logging
 import discord
 from discord.app_commands import Choice
 
-from llmcord.config import get_config
+from llmcord.core.config import get_config
 from llmcord.globals import config, discord_bot
-from llmcord.helpers import (
+from llmcord.utils.common import (
     ModelAutocompleteHandlers,
     ModelSwitchHandlers,
     _build_model_autocomplete,

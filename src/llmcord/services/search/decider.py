@@ -5,7 +5,7 @@ import logging
 import litellm
 
 from llmcord.services.database import KeyRotator
-from llmcord.config import ensure_list, get_config
+from llmcord.core.config import ensure_list, get_config
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.search.config import (
     MIN_DECIDER_MESSAGES,

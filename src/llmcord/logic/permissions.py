@@ -1,12 +1,12 @@
 """Permissions handling for llmcord."""
 import discord
 
-from llmcord.config import (
+from llmcord.core.config import (
     EMBED_COLOR_INCOMPLETE,
     PROCESSING_MESSAGE,
     get_config,
 )
-from llmcord.ui.response_view import LayoutView, TextDisplay
+from llmcord.discord.ui.response_view import LayoutView, TextDisplay
 
 
 async def should_process_message(

@@ -15,8 +15,8 @@ from youtube_transcript_api import YouTubeTranscriptApi
 import asyncpraw
 
 from llmcord.services.database import get_bad_keys_db
-from llmcord.config import BROWSER_HEADERS
-from llmcord.logic.helpers import _ensure_pymupdf_layout_activated
+from llmcord.core.config import BROWSER_HEADERS
+from llmcord.logic.utils import _ensure_pymupdf_layout_activated
 
 logger = logging.getLogger(__name__)
 

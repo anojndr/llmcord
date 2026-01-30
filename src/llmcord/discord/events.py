@@ -3,9 +3,9 @@ import logging
 import discord
 
 from llmcord.globals import config, discord_bot, twitter_api
-from llmcord.processing import _handle_retry_request, _process_user_message
-from llmcord.ui.response_view import PersistentResponseView
-from llmcord.ui.utils import set_retry_handler
+from llmcord.discord.processing import _handle_retry_request, _process_user_message
+from llmcord.discord.ui.response_view import PersistentResponseView
+from llmcord.discord.ui.utils import set_retry_handler
 
 logger = logging.getLogger(__name__)
 
