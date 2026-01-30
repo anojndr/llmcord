@@ -20,7 +20,8 @@ from llmcord.logic import utils  # noqa: F401
 from llmcord.services.database import get_bad_keys_db, init_bad_keys_db
 from llmcord.config import get_config
 from llmcord.logic.message import process_message
-from llmcord.ui.views import PersistentResponseView, set_retry_handler
+from llmcord.ui.response_view import PersistentResponseView
+from llmcord.ui.utils import set_retry_handler
 
 # Configure logging
 logging.basicConfig(

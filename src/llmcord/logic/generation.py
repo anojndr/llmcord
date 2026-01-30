@@ -32,17 +32,13 @@ from llmcord.logic.helpers import (
 from llmcord.models import MsgNode
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
-from llmcord.ui.views import (
-    LayoutView,
-    ResponseView,
-    SourceButton,
-    SourceView,
-    TavilySourceButton,
-    TextDisplay,
-    _get_grounding_chunks,
-    _get_grounding_queries,
-    _has_grounding_data,
+from llmcord.ui.metadata import (
+    get_grounding_chunks,
+    get_grounding_queries,
+    has_grounding_data,
 )
+from llmcord.ui.response_view import LayoutView, ResponseView, TextDisplay
+from llmcord.ui.sources_view import SourceButton, SourceView, TavilySourceButton
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +420,7 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                             view = (
                                 SourceView(grounding_metadata)
                                 if is_final_edit
-                                and _has_grounding_data(grounding_metadata)
+                                and has_grounding_data(grounding_metadata)
                                 else None
                             )
 
@@ -461,7 +457,7 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
                     # Add buttons only to the last message
                     if i == len(response_contents) - 1:
                         # Add Gemini grounding sources button if available
-                        if _has_grounding_data(grounding_metadata):
+                        if has_grounding_data(grounding_metadata):
                             layout.add_item(SourceButton(grounding_metadata))
                         # Add Tavily sources button if available
                         if tavily_metadata and (
@@ -580,12 +576,12 @@ async def generate_response(  # noqa: C901, PLR0912, PLR0913, PLR0915
     full_response = "".join(response_contents) if response_contents else ""
 
     grounding_payload = None
-    if grounding_metadata and _has_grounding_data(grounding_metadata):
+    if grounding_metadata and has_grounding_data(grounding_metadata):
         grounding_payload = {
-            "web_search_queries": _get_grounding_queries(grounding_metadata),
+            "web_search_queries": get_grounding_queries(grounding_metadata),
             "grounding_chunks": [
                 {"web": {"title": chunk.get("title", ""), "uri": chunk.get("uri", "")}}
-                for chunk in _get_grounding_chunks(grounding_metadata)
+                for chunk in get_grounding_chunks(grounding_metadata)
             ],
         }
 

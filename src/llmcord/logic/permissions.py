@@ -6,7 +6,7 @@ from llmcord.config import (
     PROCESSING_MESSAGE,
     get_config,
 )
-from llmcord.ui.views import TextDisplay, LayoutView
+from llmcord.ui.response_view import LayoutView, TextDisplay
 
 
 async def should_process_message(
