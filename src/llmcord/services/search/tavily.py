@@ -7,7 +7,7 @@ import json
 import httpx
 
 from llmcord.services.database import KeyRotator, get_bad_keys_db
-from llmcord.config import ensure_list, get_config, get_or_create_httpx_client
+from llmcord.core.config import ensure_list, get_config, get_or_create_httpx_client
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
 logger = logging.getLogger(__name__)

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import discord
 import litellm
 
-from llmcord.config import (
+from llmcord.core.config import (
     EDIT_DELAY_SECONDS,
     EMBED_COLOR_COMPLETE,
     EMBED_COLOR_INCOMPLETE,
@@ -18,27 +18,27 @@ from llmcord.config import (
     get_config,
     is_gemini_model,
 )
-from llmcord.logic.exceptions import (
+from llmcord.core.exceptions import (
     FirstTokenTimeoutError,
     _raise_empty_response,
     FIRST_TOKEN_TIMEOUT_SECONDS,
     LITELLM_TIMEOUT_SECONDS,
 )
-from llmcord.logic.helpers import (
+from llmcord.logic.utils import (
     _get_tiktoken_encoding,
     count_conversation_tokens,
     count_text_tokens,
 )
-from llmcord.models import MsgNode
+from llmcord.core.models import MsgNode
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
-from llmcord.ui.metadata import (
+from llmcord.discord.ui.metadata import (
     get_grounding_chunks,
     get_grounding_queries,
     has_grounding_data,
 )
-from llmcord.ui.response_view import LayoutView, ResponseView, TextDisplay
-from llmcord.ui.sources_view import SourceButton, SourceView, TavilySourceButton
+from llmcord.discord.ui.response_view import LayoutView, ResponseView, TextDisplay
+from llmcord.discord.ui.sources_view import SourceButton, SourceView, TavilySourceButton
 
 logger = logging.getLogger(__name__)
 

@@ -3,10 +3,10 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import discord
 
-from llmcord.ui.constants import RETRY_RESPONSE_ID, VIEW_RESPONSE_BETTER_ID
-from llmcord.ui.metadata import has_grounding_data
-from llmcord.ui.sources_view import SourceButton, TavilySourceButton
-from llmcord.ui.utils import get_response_data, get_retry_handler, upload_to_textis
+from llmcord.discord.ui.constants import RETRY_RESPONSE_ID, VIEW_RESPONSE_BETTER_ID
+from llmcord.discord.ui.metadata import has_grounding_data
+from llmcord.discord.ui.sources_view import SourceButton, TavilySourceButton
+from llmcord.discord.ui.utils import get_response_data, get_retry_handler, upload_to_textis
 
 
 class RetryButton(discord.ui.Button):

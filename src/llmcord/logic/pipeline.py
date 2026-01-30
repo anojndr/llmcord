@@ -9,7 +9,7 @@ import discord
 import httpx
 import asyncpraw
 
-from llmcord.config import (
+from llmcord.core.config import (
     BROWSER_HEADERS,
     EMBED_COLOR_INCOMPLETE,
     PROVIDERS_SUPPORTING_USERNAMES,
@@ -18,7 +18,7 @@ from llmcord.config import (
     get_config,
     is_gemini_model,
 )
-from llmcord.models import MsgNode
+from llmcord.core.models import MsgNode
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.search import (
     decide_web_search,
@@ -26,7 +26,7 @@ from llmcord.services.search import (
     perform_tavily_research,
     perform_web_search,
 )
-from llmcord.logic.assets import (
+from llmcord.services.extractors import (
     TwitterApiProtocol,
     download_attachments,
     extract_pdf_text,
@@ -37,7 +37,7 @@ from llmcord.logic.assets import (
     process_attachments,
 )
 from llmcord.logic.generation import generate_response
-from llmcord.logic.helpers import (
+from llmcord.logic.utils import (
     append_search_to_content,
     build_node_text_parts,
     extract_research_command,

@@ -1,6 +1,6 @@
 from typing import Any
 
-from llmcord.config import is_gemini_model
+from llmcord.core.config import is_gemini_model
 from llmcord.services.llm.providers.gemini import configure_gemini_kwargs
 from llmcord.services.llm.providers.github import configure_github_copilot_kwargs
 from llmcord.services.llm.types import LiteLLMOptions

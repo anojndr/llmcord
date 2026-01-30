@@ -7,9 +7,9 @@ import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from llmcord.config import get_or_create_httpx_client
+from llmcord.core.config import get_or_create_httpx_client
 from llmcord.services.database import get_bad_keys_db
-from llmcord.ui.constants import HTTP_OK
+from llmcord.discord.ui.constants import HTTP_OK
 
 LOGGER = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ This package exposes the split configuration modules as a single interface
 to maintain backward compatibility.
 """
 
-from llmcord.config.constants import (
+from llmcord.core.config.constants import (
     EDIT_DELAY_SECONDS,
     EMBED_COLOR_COMPLETE,
     EMBED_COLOR_INCOMPLETE,
@@ -14,11 +14,11 @@ from llmcord.config.constants import (
     STREAMING_INDICATOR,
     VISION_MODEL_TAGS,
 )
-from llmcord.config.http import (
+from llmcord.core.config.http import (
     BROWSER_HEADERS,
     get_or_create_httpx_client,
 )
-from llmcord.config.manager import (
+from llmcord.core.config.manager import (
     CONFIG_CACHE_TTL,
     ConfigFileEmptyError,
     ConfigFileNotFoundError,
@@ -29,7 +29,7 @@ from llmcord.config.manager import (
     ensure_list,
     get_config,
 )
-from llmcord.config.models import is_gemini_model
+from llmcord.core.config.utils import is_gemini_model
 
 __all__ = [
     "BROWSER_HEADERS",

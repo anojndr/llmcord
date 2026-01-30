@@ -12,8 +12,8 @@ from llmcord.globals import (
     reddit_client,
     twitter_api,
 )
-from llmcord.helpers import get_channel_locked_model
-from llmcord.logic.message import process_message
+from llmcord.utils.common import get_channel_locked_model
+from llmcord.logic.pipeline import process_message
 from llmcord.services.database import get_bad_keys_db
 
 logger = logging.getLogger(__name__)

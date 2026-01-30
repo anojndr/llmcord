@@ -4,8 +4,8 @@ import asyncio
 from llmcord.logic import utils  # noqa: F401
 # Ensure commands and events are registered
 # pylint: disable=unused-import
-import llmcord.commands  # noqa: F401
-import llmcord.events  # noqa: F401
+import llmcord.discord.commands  # noqa: F401
+import llmcord.discord.events  # noqa: F401
 from llmcord.globals import config, discord_bot
 from llmcord.server import start_server
 from llmcord.services.database import init_bad_keys_db

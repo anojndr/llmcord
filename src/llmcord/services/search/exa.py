@@ -4,7 +4,7 @@ import logging
 
 import httpx
 
-from llmcord.config import get_or_create_httpx_client
+from llmcord.core.config import get_or_create_httpx_client
 from llmcord.services.search.config import EXA_MCP_URL, HTTP_OK, MAX_ERROR_CHARS
 
 logger = logging.getLogger(__name__)

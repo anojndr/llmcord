@@ -8,7 +8,7 @@ import httpx
 from discord.ext import commands
 from twscrape import API
 
-from llmcord.config import get_config
+from llmcord.core.config import get_config
 
 # Configure logging
 logging.basicConfig(
