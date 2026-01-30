@@ -13,6 +13,7 @@ from llmcord.utils.common import (
     get_channel_locked_model,
 )
 from llmcord.services.database import get_bad_keys_db
+from llmcord.services.ytmp3 import Ytmp3Service
 
 logger = logging.getLogger(__name__)
 
@@ -180,3 +181,38 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
         model_count,
         decider_count,
     )
+
+
+@discord_bot.tree.command(
+    name="ytmp3",
+    description="Convert a YouTube video to MP3",
+)
+async def ytmp3_command(interaction: discord.Interaction, url: str) -> None:
+    """Handle the /ytmp3 command."""
+    await interaction.response.defer(ephemeral=False)
+    
+    # Basic URL validation
+    if "youtube.com" not in url and "youtu.be" not in url:
+         await interaction.followup.send("❌ Please provide a valid YouTube URL.")
+         return
+
+    try:
+        file_path = await Ytmp3Service.download_audio(url)
+        
+        if file_path:
+            await interaction.followup.send(
+                content=f"✅ Converted: {url}",
+                file=discord.File(file_path)
+            )
+            # Clean up the file after sending
+            try:
+                import os
+                os.remove(file_path)
+            except Exception as e:
+                logger.error(f"Failed to remove temp file {file_path}: {e}")
+        else:
+            await interaction.followup.send("❌ Failed to convert video. Please try again later.")
+            
+    except Exception as e:
+        logger.error(f"Error in /ytmp3 command: {e}")
+        await interaction.followup.send(f"❌ An error occurred: {str(e)}")
