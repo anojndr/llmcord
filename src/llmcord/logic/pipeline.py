@@ -7,7 +7,7 @@ from base64 import b64encode
 
 import discord
 import httpx
-import asyncpraw
+
 
 from llmcord.core.config import (
     BROWSER_HEADERS,
@@ -18,6 +18,7 @@ from llmcord.core.config import (
     get_config,
     is_gemini_model,
 )
+from llmcord.globals import reddit_client
 from llmcord.core.models import MsgNode
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.search import (
@@ -53,7 +54,6 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
     discord_bot: discord.Client,
     httpx_client: httpx.AsyncClient,
     twitter_api: TwitterApiProtocol,
-    reddit_client: asyncpraw.Reddit | None,
     msg_nodes: dict[int, MsgNode],
     curr_model_lock: asyncio.Lock,
     curr_model_ref: list[str],
@@ -311,14 +311,13 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
                         tweets.append(tweet_text)
 
                 reddit_posts = []
-                if reddit_client:
-                    for post_url in re.findall(
-                        r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)|redd\.it\/[a-zA-Z0-9_]+))",
-                        cleaned_content,
-                    ):
-                        post_text = await extract_reddit_post(post_url, reddit_client)
-                        if post_text:
-                            reddit_posts.append(post_text)
+                for post_url in re.findall(
+                    r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)|redd\.it\/[a-zA-Z0-9_]+))",
+                    cleaned_content,
+                ):
+                    post_text = await extract_reddit_post(post_url, httpx_client, reddit_client)
+                    if post_text:
+                        reddit_posts.append(post_text)
 
                 # PDF text extraction for non-Gemini models
                 pdf_texts = []
@@ -790,7 +789,7 @@ async def process_message(  # noqa: C901, PLR0912, PLR0913, PLR0915
             discord_bot=discord_bot,
             httpx_client=httpx_client,
             twitter_api=twitter_api,
-            reddit_client=reddit_client,
+
             msg_nodes=msg_nodes,
             curr_model_lock=curr_model_lock,
             curr_model_ref=curr_model_ref,
