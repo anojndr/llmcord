@@ -47,7 +47,7 @@ def patched_get_scripts_list(text: str) -> Iterator[str]:
             )
             for k, v in json.loads(fixed_scripts).items():
                 yield script_url(k, f"{v}a")
-        except Exception:
+        except json.JSONDecodeError:
             logger.warning("Failed to parse fixed scripts JSON.")
 
 
@@ -63,8 +63,8 @@ xclid.get_scripts_list = patched_get_scripts_list
 # This shifts the ~1-2s loading cost from first message to bot startup
 try:
     _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
-except Exception:
-    logger.error("Failed to load tiktoken encoding.")
+except (KeyError, RuntimeError, ValueError):
+    logger.exception("Failed to load tiktoken encoding.")
     _tiktoken_encoding = None
 
 
@@ -93,7 +93,7 @@ def _ensure_pymupdf_layout_activated() -> bool:
             return False
         try:
             pymupdf_layout.activate()
-        except Exception as exc:  # noqa: BLE001
+        except (AttributeError, RuntimeError) as exc:
             _pymupdf_layout_state["activated"] = False
             logger.debug("PyMuPDF Layout not available: %s", exc)
             return False
@@ -174,7 +174,9 @@ def append_search_to_content(
     content: str | list[dict[str, object]],
     search_results: str,
 ) -> str | list[dict[str, object]]:
-    """Append search results to message content, handling both string and multimodal formats.
+    """Append search results to message content.
+
+    Handles both string and multimodal formats.
 
     Args:
         content: Either a string or a list of content parts (for multimodal messages)

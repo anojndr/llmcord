@@ -2,10 +2,6 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .core import DatabaseCore
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +14,7 @@ class UserPreferencesMixin:
         # We assume self is mixed in with DatabaseCore
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
         # User model preferences table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_model_preferences (

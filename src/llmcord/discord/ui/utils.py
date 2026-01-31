@@ -7,9 +7,9 @@ import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from llmcord.core.config import get_or_create_httpx_client
-from llmcord.services.database import get_bad_keys_db
+from llmcord.core.config import HttpxClientOptions, get_or_create_httpx_client
 from llmcord.discord.ui.constants import HTTP_OK
+from llmcord.services.database import get_bad_keys_db
 
 LOGGER = logging.getLogger(__name__)
 
@@ -17,22 +17,23 @@ LOGGER = logging.getLogger(__name__)
 _textis_client_holder: list[httpx.AsyncClient] = []
 
 RetryHandler = Callable[[discord.Interaction, int, int], Awaitable[None]]
-_retry_handler: RetryHandler | None = None
+_retry_handler_holder: list[RetryHandler | None] = [None]
 
 
 def set_retry_handler(handler: RetryHandler | None) -> None:
     """Set the global retry handler used by persistent buttons."""
-    global _retry_handler
-    _retry_handler = handler
+    _retry_handler_holder[0] = handler
 
 
 def get_retry_handler() -> RetryHandler | None:
     """Get the global retry handler."""
-    return _retry_handler
+    return _retry_handler_holder[0]
 
 
 @dataclass(slots=True)
 class ResponseData:
+    """Container for response-related metadata."""
+
     full_response: str | None
     grounding_metadata: object | None
     tavily_metadata: dict[str, object] | None
@@ -68,12 +69,14 @@ def _get_textis_client() -> httpx.AsyncClient:
     """Get or create the shared text.is httpx client using the DRY factory pattern."""
     return get_or_create_httpx_client(
         _textis_client_holder,
-        timeout=30.0,
-        connect_timeout=10.0,
-        max_connections=10,
-        max_keepalive=5,
-        proxy_url=None,
-        follow_redirects=False,  # text.is needs redirect handling
+        options=HttpxClientOptions(
+            timeout=30.0,
+            connect_timeout=10.0,
+            max_connections=10,
+            max_keepalive=5,
+            proxy_url=None,
+            follow_redirects=False,  # text.is needs redirect handling
+        ),
     )
 
 

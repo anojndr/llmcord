@@ -2,7 +2,7 @@
 from typing import NoReturn
 
 EMPTY_RESPONSE_MESSAGE = "Response stream ended with no content"
-FIRST_TOKEN_TIMEOUT_MESSAGE = "No first token received within timeout window"  # noqa: S105
+FIRST_RESPONSE_TIMEOUT_MESSAGE = "No first token received within timeout window"
 FIRST_TOKEN_TIMEOUT_SECONDS = 60
 LITELLM_TIMEOUT_SECONDS = 60
 
@@ -16,7 +16,7 @@ class FirstTokenTimeoutError(RuntimeError):
 
     def __init__(self, message: str | None = None) -> None:
         """Initialize the timeout error with a default message."""
-        super().__init__(message or FIRST_TOKEN_TIMEOUT_MESSAGE)
+        super().__init__(message or FIRST_RESPONSE_TIMEOUT_MESSAGE)
 
 
 def _raise_empty_response() -> NoReturn:

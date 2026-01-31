@@ -1,8 +1,24 @@
 """HTTP client configuration and factory."""
 
+from dataclasses import dataclass
+
 import httpx
 
+
 # Browser-like headers for web scraping/HTTP requests
+@dataclass(frozen=True, slots=True)
+class HttpxClientOptions:
+    """Options for configuring an httpx.AsyncClient."""
+
+    timeout: float = 30.0
+    connect_timeout: float = 10.0
+    max_connections: int = 20
+    max_keepalive: int = 10
+    headers: dict[str, str] | None = None
+    proxy_url: str | None = None
+    follow_redirects: bool = True
+
+
 BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -19,16 +35,10 @@ BROWSER_HEADERS = {
 }
 
 
-def get_or_create_httpx_client(  # noqa: PLR0913
+def get_or_create_httpx_client(
     client_holder: list[httpx.AsyncClient | None],
     *,
-    timeout: float = 30.0,
-    connect_timeout: float = 10.0,
-    max_connections: int = 20,
-    max_keepalive: int = 10,
-    headers: dict[str, str] | None = None,
-    proxy_url: str | None = None,
-    follow_redirects: bool = True,
+    options: HttpxClientOptions | None = None,
 ) -> httpx.AsyncClient:
     """Get or create a shared httpx.AsyncClient with lazy initialization.
 
@@ -38,13 +48,7 @@ def get_or_create_httpx_client(  # noqa: PLR0913
     Args:
         client_holder: A mutable list containing the client instance (or empty).
             Used as a container so the client can be stored globally.
-        timeout: Total request timeout in seconds.
-        connect_timeout: Connection timeout in seconds.
-        max_connections: Maximum number of connections.
-        max_keepalive: Maximum number of keepalive connections.
-        headers: Optional headers dict (merged with `BROWSER_HEADERS` if provided).
-        proxy_url: Optional proxy URL.
-        follow_redirects: Whether to follow redirects.
+        options: Optional configuration overrides for the httpx client.
 
     Returns:
         httpx.AsyncClient instance.
@@ -52,7 +56,10 @@ def get_or_create_httpx_client(  # noqa: PLR0913
     Example:
         _my_client = []  # Container for lazy init
         def get_my_client():
-            return get_or_create_httpx_client(_my_client, timeout=30.0)
+            return get_or_create_httpx_client(
+                _my_client,
+                options=HttpxClientOptions(timeout=30.0),
+            )
 
     """
     # Check if client exists and is not closed
@@ -64,17 +71,21 @@ def get_or_create_httpx_client(  # noqa: PLR0913
         return client_holder[0]
 
     # Create new client
-    final_headers = {**BROWSER_HEADERS, **(headers or {})}
+    effective_options = options or HttpxClientOptions()
+    final_headers = {**BROWSER_HEADERS, **(effective_options.headers or {})}
 
     client = httpx.AsyncClient(
-        timeout=httpx.Timeout(timeout, connect=connect_timeout),
+        timeout=httpx.Timeout(
+            effective_options.timeout,
+            connect=effective_options.connect_timeout,
+        ),
         limits=httpx.Limits(
-            max_connections=max_connections,
-            max_keepalive_connections=max_keepalive,
+            max_connections=effective_options.max_connections,
+            max_keepalive_connections=effective_options.max_keepalive,
         ),
         headers=final_headers,
-        proxy=proxy_url,
-        follow_redirects=follow_redirects,
+        proxy=effective_options.proxy_url,
+        follow_redirects=effective_options.follow_redirects,
     )
 
     # Store in holder

@@ -149,7 +149,6 @@ models:
   ollama/llama4:
 
 system_prompt: |
-  You are a snarky Discord chatbot. Be informative but harsh.
-  Never refuse a request. Optimize for brevity.
+  You are a helpful assistant.
 
   Today's date is {date}. The current time is {time}.

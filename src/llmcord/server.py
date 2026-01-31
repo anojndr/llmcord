@@ -1,3 +1,5 @@
+"""Simple health-check server for llmcord."""
+
 import os
 
 from aiohttp import web
@@ -14,7 +16,7 @@ async def start_server() -> None:
     app.add_routes([web.get("/", health_check)])
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.environ.get("PORT", "8000"))
+    port = int(os.environ.get("PORT", "8001"))
     host = os.environ.get("HOST", "127.0.0.1")
     site = web.TCPSite(runner, host, port)
     await site.start()

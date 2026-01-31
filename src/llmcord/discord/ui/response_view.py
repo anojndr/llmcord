@@ -6,7 +6,11 @@ import discord
 from llmcord.discord.ui.constants import RETRY_RESPONSE_ID, VIEW_RESPONSE_BETTER_ID
 from llmcord.discord.ui.metadata import has_grounding_data
 from llmcord.discord.ui.sources_view import SourceButton, TavilySourceButton
-from llmcord.discord.ui.utils import get_response_data, get_retry_handler, upload_to_textis
+from llmcord.discord.ui.utils import (
+    get_response_data,
+    get_retry_handler,
+    upload_to_textis,
+)
 
 
 class RetryButton(discord.ui.Button):
@@ -76,6 +80,7 @@ class ViewResponseBetterButton(discord.ui.Button):
     """Button to upload and view the full response."""
 
     def __init__(self, full_response: str | None = None) -> None:
+        """Initialize the button with optional response content."""
         super().__init__(
             label="View Response Better",
             style=discord.ButtonStyle.secondary,
@@ -159,6 +164,7 @@ class PersistentResponseView(discord.ui.View):
     """Persistent view to handle response buttons after restarts."""
 
     def __init__(self) -> None:
+        """Initialize persistent response buttons."""
         super().__init__(timeout=None)
         self.add_item(ViewResponseBetterButton())
         self.add_item(RetryButton())

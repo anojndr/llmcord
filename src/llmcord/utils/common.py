@@ -1,3 +1,5 @@
+"""Shared utility helpers for Discord command handling."""
+
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -6,7 +8,7 @@ from typing import Any
 import discord
 from discord.app_commands import Choice
 
-from llmcord.globals import config
+from llmcord import config as config_module
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,8 @@ def get_channel_locked_model(channel_id: int) -> str | None:
         The model name if the channel has a locked model, or None otherwise.
 
     """
-    overrides = config.get("channel_model_overrides", {})
+    config_data = config_module.get_config()
+    overrides = config_data.get("channel_model_overrides", {})
     # Convert channel_id to string for comparison since YAML may parse keys as ints
     # or strings.
     return overrides.get(channel_id) or overrides.get(str(channel_id))
@@ -71,7 +74,8 @@ async def _handle_model_switch(
     """
     user_id = str(interaction.user.id)
 
-    if model not in config["models"]:
+    config_data = config_module.get_config()
+    if model not in config_data["models"]:
         await interaction.followup.send(
             f"❌ Model `{model}` is not configured in `config.yaml`.",
             ephemeral=True,

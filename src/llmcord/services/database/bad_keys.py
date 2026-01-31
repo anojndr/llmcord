@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
 
-    from .core import DatabaseCore
 
 from .core import _with_reconnect
 
@@ -220,7 +219,7 @@ class KeyRotator:
     Tavily, and any future services) to handle API key rotation and retry logic.
 
     Usage:
-        rotator = KeyRotator("my_provider", api_keys)
+        rotator = KeyRotator("my_provider", api_keys, db=get_bad_keys_db())
 
         # For async operations:
         async for key in rotator.get_keys_async():
@@ -243,6 +242,7 @@ class KeyRotator:
         self,
         provider: str,
         all_keys: list[str],
+        db: BadKeysMixin,
         max_retries_multiplier: int = 2,
     ) -> None:
         """Initialize the key rotator.
@@ -250,19 +250,17 @@ class KeyRotator:
         Args:
             provider: The provider name (e.g., "gemini", "openai", "tavily")
             all_keys: List of all API keys for this provider
+            db: Database instance used for bad key tracking
             max_retries_multiplier: How many times to cycle through keys (default: 2)
 
         """
-        # Local import to avoid circular dependency
-        from . import get_bad_keys_db
-
         self.provider = provider
         self.all_keys = all_keys.copy()
         self.max_retries_multiplier = max_retries_multiplier
         self._current_key = None
         self._attempt_count = 0
         self._good_keys = None
-        self._db = get_bad_keys_db()
+        self._db = db
 
     def _init_good_keys(self) -> None:
         """Initialize the good keys list from the database."""

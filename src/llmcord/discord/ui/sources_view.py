@@ -3,8 +3,15 @@ from collections.abc import Mapping
 
 import discord
 
-from llmcord.discord.ui.constants import GROUNDING_SOURCES_ID, TAVILY_SOURCES_ID, URL_MAX_LENGTH
-from llmcord.discord.ui.metadata import add_chunked_embed_field, build_grounding_sources_embed
+from llmcord.discord.ui.constants import (
+    GROUNDING_SOURCES_ID,
+    TAVILY_SOURCES_ID,
+    URL_MAX_LENGTH,
+)
+from llmcord.discord.ui.metadata import (
+    add_chunked_embed_field,
+    build_grounding_sources_embed,
+)
 from llmcord.discord.ui.utils import get_response_data
 
 
