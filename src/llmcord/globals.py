@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Any
 
+
 import asyncpraw
 import discord
 import httpx
@@ -41,7 +42,13 @@ discord_bot = commands.Bot(
 httpx_client = httpx.AsyncClient()
 twitter_api = API(proxy=config.get("twitter_proxy"))
 
-if config.get("reddit_client_id") and config.get("reddit_client_secret"):
+
+
+if (
+    config.get("reddit_mode", "json") == "praw"
+    and config.get("reddit_client_id")
+    and config.get("reddit_client_secret")
+):
     reddit_client = asyncpraw.Reddit(
         client_id=config.get("reddit_client_id"),
         client_secret=config.get("reddit_client_secret"),

@@ -21,6 +21,8 @@ web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if we
 reddit_client_id: 
 reddit_client_secret: 
 reddit_user_agent: 
+# 'json' (default, no API key needed) or 'praw' (requires API key)
+reddit_mode: json 
 
 twitter_proxy: 
 

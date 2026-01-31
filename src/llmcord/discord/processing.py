@@ -9,7 +9,7 @@ from llmcord.globals import (
     discord_bot,
     httpx_client,
     msg_nodes,
-    reddit_client,
+
     twitter_api,
 )
 from llmcord.utils.common import get_channel_locked_model
@@ -60,7 +60,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
             discord_bot=discord_bot,
             httpx_client=httpx_client,
             twitter_api=twitter_api,
-            reddit_client=reddit_client,
+
             msg_nodes=msg_nodes,
             curr_model_lock=curr_model_lock,
             curr_model_ref=curr_model_ref,

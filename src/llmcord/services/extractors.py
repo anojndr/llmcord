@@ -14,6 +14,7 @@ from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
 import asyncpraw
 
+
 from llmcord.services.database import get_bad_keys_db
 from llmcord.core.config import BROWSER_HEADERS
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
@@ -324,11 +325,82 @@ async def extract_youtube_transcript(
         return None
 
 
-async def extract_reddit_post(
+async def extract_reddit_post_json(
+    post_url: str,
+    httpx_client: httpx.AsyncClient,
+) -> str | None:
+    """Extract Reddit post content using JSON endpoints."""
+    try:
+        # Ensure we request the JSON version of the page
+        if not post_url.endswith(".json"):
+            # Handle URLs that might already have query params
+            if "?" in post_url:
+                base_url, query = post_url.split("?", 1)
+                json_url = f"{base_url.rstrip('/')}.json?{query}"
+            else:
+                json_url = f"{post_url.rstrip('/')}.json"
+        else:
+            json_url = post_url
+
+        response = await httpx_client.get(
+            json_url,
+            headers=BROWSER_HEADERS,
+            follow_redirects=True,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        # Reddit JSON API returns a list of two objects:
+        # 0: The post submission
+        # 1: The comments
+        post_listing = data[0]["data"]["children"][0]["data"]
+        comments_listing = data[1]["data"]["children"]
+
+        title = post_listing.get("title", "Untitled")
+        subreddit_name = post_listing.get("subreddit", "unknown")
+        author_name = post_listing.get("author", "unknown")
+        selftext = post_listing.get("selftext", "")
+        url = post_listing.get("url", "")
+        # is_self is True for text posts, False for link/image/video posts
+        is_self = post_listing.get("is_self", True)
+
+        post_text = (
+            f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\n"
+            f"Author: u/{author_name}\n\n{selftext}"
+        )
+
+        if not is_self and url:
+            post_text += f"\nLink: {url}"
+
+        # Extract top 5 comments
+        top_comments = comments_listing[:5]
+        if top_comments:
+            post_text += "\n\nTop Comments:"
+            for comment in top_comments:
+                c_data = comment.get("data", {})
+                # Skip 'more' type comments (load more buttons)
+                if comment.get("kind") == "more":
+                    continue
+                
+                comment_author = c_data.get("author", "[deleted]")
+                comment_body = c_data.get("body", "")
+                
+                if comment_body:
+                    post_text += f"\n- u/{comment_author}: {comment_body}"
+
+        return post_text
+
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to fetch Reddit content (JSON) for %s: %s", post_url, exc)
+        return None
+
+
+async def extract_reddit_post_praw(
     post_url: str,
     reddit_client: asyncpraw.Reddit,
 ) -> str | None:
-    """Extract Reddit post content."""
+    """Extract Reddit post content using AsyncPRAW."""
     try:
         submission = await reddit_client.submission(url=post_url)
 
@@ -370,5 +442,17 @@ async def extract_reddit_post(
 
         return post_text
     except Exception as exc:  # noqa: BLE001
-        logger.debug("Failed to fetch Reddit content for %s: %s", post_url, exc)
+        logger.debug("Failed to fetch Reddit content (PRAW) for %s: %s", post_url, exc)
         return None
+
+
+async def extract_reddit_post(
+    post_url: str,
+    httpx_client: httpx.AsyncClient,
+    reddit_client: asyncpraw.Reddit | None = None,
+) -> str | None:
+    """Extract Reddit post content using the configured method."""
+    if reddit_client:
+        return await extract_reddit_post_praw(post_url, reddit_client)
+    
+    return await extract_reddit_post_json(post_url, httpx_client)
