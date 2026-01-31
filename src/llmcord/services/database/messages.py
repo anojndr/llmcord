@@ -4,14 +4,24 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any
 
 import libsql
 
-if TYPE_CHECKING:
-    from .core import DatabaseCore
-
 logger = logging.getLogger(__name__)
+LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception))
+
+
+@dataclass(slots=True)
+class MessageResponsePayload:
+    """Payload for storing message response data."""
+
+    request_message_id: str
+    request_user_id: str
+    full_response: str | None = None
+    grounding_metadata: dict[str, Any] | list[Any] | None = None
+    tavily_metadata: dict[str, Any] | None = None
 
 
 class MessageDataMixin:
@@ -44,17 +54,19 @@ class MessageDataMixin:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        
+
         # Migrations
         self._run_message_migrations(cursor, conn)
-        
+
         conn.commit()
 
-    def _run_message_migrations(self, cursor: libsql.Cursor, conn: libsql.Connection) -> None:
+    def _run_message_migrations(
+        self,
+        cursor: libsql.Cursor,
+        conn: libsql.Connection,
+    ) -> None:
         """Run migrations for message tables."""
         # Migration: ensure message_response_data has the expected schema.
-        LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception))
-        
         with contextlib.suppress(LIBSQL_ERROR, ValueError):
             cursor.execute("PRAGMA table_info(message_response_data)")
             columns = {row[1] for row in cursor.fetchall()}
@@ -136,7 +148,7 @@ class MessageDataMixin:
         # Sync in background to avoid blocking
         try:
             self._sync()
-        except getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception)) as exc:
+        except LIBSQL_ERROR as exc:
             logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved search data for message %s", message_id)
 
@@ -178,15 +190,16 @@ class MessageDataMixin:
     def save_message_response_data(
         self,
         message_id: str,
-        request_message_id: str,
-        request_user_id: str,
-        full_response: str | None = None,
-        grounding_metadata: dict[str, Any] | list[Any] | None = None,
-        tavily_metadata: dict[str, Any] | None = None,
+        payload: MessageResponsePayload,
     ) -> None:
         """Save response payloads for a Discord message."""
         conn = self._get_connection()
         cursor = conn.cursor()
+        request_message_id = payload.request_message_id
+        request_user_id = payload.request_user_id
+        full_response = payload.full_response
+        grounding_metadata = payload.grounding_metadata
+        tavily_metadata = payload.tavily_metadata
         cursor.execute(
             """INSERT INTO message_response_data (
                    message_id,
@@ -220,7 +233,7 @@ class MessageDataMixin:
         conn.commit()
         try:
             self._sync()
-        except getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception)) as exc:
+        except LIBSQL_ERROR as exc:
             logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved response data for message %s", message_id)
 

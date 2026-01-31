@@ -1,4 +1,7 @@
+"""Shared LLM service types."""
+
 from dataclasses import dataclass
+
 
 @dataclass(slots=True)
 class LiteLLMOptions:

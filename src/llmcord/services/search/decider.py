@@ -1,11 +1,12 @@
 """Web search decision logic."""
+import importlib
 import json
 import logging
 
 import litellm
 
-from llmcord.services.database import KeyRotator
 from llmcord.core.config import ensure_list, get_config
+from llmcord.services.database import KeyRotator, get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.search.config import (
     MIN_DECIDER_MESSAGES,
@@ -19,6 +20,11 @@ from llmcord.services.search.utils import (
 logger = logging.getLogger(__name__)
 
 
+def _get_decider_runner() -> object:
+    search_module = importlib.import_module("llmcord.services.search")
+    return search_module.run_decider_once
+
+
 async def _run_decider_once(
     messages: list,
     provider: str,
@@ -30,7 +36,7 @@ async def _run_decider_once(
         return None, True
 
     # Use KeyRotator for consistent key rotation with synced bad key tracking
-    rotator = KeyRotator(provider, api_keys)
+    rotator = KeyRotator(provider, api_keys, db=get_bad_keys_db())
 
     exhausted_keys = True
 
@@ -189,7 +195,8 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     )
 
     while True:
-        result, exhausted_keys = await _run_decider_once(
+        runner = _get_decider_runner()
+        result, exhausted_keys = await runner(
             messages,
             provider,
             model,

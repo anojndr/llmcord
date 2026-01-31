@@ -1,7 +1,8 @@
+"""Global state and shared clients."""
+
 import asyncio
 import logging
 from typing import Any
-
 
 import asyncpraw
 import discord
@@ -32,10 +33,11 @@ status_message = (
     config.get("status_message") or "github.com/jakobdylanc/llmcord"
 )[:128]
 activity = discord.CustomActivity(name=status_message)
+command_prefix = config.get("command_prefix") or "!"
 discord_bot = commands.Bot(
     intents=intents,
     activity=activity,
-    command_prefix=None,
+    command_prefix=command_prefix,
     allowed_mentions=discord.AllowedMentions(replied_user=False),
 )
 

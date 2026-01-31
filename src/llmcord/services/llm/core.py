@@ -1,3 +1,5 @@
+"""Core LLM service operations."""
+
 from typing import Any
 
 from llmcord.core.config import is_gemini_model

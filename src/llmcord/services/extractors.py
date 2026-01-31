@@ -3,19 +3,19 @@ import asyncio
 import io
 import logging
 import re
-from typing import AsyncIterator, Protocol
+from collections.abc import AsyncIterator
+from typing import Protocol
 
+import asyncpraw
+import asyncprawcore
 import discord
 import httpx
 import pymupdf4llm
-from PIL import Image
 from bs4 import BeautifulSoup
+from PIL import Image
 from twscrape import gather
 from youtube_transcript_api import YouTubeTranscriptApi
-import asyncpraw
 
-
-from llmcord.services.database import get_bad_keys_db
 from llmcord.core.config import BROWSER_HEADERS
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
 
@@ -30,7 +30,8 @@ except ImportError:  # pragma: no cover - optional dependency
 async def extract_pdf_text(pdf_content: bytes) -> str | None:
     """Extract text content from a PDF file using pymupdf4llm.
 
-    This is used for non-Gemini models since they don't natively support PDF attachments.
+    This is used for non-Gemini models since they don't natively support
+    PDF attachments.
     Runs in a thread pool since PyMuPDF operations are CPU-bound.
 
     Args:
@@ -47,13 +48,13 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
         try:
             # Open PDF from bytes (in-memory)
             doc = fitz.open(stream=pdf_content, filetype="pdf")
-        except Exception as exc:  # noqa: BLE001
+        except (RuntimeError, ValueError) as exc:
             logger.warning("Failed to open PDF: %s", exc)
             return None
         try:
             _ensure_pymupdf_layout_activated()
             md_text = pymupdf4llm.to_markdown(doc)
-        except Exception as exc:  # noqa: BLE001
+        except (RuntimeError, ValueError) as exc:
             logger.warning("Failed to extract PDF text: %s", exc)
             return None
         else:
@@ -70,7 +71,7 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
     except asyncio.TimeoutError:
         logger.warning("PDF extraction timed out")
         return None
-    except Exception as exc:  # noqa: BLE001
+    except (RuntimeError, ValueError, OSError) as exc:
         logger.warning("PDF extraction error: %s", exc)
         return None
 
@@ -85,7 +86,7 @@ class TweetProtocol(Protocol):
     """Protocol for tweet objects returned by the Twitter API wrapper."""
 
     user: TweetUserProtocol | None
-    rawContent: str | None  # noqa: N815
+    raw_content: str | None
 
 
 class TwitterApiProtocol(Protocol):
@@ -102,6 +103,14 @@ class TwitterApiProtocol(Protocol):
     ) -> AsyncIterator[TweetProtocol]:
         """Return an async stream of replies for a tweet."""
         ...
+
+
+def _get_tweet_text(tweet: TweetProtocol) -> str:
+    """Return tweet text while handling rawContent/raw_content attributes."""
+    raw_content = getattr(tweet, "rawContent", None)
+    if raw_content is None:
+        raw_content = getattr(tweet, "raw_content", None)
+    return raw_content or ""
 
 
 async def fetch_tweet_with_replies(
@@ -137,10 +146,10 @@ async def fetch_tweet_with_replies(
         if include_url and tweet_url:
             tweet_text = (
                 f"\n--- Tweet from @{username} ({tweet_url}) ---\n"
-                f"{tweet.rawContent or ''}"
+                f"{_get_tweet_text(tweet)}"
             )
         else:
-            tweet_text = f"Tweet from @{username}:\n{tweet.rawContent or ''}"
+            tweet_text = f"Tweet from @{username}:\n{_get_tweet_text(tweet)}"
 
         if max_replies > 0:
             replies = await asyncio.wait_for(
@@ -152,9 +161,10 @@ async def fetch_tweet_with_replies(
                 for reply in replies:
                     if reply and reply.user:
                         reply_username = reply.user.username or "unknown"
-                        tweet_text += f"\n- @{reply_username}: {reply.rawContent or ''}"
-
-    except Exception as exc:  # noqa: BLE001
+                        tweet_text += (
+                            f"\n- @{reply_username}: {_get_tweet_text(reply)}"
+                        )
+    except (asyncio.TimeoutError, RuntimeError, ValueError) as exc:
         logger.debug("Failed to fetch tweet %s: %s", tweet_id, exc)
         return None
 
@@ -172,7 +182,7 @@ async def download_attachments(
     ) -> httpx.Response | None:
         try:
             return await httpx_client.get(att.url, timeout=60)
-        except Exception as exc:  # noqa: BLE001
+        except httpx.HTTPError as exc:
             logger.warning(
                 "Failed to download attachment %s: %s",
                 att.filename,
@@ -207,7 +217,7 @@ async def process_attachments(
                     img.save(output, format="PNG")
                     content = output.getvalue()
                     content_type = "image/png"
-            except Exception:
+            except OSError:
                 logger.exception("Error converting GIF to PNG")
 
         processed.append(
@@ -215,7 +225,9 @@ async def process_attachments(
                 "content_type": content_type,
                 "content": content,
                 "text": (
-                    resp.text if content_type and content_type.startswith("text") else None
+                    resp.text
+                    if content_type and content_type.startswith("text")
+                    else None
                 ),
             },
         )
@@ -320,7 +332,7 @@ async def extract_youtube_transcript(
             f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\n"
             f"Transcript:\n" + " ".join(x["text"] for x in transcript)
         )
-    except Exception as exc:  # noqa: BLE001
+    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
         logger.debug("Failed to fetch YouTube transcript: %s", exc)
         return None
 
@@ -382,18 +394,22 @@ async def extract_reddit_post_json(
                 # Skip 'more' type comments (load more buttons)
                 if comment.get("kind") == "more":
                     continue
-                
+
                 comment_author = c_data.get("author", "[deleted]")
                 comment_body = c_data.get("body", "")
-                
+
                 if comment_body:
                     post_text += f"\n- u/{comment_author}: {comment_body}"
 
-        return post_text
-
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Failed to fetch Reddit content (JSON) for %s: %s", post_url, exc)
+    except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
+        logger.debug(
+            "Failed to fetch Reddit content (JSON) for %s: %s",
+            post_url,
+            exc,
+        )
         return None
+    else:
+        return post_text
 
 
 async def extract_reddit_post_praw(
@@ -422,7 +438,7 @@ async def extract_reddit_post_praw(
         )
 
         if not getattr(submission, "is_self", True) and getattr(
-            submission, "url", None
+            submission, "url", None,
         ):
             post_text += f"\nLink: {submission.url}"
 
@@ -440,10 +456,20 @@ async def extract_reddit_post_praw(
                 comment_body = getattr(comment, "body", "") or ""
                 post_text += f"\n- u/{comment_author}: {comment_body}"
 
-        return post_text
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Failed to fetch Reddit content (PRAW) for %s: %s", post_url, exc)
+    except (
+        asyncprawcore.exceptions.PrawcoreException,
+        asyncpraw.exceptions.RedditAPIException,
+        AttributeError,
+        ValueError,
+    ) as exc:
+        logger.debug(
+            "Failed to fetch Reddit content (PRAW) for %s: %s",
+            post_url,
+            exc,
+        )
         return None
+    else:
+        return post_text
 
 
 async def extract_reddit_post(
@@ -454,5 +480,5 @@ async def extract_reddit_post(
     """Extract Reddit post content using the configured method."""
     if reddit_client:
         return await extract_reddit_post_praw(post_url, reddit_client)
-    
+
     return await extract_reddit_post_json(post_url, httpx_client)

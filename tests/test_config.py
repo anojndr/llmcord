@@ -1,68 +1,117 @@
-import pytest
-import time
+"""Tests for configuration helpers and caching."""
+
+from __future__ import annotations
+
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import mock_open, patch
+
+import pytest
+
 from llmcord.config import (
-    get_config,
-    _resolve_config_path,
-    ensure_list,
-    ConfigFileNotFoundError,
-    ConfigFileEmptyError,
     _CONFIG_STATE,
+    ConfigFileEmptyError,
+    ConfigFileNotFoundError,
+    _resolve_config_path,
     clear_config_cache,
+    ensure_list,
+    get_config,
 )
 
-def test_ensure_list():
-    assert ensure_list(None) == []
-    assert ensure_list("string") == ["string"]
-    assert ensure_list(["list"]) == ["list"]
-    assert ensure_list(("tuple",)) == ["tuple"]
 
-def test_resolve_config_path_found(tmp_path):
+def assert_true(*, condition: bool, message: str) -> None:
+    """Raise an AssertionError when a condition is false."""
+    if not condition:
+        raise AssertionError(message)
+
+
+def test_ensure_list() -> None:
+    """Ensure inputs are normalized to list values."""
+    assert_true(
+        condition=ensure_list(None) == [],
+        message="Expected empty list for None",
+    )
+    assert_true(
+        condition=ensure_list("string") == ["string"],
+        message="Expected string wrapped",
+    )
+    assert_true(
+        condition=ensure_list(["list"]) == ["list"],
+        message="Expected list preserved",
+    )
+    assert_true(
+        condition=ensure_list(("tuple",)) == ["tuple"],
+        message="Expected tuple converted",
+    )
+
+
+def test_resolve_config_path_found(tmp_path: Path) -> None:
+    """Resolve existing config path to a Path object."""
     # Test valid path
     f = tmp_path / "config.yaml"
     f.touch()
     with patch("pathlib.Path.exists", return_value=True):
-        assert _resolve_config_path(str(f)) == Path(str(f))
+        assert_true(
+            condition=_resolve_config_path(str(f)) == Path(str(f)),
+            message="Expected resolved config path",
+        )
 
-def test_resolve_config_path_not_found():
-    with patch("pathlib.Path.exists", return_value=False):
-        with pytest.raises(ConfigFileNotFoundError):
-            _resolve_config_path("nonexistent.yaml")
 
-def test_get_config_caching():
+def test_resolve_config_path_not_found() -> None:
+    """Raise when configuration path does not exist."""
+    with patch("pathlib.Path.exists", return_value=False), pytest.raises(
+        ConfigFileNotFoundError,
+    ):
+        _resolve_config_path("nonexistent.yaml")
+
+
+def test_get_config_caching() -> None:
+    """Cache should serve results within TTL and refresh after expiry."""
     clear_config_cache()
-    mock_data = 'key: value'
-    
-    with patch("pathlib.Path.exists", return_value=True), \
-         patch("pathlib.Path.stat") as mock_stat, \
-         patch("pathlib.Path.open", mock_open(read_data=mock_data)):
-        
+    mock_data = "key: value"
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.stat") as mock_stat,
+        patch("pathlib.Path.open", mock_open(read_data=mock_data)),
+    ):
+
         mock_stat.return_value.st_mtime = 100
-        
+
         # First call should load
         config1 = get_config("test.yaml")
-        assert config1 == {"key": "value"}
-        
-        # Second call within TTL should hit cache (even if mtime changes, we don't check yet)
+        assert_true(
+            condition=config1 == {"key": "value"},
+            message="Expected loaded config",
+        )
+
+        # Second call within TTL should hit cache even if mtime changes.
         mock_stat.return_value.st_mtime = 200
         config2 = get_config("test.yaml")
-        assert config1 is config2
-        
+        assert_true(
+            condition=config1 is config2,
+            message="Expected cached config instance",
+        )
+
         # Force TTL expiry
         _CONFIG_STATE.check_time = 0
-        
+
         # Third call should reload because mtime changed and TTL expired
         config3 = get_config("test.yaml")
-        assert config3 == {"key": "value"}
+        assert_true(
+            condition=config3 == {"key": "value"},
+            message="Expected refreshed config",
+        )
 
-def test_config_file_empty_error():
+
+def test_config_file_empty_error() -> None:
+    """Raise when configuration file is empty or invalid."""
     clear_config_cache()
     # Mock yaml.safe_load to return None (empty file)
-    with patch("pathlib.Path.exists", return_value=True), \
-         patch("pathlib.Path.stat"), \
-         patch("pathlib.Path.open", mock_open(read_data="")), \
-         patch("yaml.safe_load", return_value=None):
-            
-        with pytest.raises(ConfigFileEmptyError):
-            get_config("empty.yaml")
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.stat"),
+        patch("pathlib.Path.open", mock_open(read_data="")),
+        patch("yaml.safe_load", return_value=None),
+        pytest.raises(ConfigFileEmptyError),
+    ):
+        get_config("empty.yaml")

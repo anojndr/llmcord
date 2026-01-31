@@ -16,13 +16,14 @@ from llmcord.core.config.constants import (
 )
 from llmcord.core.config.http import (
     BROWSER_HEADERS,
+    HttpxClientOptions,
     get_or_create_httpx_client,
 )
 from llmcord.core.config.manager import (
+    _CONFIG_STATE,
     CONFIG_CACHE_TTL,
     ConfigFileEmptyError,
     ConfigFileNotFoundError,
-    _CONFIG_STATE,
     _ConfigCacheState,
     _resolve_config_path,
     clear_config_cache,
@@ -42,9 +43,10 @@ __all__ = [
     "PROVIDERS_SUPPORTING_USERNAMES",
     "STREAMING_INDICATOR",
     "VISION_MODEL_TAGS",
+    "_CONFIG_STATE",
     "ConfigFileEmptyError",
     "ConfigFileNotFoundError",
-    "_CONFIG_STATE",
+    "HttpxClientOptions",
     "_ConfigCacheState",
     "_resolve_config_path",
     "clear_config_cache",

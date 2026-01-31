@@ -1,13 +1,14 @@
 """Tavily search provider integration."""
 import asyncio
+import importlib
+import json
 import logging
 import time
-import json
 
 import httpx
 
-from llmcord.services.database import KeyRotator, get_bad_keys_db
-from llmcord.core.config import ensure_list, get_config, get_or_create_httpx_client
+from llmcord.core.config import HttpxClientOptions, get_or_create_httpx_client
+from llmcord.services.database import get_bad_keys_db
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
 logger = logging.getLogger(__name__)
@@ -21,13 +22,21 @@ def _get_tavily_client() -> httpx.AsyncClient:
     """Get or create the shared Tavily httpx client using the DRY factory pattern."""
     return get_or_create_httpx_client(
         _tavily_client_holder,
-        timeout=30.0,
-        connect_timeout=10.0,
-        max_connections=20,
-        max_keepalive=10,
-        follow_redirects=True,
-        headers={},  # Tavily doesn't need browser headers, just defaults
+        options=HttpxClientOptions(
+            timeout=30.0,
+            connect_timeout=10.0,
+            max_connections=20,
+            max_keepalive=10,
+            follow_redirects=True,
+            headers={},  # Tavily doesn't need browser headers, just defaults
+        ),
     )
+
+
+def _get_client_from_package() -> httpx.AsyncClient:
+    search_module = importlib.import_module("llmcord.services.search")
+    get_client = search_module.get_tavily_client
+    return get_client()
 
 
 async def tavily_search(
@@ -52,7 +61,7 @@ async def tavily_search(
 
     """
     try:
-        client = _get_tavily_client()
+        client = _get_client_from_package()
 
         # Build request payload
         payload = {
@@ -146,7 +155,7 @@ async def tavily_research_create(
 
     """
     try:
-        client = _get_tavily_client()
+        client = _get_client_from_package()
         payload = {
             "input": input_text,
             "model": model,

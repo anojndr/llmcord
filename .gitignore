@@ -3,7 +3,6 @@ bad_keys.db
 bad_keys.db-info
 bad_keys.db-shm
 bad_keys.db-wal
-.github
 .venv
 .vscode
 config.yaml

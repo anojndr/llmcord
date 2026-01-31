@@ -17,6 +17,7 @@ async def should_process_message(
 
     Returns:
         tuple: (should_process, processing_msg_or_none)
+
     """
     is_dm = new_msg.channel.type == discord.ChannelType.private
 
@@ -88,7 +89,7 @@ async def should_process_message(
         )
     else:
         processing_embed = discord.Embed(
-            description=PROCESSING_MESSAGE, color=EMBED_COLOR_INCOMPLETE
+            description=PROCESSING_MESSAGE, color=EMBED_COLOR_INCOMPLETE,
         )
         processing_msg = await new_msg.reply(embed=processing_embed, silent=True)
 

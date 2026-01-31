@@ -5,7 +5,7 @@ import contextlib
 import functools
 import logging
 import os
-from typing import TYPE_CHECKING, Concatenate, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Concatenate, ParamSpec, Self, TypeVar
 
 import libsql
 
@@ -19,11 +19,11 @@ LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception
 
 
 def _with_reconnect(
-    method: Callable[Concatenate[Any, P], T],
-) -> Callable[Concatenate[Any, P], T]:
+    method: Callable[Concatenate[Self, P], T],
+) -> Callable[Concatenate[Self, P], T]:
     """Handle stale Turso connections by reconnecting and retrying."""
     @functools.wraps(method)
-    def wrapper(self: Any, *args: P.args, **kwargs: P.kwargs) -> T:
+    def wrapper(self: Self, *args: P.args, **kwargs: P.kwargs) -> T:
         max_retries = 2
         try:
             return method(self, *args, **kwargs)

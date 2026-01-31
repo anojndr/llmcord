@@ -1,33 +1,31 @@
+"""Discord message processing helpers."""
+
+import importlib
 import logging
 from contextlib import suppress
 
 import discord
 
-from llmcord.globals import (
-    config,
-    curr_model_lock,
-    discord_bot,
-    httpx_client,
-    msg_nodes,
-
-    twitter_api,
-)
-from llmcord.utils.common import get_channel_locked_model
-from llmcord.logic.pipeline import process_message
+from llmcord import config as config_module
+from llmcord import globals as app_globals
+from llmcord.logic.pipeline import ProcessContext
 from llmcord.services.database import get_bad_keys_db
+from llmcord.utils.common import get_channel_locked_model
 
 logger = logging.getLogger(__name__)
 
 
 async def _process_user_message(new_msg: discord.Message) -> None:
     """Shared handler for normal messages and retries."""
+    config_data = config_module.get_config()
+
     # Check if this channel has a locked model override
     channel_id = new_msg.channel.id
     locked_model = get_channel_locked_model(channel_id)
 
     if locked_model:
         # Use the channel's locked model (ignore user preference)
-        if locked_model not in config.get("models", {}):
+        if locked_model not in config_data.get("models", {}):
             logger.error(
                 "Channel %s has locked model '%s' but it's not in config.yaml models",
                 channel_id,
@@ -43,28 +41,28 @@ async def _process_user_message(new_msg: discord.Message) -> None:
 
         # Fall back to default model if user hasn't set a preference
         # or if their saved model is no longer valid.
-        default_model = next(iter(config.get("models", {})), None)
+        default_model = next(iter(config_data.get("models", {})), None)
         if not default_model:
             logger.error("No models configured in config.yaml")
             return
 
-        if user_model is None or user_model not in config.get("models", {}):
+        if user_model is None or user_model not in config_data.get("models", {}):
             user_model = default_model
 
     # Create a reference list to pass user's model by reference
     curr_model_ref = [user_model]
 
     try:
-        await process_message(
-            new_msg=new_msg,
-            discord_bot=discord_bot,
-            httpx_client=httpx_client,
-            twitter_api=twitter_api,
-
-            msg_nodes=msg_nodes,
-            curr_model_lock=curr_model_lock,
+        context = ProcessContext(
+            discord_bot=app_globals.discord_bot,
+            httpx_client=app_globals.httpx_client,
+            twitter_api=app_globals.twitter_api,
+            msg_nodes=app_globals.msg_nodes,
+            curr_model_lock=app_globals.curr_model_lock,
             curr_model_ref=curr_model_ref,
         )
+        processing_module = importlib.import_module("llmcord.processing")
+        await processing_module.process_message(new_msg=new_msg, context=context)
     except Exception as exc:
         logger.exception("Error processing message")
         # Try to notify the user about the error
