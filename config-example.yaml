@@ -1,6 +1,15 @@
 # Discord settings:
 
-bot_token: 
+profile: main  # Options: main, test
+
+main:
+  port: 8001
+  bot_token:
+
+test:
+  port: 8002
+  bot_token:
+
 client_id: 
 status_message: 
 

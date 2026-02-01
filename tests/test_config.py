@@ -11,6 +11,7 @@ from llmcord.config import (
     _CONFIG_STATE,
     ConfigFileEmptyError,
     ConfigFileNotFoundError,
+    ProfileConfigError,
     _resolve_config_path,
     clear_config_cache,
     ensure_list,
@@ -115,3 +116,68 @@ def test_config_file_empty_error() -> None:
         pytest.raises(ConfigFileEmptyError),
     ):
         get_config("empty.yaml")
+
+
+def test_get_config_profile_selection() -> None:
+    """Load profile-specific port and bot token into top-level keys."""
+    clear_config_cache()
+    expected_token = "test-token"  # noqa: S105
+    expected_port = 9001
+    mock_data = """
+profile: test
+main:
+  port: 8001
+  bot_token: main-token
+test:
+  port: 9001
+  bot_token: test-token
+client_id: 123
+"""
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.stat") as mock_stat,
+        patch("pathlib.Path.open", mock_open(read_data=mock_data)),
+    ):
+        mock_stat.return_value.st_mtime = 100
+        config = get_config("test.yaml")
+
+    assert_true(
+        condition=config["profile"] == "test",
+        message="Expected profile to be normalized",
+    )
+    assert_true(
+        condition=config["bot_token"] == expected_token,
+        message="Expected selected profile bot token",
+    )
+    assert_true(
+        condition=config["port"] == expected_port,
+        message="Expected selected profile port",
+    )
+
+
+def test_get_config_profile_validation() -> None:
+    """Reject profile blocks with unexpected keys."""
+    clear_config_cache()
+    mock_data = """
+profile: main
+main:
+  port: 8001
+  bot_token: main-token
+  extra: nope
+test:
+  port: 9001
+  bot_token: test-token
+"""
+
+    with (
+        patch("pathlib.Path.exists", return_value=True),
+        patch("pathlib.Path.stat") as mock_stat,
+        patch("pathlib.Path.open", mock_open(read_data=mock_data)),
+    ):
+        mock_stat.return_value.st_mtime = 100
+        with pytest.raises(
+            ProfileConfigError,
+            match="Profiles may only define 'bot_token' and 'port'",
+        ):
+            get_config("test.yaml")
