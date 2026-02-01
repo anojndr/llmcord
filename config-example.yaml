@@ -123,21 +123,9 @@ providers:
     base_url: http://localhost:8000/v1
 
 models:
-  gemini/gemini-3-pro-preview:
+  gemini/gemini-3-flash-low:
+    model_name: gemini/gemini-3-flash-preview
     thinking_level: low
-    media_resolution: media_resolution_high
-    safety_settings:
-      - category: HARM_CATEGORY_HARASSMENT
-        threshold: BLOCK_NONE
-      - category: HARM_CATEGORY_HATE_SPEECH
-        threshold: BLOCK_NONE
-      - category: HARM_CATEGORY_SEXUALLY_EXPLICIT
-        threshold: BLOCK_NONE
-      - category: HARM_CATEGORY_DANGEROUS_CONTENT
-        threshold: BLOCK_NONE
-
-  gemini/gemini-3-flash-preview:
-    thinking_level: minimal
     safety_settings:
       - category: HARM_CATEGORY_HARASSMENT
         threshold: BLOCK_NONE
@@ -159,18 +147,14 @@ models:
       - category: HARM_CATEGORY_DANGEROUS_CONTENT
         threshold: BLOCK_NONE
 
-  openai/gpt-5:
-    reasoning_effort: high
-    verbosity: medium
+  mistral/mistral-large-latest:
 
-  openrouter/x-ai/grok-4-fast:online:
-
-  ollama/llama4:
+  github_copilot/gpt-5-mini:
 
 # Channel model overrides (locks a channel to a specific model; disables /model there)
 channel_model_overrides:
-  "123456789012345678": gemini/gemini-3-pro-preview
-  "234567890123456789": openai/gpt-5
+  "123456789012345678": gemini/gemini-3-flash-low
+  "234567890123456789": gemini/gemini-2.5-flash
 
 system_prompt: |
   You are a helpful assistant.
