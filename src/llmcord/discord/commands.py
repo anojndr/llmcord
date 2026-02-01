@@ -167,7 +167,8 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
         return
 
     # Defer the response since database operations may take time
-    await interaction.response.defer(ephemeral=True)
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
 
     db = get_bad_keys_db()
 
