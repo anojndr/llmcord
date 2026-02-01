@@ -223,7 +223,18 @@ async def _resolve_provider_settings(
     base_url = provider_config.get("base_url")
     api_keys = ensure_list(provider_config.get("api_key")) or ["sk-no-key-required"]
     model_parameters = config["models"].get(provider_slash_model, None)
-    actual_model = model_parameters.get("model", model) if model_parameters else model
+    override_model = None
+    if model_parameters:
+        override_model = (
+            model_parameters.get("model")
+            or model_parameters.get("model_name")
+            or model_parameters.get("modelName")
+        )
+
+    if isinstance(override_model, str) and "/" in override_model:
+        _, override_model = override_model.split("/", 1)
+
+    actual_model = override_model or model
     extra_headers = provider_config.get("extra_headers")
     extra_query = provider_config.get("extra_query")
     extra_body = (provider_config.get("extra_body") or {}) | (model_parameters or {})
