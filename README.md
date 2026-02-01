@@ -87,6 +87,9 @@ Or run local models with:
 
 ## Configuration notes
 
+### Profiles
+`config.yaml` supports two profiles: `main` and `test`. Set `profile: main` (or `test`) to select which profile to run. The only profile-specific settings are `port` and `bot_token`.
+
 ### Provider/model naming
 - Models are configured as `provider/model` keys under `models:` in [config-example.yaml](config-example.yaml).
 - The first entry in `models` becomes the default.
@@ -106,7 +109,7 @@ You can lock a channel to a specific model via `channel_model_overrides` in conf
 - Gemini models can also accept audio/video files.
 
 ### Health check
-A small HTTP server responds on `HOST`/`PORT` (defaults: `127.0.0.1:8000`) for liveness checks.
+A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default port is taken from the selected profile in `config.yaml` and can be overridden by the `PORT` environment variable.
 
 ## Instructions
 
@@ -130,7 +133,11 @@ A small HTTP server responds on `HOST`/`PORT` (defaults: `127.0.0.1:8000`) for l
 
 | Setting | Description |
 | --- | --- |
-| **bot_token** | Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
+| **profile** | Select which profile to run: `main` or `test`. |
+| **main.bot_token** | Bot token for the `main` profile. Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
+| **main.port** | Health-check server port for the `main` profile. |
+| **test.bot_token** | Bot token for the `test` profile. |
+| **test.port** | Health-check server port for the `test` profile. |
 | **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
 | **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
 | **tavily_api_key** | Optional. API key(s) for [Tavily Search](https://tavily.com/) to enable web search for non-Gemini models. Can be a single key or a list of keys for rotation. |

@@ -36,6 +36,10 @@ class ConfigFileEmptyError(ValueError):
         return f"Config file is empty or corrupted: {self.path}"
 
 
+class ProfileConfigError(ValueError):
+    """Raised when profile configuration is invalid."""
+
+
 # Config caching - reload every 30 seconds at most
 class _ConfigCacheState:
     def __init__(self) -> None:
@@ -46,6 +50,57 @@ class _ConfigCacheState:
 
 _CONFIG_STATE = _ConfigCacheState()
 CONFIG_CACHE_TTL = 5  # Check file modification time every 5 seconds
+PROFILE_NAMES = ("main", "test")
+PROFILE_KEYS = {"bot_token", "port"}
+
+
+def _normalize_profile_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Normalize profile-aware config settings.
+
+    If profile settings are present, copy the selected profile's port and bot
+    token into top-level keys for backwards compatibility.
+    """
+    has_profiles = any(profile in config for profile in PROFILE_NAMES)
+    has_profile_selector = "profile" in config
+
+    if not has_profiles and not has_profile_selector:
+        return config
+
+    if not all(profile in config for profile in PROFILE_NAMES):
+        message = "Both 'main' and 'test' profiles must be defined in config.yaml."
+        raise ProfileConfigError(message)
+
+    profile_name = config.get("profile") or "main"
+    if profile_name not in PROFILE_NAMES:
+        message = "Config 'profile' must be either 'main' or 'test'."
+        raise ProfileConfigError(message)
+
+    for profile in PROFILE_NAMES:
+        profile_config = config.get(profile)
+        if not isinstance(profile_config, dict):
+            message = f"Profile '{profile}' must be a mapping of settings."
+            raise TypeError(message)
+
+        invalid_keys = set(profile_config) - PROFILE_KEYS
+        if invalid_keys:
+            invalid_keys_list = ", ".join(sorted(invalid_keys))
+            message = (
+                "Profiles may only define 'bot_token' and 'port'. "
+                f"Invalid keys in '{profile}': {invalid_keys_list}."
+            )
+            raise ProfileConfigError(message)
+
+        missing_keys = PROFILE_KEYS - set(profile_config)
+        if missing_keys:
+            missing_keys_list = ", ".join(sorted(missing_keys))
+            message = f"Profile '{profile}' is missing: {missing_keys_list}."
+            raise ProfileConfigError(message)
+
+    selected_profile = config[profile_name]
+    config["profile"] = profile_name
+    config["bot_token"] = selected_profile["bot_token"]
+    config["port"] = selected_profile["port"]
+    return config
 
 
 def _resolve_config_path(filename: str) -> Path:
@@ -81,7 +136,7 @@ def get_config(filename: str = "config.yaml") -> dict[str, Any]:
                 # Handle empty/corrupted YAML that returns None
                 if loaded_config is None:
                     raise ConfigFileEmptyError(filepath)
-                _CONFIG_STATE.cache = loaded_config
+                _CONFIG_STATE.cache = _normalize_profile_config(loaded_config)
 
     return _CONFIG_STATE.cache
 
