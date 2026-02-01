@@ -46,8 +46,8 @@ permissions:
 tavily_api_key:  # For web search on non-Gemini and preview models
 tavily_search_depth: advanced  # Options: basic, advanced, fast, ultra-fast (advanced recommended for quality)
 
-# Exa MCP web search (alternative to Tavily - no API key required)
-exa_mcp_url:  # e.g., https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,deep_search_exa,crawling_exa,company_research_exa
+# Exa MCP web search (alternative to Tavily)
+exa_mcp_url: https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,linkedin_search_exa,deep_researcher_start,deep_researcher_check
 
 # Web search provider: "tavily" (default), "exa", or "auto" (auto prefers Tavily if keys available)
 web_search_provider: tavily
