@@ -3,6 +3,37 @@
 bot_token: 
 client_id: 
 status_message: 
+
+# Response behavior:
+
+use_plain_responses: false
+allow_dms: true
+
+# Message limits:
+
+max_text: 100000
+max_images: 5
+max_messages: 25
+max_tweet_replies: 50
+
+# Permissions:
+
+permissions:
+  users:
+    admin_ids: []
+    allowed_ids: []
+    blocked_ids: []
+
+  roles:
+    allowed_ids: []
+    blocked_ids: []
+
+  channels:
+    allowed_ids: []
+    blocked_ids: []
+
+# Web search settings:
+
 tavily_api_key:  # For web search on non-Gemini and preview models
 tavily_search_depth: advanced  # Options: basic, advanced, fast, ultra-fast (advanced recommended for quality)
 
@@ -12,11 +43,9 @@ exa_mcp_url:  # e.g., https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_adv
 # Web search provider: "tavily" (default), "exa", or "auto" (auto prefers Tavily if keys available)
 web_search_provider: tavily
 
-# Turso database settings (for persistent bad API keys tracking):
-turso_database_url:  # e.g., libsql://your-db.turso.io
-turso_auth_token:    # Your Turso authentication token
-
 web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if web search is needed (provider/model format)
+
+# Integrations:
 
 reddit_client_id: 
 reddit_client_secret: 
@@ -33,28 +62,9 @@ twitter_accounts:
     email_password: 
     cookies: 
 
-max_text: 100000
-max_images: 5
-max_messages: 25
-max_tweet_replies: 50
-
-use_plain_responses: false
-allow_dms: true
-
-permissions:
-  users:
-    admin_ids: []
-    allowed_ids: []
-    blocked_ids: []
-
-  roles:
-    allowed_ids: []
-    blocked_ids: []
-
-  channels:
-    allowed_ids: []
-    blocked_ids: []
-
+# Turso database settings (for persistent bad API keys tracking):
+turso_database_url:  # e.g., libsql://your-db.turso.io
+turso_auth_token:    # Your Turso authentication token
 
 # LLM settings:
 
