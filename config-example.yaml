@@ -167,6 +167,11 @@ models:
 
   ollama/llama4:
 
+# Channel model overrides (locks a channel to a specific model; disables /model there)
+channel_model_overrides:
+  "123456789012345678": gemini/gemini-3-pro-preview
+  "234567890123456789": openai/gpt-5
+
 system_prompt: |
   You are a helpful assistant.
 
