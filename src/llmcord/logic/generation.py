@@ -42,6 +42,28 @@ from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 
 logger = logging.getLogger(__name__)
 
+LITELLM_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
+    litellm.exceptions.OpenAIError,
+)
+for _exception_name in (
+    "RateLimitError",
+    "APIError",
+    "APIConnectionError",
+    "ServiceUnavailableError",
+):
+    _exception_type = getattr(litellm.exceptions, _exception_name, None)
+    if _exception_type is not None:
+        LITELLM_RETRYABLE_ERRORS += (_exception_type,)
+
+GENERATION_EXCEPTIONS = (
+    FirstTokenTimeoutError,
+    asyncio.TimeoutError,
+    OSError,
+    RuntimeError,
+    ValueError,
+    *LITELLM_RETRYABLE_ERRORS,
+)
+
 
 @dataclass(slots=True)
 class GenerationContext:
@@ -1000,14 +1022,7 @@ async def _run_generation_loop(
                 reply_helper=reply_helper,
             )
             break
-        except (
-            FirstTokenTimeoutError,
-            asyncio.TimeoutError,
-            litellm.exceptions.OpenAIError,
-            OSError,
-            RuntimeError,
-            ValueError,
-        ) as exc:
+        except GENERATION_EXCEPTIONS as exc:
             (
                 loop_state.good_keys,
                 loop_state.last_error_msg,

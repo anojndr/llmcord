@@ -63,13 +63,13 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         )
         processing_module = importlib.import_module("llmcord.processing")
         await processing_module.process_message(new_msg=new_msg, context=context)
-    except Exception as exc:
+    except Exception:
         logger.exception("Error processing message")
         # Try to notify the user about the error
         with suppress(Exception):
             await new_msg.reply(
-                "❌ An internal error occurred while processing your request.\n"
-                f"Error: {exc}",
+                "❌ An internal error occurred while processing your request."
+                " Please try again later.",
             )
 
 
