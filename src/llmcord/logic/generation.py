@@ -1,5 +1,9 @@
 """LLM response generation logic."""
 import asyncio
+import base64
+import binascii
+import hashlib
+import io
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -41,6 +45,10 @@ from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 
 logger = logging.getLogger(__name__)
+
+DATA_URL_PATTERN = re.compile(
+    r"data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)",
+)
 
 LITELLM_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     litellm.exceptions.OpenAIError,
@@ -106,6 +114,8 @@ class GenerationState:
     use_plain_responses: bool
     grounding_metadata: object | None
     last_edit_time: float
+    generated_images: list["GeneratedImage"]
+    generated_image_hashes: set[str]
 
 
 @dataclass(slots=True)
@@ -138,6 +148,15 @@ class StreamLoopState:
 
     curr_content: str | None
     finish_reason: object | None
+
+
+@dataclass(slots=True)
+class GeneratedImage:
+    """Generated image payload from Gemini responses."""
+
+    data: bytes
+    mime_type: str
+    filename: str
 
 
 @dataclass(slots=True)
@@ -302,6 +321,156 @@ async def _render_exhausted_response(
     return [error_text]
 
 
+def _extension_from_mime(mime_type: str) -> str:
+    extension = mime_type.split("/", maxsplit=1)[-1].split(";", maxsplit=1)[0]
+    return extension or "png"
+
+
+def _build_generated_image(data: bytes, mime_type: str) -> GeneratedImage:
+    digest = hashlib.sha256(data).hexdigest()[:12]
+    extension = _extension_from_mime(mime_type)
+    filename = f"gemini-output-{digest}.{extension}"
+    return GeneratedImage(data=data, mime_type=mime_type, filename=filename)
+
+
+def _coerce_payload(obj: object) -> object:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict") and callable(obj.dict):
+        return obj.dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return obj
+
+
+def _extract_images_from_string(text: str) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+    for mime_type, b64_data in DATA_URL_PATTERN.findall(text):
+        try:
+            data = base64.b64decode(b64_data)
+        except (ValueError, binascii.Error):
+            continue
+        images.append(_build_generated_image(data, mime_type))
+    return images
+
+
+def _extract_images_from_inline_data(inline_data: dict) -> list[GeneratedImage]:
+    mime_type = inline_data.get("mime_type") or inline_data.get("mimeType")
+    data = inline_data.get("data")
+    if (
+        not isinstance(mime_type, str)
+        or not mime_type.startswith("image/")
+        or not isinstance(data, str)
+    ):
+        return []
+    try:
+        decoded = base64.b64decode(data)
+    except (ValueError, binascii.Error):
+        return []
+    return [_build_generated_image(decoded, mime_type)]
+
+
+def _extract_images_from_image_url(image_url: object) -> list[GeneratedImage]:
+    if isinstance(image_url, dict):
+        image_url = image_url.get("url")
+    if not isinstance(image_url, str):
+        return []
+    return _extract_images_from_string(image_url)
+
+
+def _extract_images_from_mime_data(
+    data: object,
+    mime_type: object,
+) -> list[GeneratedImage]:
+    if (
+        not isinstance(mime_type, str)
+        or not mime_type.startswith("image/")
+        or not isinstance(data, str)
+    ):
+        return []
+    try:
+        decoded = base64.b64decode(data)
+    except (ValueError, binascii.Error):
+        return []
+    return [_build_generated_image(decoded, mime_type)]
+
+
+def _extract_images_from_dict(obj: dict) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+
+    inline_data = obj.get("inline_data") or obj.get("inlineData")
+    if isinstance(inline_data, dict):
+        images.extend(_extract_images_from_inline_data(inline_data))
+
+    image_url = obj.get("image_url") or obj.get("imageUrl")
+    if image_url:
+        images.extend(_extract_images_from_image_url(image_url))
+
+    images.extend(_extract_images_from_mime_data(obj.get("data"), obj.get("mime_type")))
+    images.extend(_extract_images_from_mime_data(obj.get("data"), obj.get("mimeType")))
+    return images
+
+
+def _extract_generated_images(value: object) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+    seen_ids: set[int] = set()
+
+    stack: list[object] = [value]
+    while stack:
+        obj = _coerce_payload(stack.pop())
+        if obj is None:
+            continue
+
+        obj_id = id(obj)
+        if obj_id in seen_ids:
+            continue
+        seen_ids.add(obj_id)
+
+        if isinstance(obj, str):
+            images.extend(_extract_images_from_string(obj))
+            continue
+        if isinstance(obj, dict):
+            images.extend(_extract_images_from_dict(obj))
+            stack.extend(obj.values())
+            continue
+        if isinstance(obj, (list, tuple, set)):
+            stack.extend(obj)
+
+    return images
+
+
+def _extract_gemini_images_from_chunk(
+    chunk: object,
+    choice: object,
+    delta_content: str,
+) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+    sources = [
+        delta_content,
+        getattr(choice, "delta", None),
+        getattr(choice, "message", None),
+        getattr(chunk, "model_extra", None),
+        getattr(chunk, "_hidden_params", None),
+    ]
+    for source in sources:
+        if source is None:
+            continue
+        images.extend(_extract_generated_images(source))
+    return images
+
+
+def _append_generated_images(
+    state: GenerationState,
+    images: list[GeneratedImage],
+) -> None:
+    for image in images:
+        digest = hashlib.sha256(image.data).hexdigest()
+        if digest in state.generated_image_hashes:
+            continue
+        state.generated_image_hashes.add(digest)
+        state.generated_images.append(image)
+
+
 async def _initialize_generation_state(
     *,
     context: GenerationContext,
@@ -341,6 +510,8 @@ async def _initialize_generation_state(
         use_plain_responses=use_plain_responses,
         grounding_metadata=None,
         last_edit_time=context.last_edit_time,
+        generated_images=[],
+        generated_image_hashes=set(),
     )
 
 
@@ -460,6 +631,57 @@ async def _update_response_view(
         )
 
 
+async def _send_generated_images(
+    *,
+    context: GenerationContext,
+    state: GenerationState,
+) -> None:
+    if not state.generated_images:
+        logger.debug(
+            "No Gemini-generated images to send for message %s",
+            context.new_msg.id,
+        )
+        return
+
+    logger.info(
+        "Sending %s Gemini-generated image(s) for message %s",
+        len(state.generated_images),
+        context.new_msg.id,
+    )
+    reply_target = state.response_msgs[-1] if state.response_msgs else context.new_msg
+    batch_size = 10
+    for index in range(0, len(state.generated_images), batch_size):
+        batch = state.generated_images[index : index + batch_size]
+        try:
+            files = [
+                discord.File(io.BytesIO(image.data), filename=image.filename)
+                for image in batch
+            ]
+            total_bytes = sum(len(image.data) for image in batch)
+            logger.debug(
+                "Prepared %s image(s) (%s bytes) for batch %s-%s",
+                len(batch),
+                total_bytes,
+                index,
+                index + len(batch) - 1,
+            )
+            content = "Generated image(s):" if index == 0 else None
+            await reply_target.reply(content=content, files=files)
+            logger.info(
+                "Sent Gemini-generated image batch %s-%s for message %s",
+                index,
+                index + len(batch) - 1,
+                context.new_msg.id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send Gemini-generated image batch %s-%s for message %s",
+                index,
+                index + len(batch) - 1,
+                context.new_msg.id,
+            )
+
+
 async def _trim_message_nodes(context: GenerationContext) -> None:
     if (num_nodes := len(context.msg_nodes)) <= MAX_MESSAGE_NODES:
         return
@@ -496,6 +718,7 @@ async def _finalize_response(
         full_response=full_response,
         grounding_metadata=grounding_metadata,
     )
+    await _send_generated_images(context=context, state=state)
     await _trim_message_nodes(context)
 
 
@@ -564,7 +787,7 @@ async def _get_stream(
     *,
     context: GenerationContext,
     stream_config: StreamConfig,
-) -> AsyncIterator[tuple[str, object | None, object | None]]:
+) -> AsyncIterator[tuple[str, object | None, object | None, list[GeneratedImage]]]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
     enable_grounding = not re.search(r"https?://", context.new_msg.content)
 
@@ -596,6 +819,11 @@ async def _get_stream(
         delta_content = choice.delta.content or ""
         chunk_finish_reason = choice.finish_reason
         grounding_metadata = _extract_grounding_metadata(chunk, choice)
+        image_payloads = _extract_gemini_images_from_chunk(
+            chunk,
+            choice,
+            delta_content,
+        )
 
         if chunk_finish_reason and is_gemini_model(stream_config.actual_model):
             chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
@@ -612,7 +840,7 @@ async def _get_stream(
                     list(hidden_params.keys()),
                 )
 
-        yield delta_content, chunk_finish_reason, grounding_metadata
+        yield delta_content, chunk_finish_reason, grounding_metadata, image_payloads
 
 
 def _append_stream_content(
@@ -918,6 +1146,7 @@ async def _stream_response(
             delta_content,
             new_finish_reason,
             new_grounding_metadata,
+            image_payloads,
         ) in _get_stream(
             context=context,
             stream_config=stream_config,
@@ -928,6 +1157,9 @@ async def _stream_response(
                     "Captured grounding metadata from stream: %s",
                     type(grounding_metadata),
                 )
+
+            if image_payloads:
+                _append_generated_images(state, image_payloads)
 
             if loop_state.finish_reason is not None:
                 break
