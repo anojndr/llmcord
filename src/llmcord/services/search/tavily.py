@@ -361,6 +361,15 @@ async def perform_tavily_research(
     if not query or not api_keys:
         return "", {}
 
+    def _build_exhausted_metadata() -> dict:
+        return {
+            "queries": [query],
+            "provider": "tavily",
+            "mode": "research",
+            "model": model,
+            "keys_exhausted": True,
+        }
+
     db = get_bad_keys_db()
     good_keys = db.get_good_keys_synced("tavily", api_keys)
     if not good_keys:
@@ -414,4 +423,4 @@ async def perform_tavily_research(
         if handled is not None:
             return handled
 
-    return "", {}
+    return "", _build_exhausted_metadata()

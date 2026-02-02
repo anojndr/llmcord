@@ -314,6 +314,28 @@ async def _resolve_search_metadata(
         or search_metadata
     )
 
+    if (
+        research_model
+        and context.web_search_available
+        and search_metadata
+        and search_metadata.get("keys_exhausted")
+    ):
+        search_metadata = await _maybe_run_web_search(
+            WebSearchContext(
+                new_msg=context.new_msg,
+                messages=context.messages,
+                msg_nodes=context.msg_nodes,
+                config=context.config,
+                web_search_provider=context.web_search_provider,
+                tavily_api_keys=context.tavily_api_keys,
+                exa_mcp_url=context.exa_mcp_url,
+                is_googlelens_query=is_googlelens_query,
+                actual_model=context.actual_model,
+                has_existing_search=has_existing_search,
+                search_metadata=search_metadata,
+            ),
+        )
+
     if not research_model and context.web_search_available:
         search_metadata = await _maybe_run_web_search(
             WebSearchContext(
