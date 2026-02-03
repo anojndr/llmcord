@@ -23,7 +23,8 @@ def _extract_queries_from_mapping(mapping: Mapping[str, object]) -> list[str]:
 def get_grounding_queries(metadata: object | None) -> list[str]:
     """Extract web search queries from grounding metadata.
 
-    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
+    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list
+    formats.
     """
     if metadata is None:
         return []
@@ -93,7 +94,8 @@ def get_grounding_chunks(metadata: object | None) -> list[dict[str, str]]:
     """Extract grounding chunks from grounding metadata.
 
     Returns list of dicts with 'title' and 'uri' keys.
-    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list formats.
+    Handles GenAI types.GroundingMetadata, LiteLLM dict formats, and list
+    formats.
     """
     if metadata is None:
         return []
@@ -164,10 +166,16 @@ def add_chunked_embed_field(
             current_chunk = item
             field_count += 1
         else:
-            current_chunk = (current_chunk + "\n" + item) if current_chunk else item
+            if current_chunk:
+                current_chunk = f"{current_chunk}\n{item}"
+            else:
+                current_chunk = item
 
     if current_chunk:
-        field_name = f"{base_name} ({field_count})" if field_count > 1 else base_name
+        if field_count > 1:
+            field_name = f"{base_name} ({field_count})"
+        else:
+            field_name = base_name
         embed.add_field(name=field_name, value=current_chunk, inline=False)
 
 
@@ -175,7 +183,8 @@ def build_grounding_sources_embed(metadata: object) -> discord.Embed:
     """Build a Discord embed showing sources from grounding metadata.
 
     Args:
-        metadata: Grounding metadata (either GenAI GroundingMetadata or LiteLLM dict)
+        metadata: Grounding metadata (either GenAI GroundingMetadata or
+            LiteLLM dict)
 
     Returns:
         A Discord Embed with the formatted sources

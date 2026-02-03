@@ -13,7 +13,7 @@ async def should_process_message(
     new_msg: discord.Message,
     discord_bot: discord.Client,
 ) -> tuple[bool, discord.Message | None]:
-    """Check if the message should be processed and send processing message if so.
+    """Check if the message should be processed and send a response.
 
     Returns:
         tuple: (should_process, processing_msg_or_none)
@@ -54,9 +54,10 @@ async def should_process_message(
     allowed_channel_ids = set(permissions["channels"]["allowed_ids"])
     blocked_channel_ids = set(permissions["channels"]["blocked_ids"])
 
-    allow_all_users = (
-        not allowed_user_ids if is_dm else not allowed_user_ids and not allowed_role_ids
-    )
+    if is_dm:
+        allow_all_users = not allowed_user_ids
+    else:
+        allow_all_users = not allowed_user_ids and not allowed_role_ids
     is_good_user = (
         user_is_admin
         or allow_all_users
@@ -75,7 +76,9 @@ async def should_process_message(
         if is_dm
         else allow_all_channels or bool(channel_ids & allowed_channel_ids)
     )
-    is_bad_channel = not is_good_channel or bool(channel_ids & blocked_channel_ids)
+    is_bad_channel = not is_good_channel or bool(
+        channel_ids & blocked_channel_ids
+    )
 
     if is_bad_user or is_bad_channel:
         return False, None
@@ -89,8 +92,12 @@ async def should_process_message(
         )
     else:
         processing_embed = discord.Embed(
-            description=PROCESSING_MESSAGE, color=EMBED_COLOR_INCOMPLETE,
+            description=PROCESSING_MESSAGE,
+            color=EMBED_COLOR_INCOMPLETE,
         )
-        processing_msg = await new_msg.reply(embed=processing_embed, silent=True)
+        processing_msg = await new_msg.reply(
+            embed=processing_embed,
+            silent=True,
+        )
 
     return True, processing_msg

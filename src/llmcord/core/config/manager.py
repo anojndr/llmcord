@@ -67,7 +67,9 @@ def _normalize_profile_config(config: dict[str, Any]) -> dict[str, Any]:
         return config
 
     if not all(profile in config for profile in PROFILE_NAMES):
-        message = "Both 'main' and 'test' profiles must be defined in config.yaml."
+        message = (
+            "Both 'main' and 'test' profiles must be defined in config.yaml."
+        )
         raise ProfileConfigError(message)
 
     profile_name = config.get("profile") or "main"
@@ -114,7 +116,8 @@ def _resolve_config_path(filename: str) -> Path:
 def get_config(filename: str = "config.yaml") -> dict[str, Any]:
     """Load configuration from YAML file with caching.
 
-    Only reloads if file has been modified (checked every `CONFIG_CACHE_TTL` seconds).
+    Only reloads if file has been modified (checked every `CONFIG_CACHE_TTL`
+    seconds).
     """
     current_time = time.time()
 

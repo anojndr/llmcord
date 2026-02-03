@@ -10,7 +10,11 @@ from typing import Any
 import libsql
 
 logger = logging.getLogger(__name__)
-LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception))
+LIBSQL_ERROR = getattr(
+    libsql,
+    "LibsqlError",
+    getattr(libsql, "Error", Exception),
+)
 
 
 @dataclass(slots=True)
@@ -32,7 +36,8 @@ class MessageDataMixin:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Message search data table stores web search results and extracted URL content.
+        # Message search data table stores web search results and extracted URL
+        # content.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS message_search_data (
                 message_id TEXT PRIMARY KEY,
@@ -119,7 +124,7 @@ class MessageDataMixin:
         tavily_metadata: dict[str, Any] | None = None,
         lens_results: str | None = None,
     ) -> None:
-        """Save web search results, lens results, and metadata for a Discord message."""
+        """Save web search results, lens results, and metadata for a message."""
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -156,7 +161,7 @@ class MessageDataMixin:
         self,
         message_id: str,
     ) -> tuple[str | None, dict[str, Any] | None, str | None]:
-        """Get web search results, metadata, and lens results for a Discord message."""
+        """Get web search results, metadata, and lens results for a message."""
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -171,7 +176,10 @@ class MessageDataMixin:
                 tavily_metadata = json.loads(result[1]) if result[1] else None
             except json.JSONDecodeError:
                 logger.warning(
-                    "Failed to decode tavily_metadata for message %s, returning None",
+                    (
+                        "Failed to decode tavily_metadata for message %s, "
+                        "returning None"
+                    ),
                     message_id,
                 )
                 tavily_metadata = None

@@ -20,6 +20,6 @@ async def start_server() -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", str(config.get("port", 8001))))
-    host = os.environ.get("HOST", "0.0.0.0")  # noqa: S104
+    host = os.environ.get("HOST", "0.0.0.0")
     site = web.TCPSite(runner, host, port)
     await site.start()

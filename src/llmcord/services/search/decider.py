@@ -60,7 +60,8 @@ async def _run_decider_once(
                 exhausted_keys = False
                 break
 
-            # Use shared utility to prepare kwargs with all provider-specific config
+            # Use shared utility to prepare kwargs with all provider-specific
+            # config.
             litellm_kwargs = prepare_litellm_kwargs(
                 provider=provider,
                 model=model,
@@ -137,7 +138,8 @@ def _get_next_decider_fallback(
                 ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
                 (
                     "Search decider exhausted all keys for mistral/"
-                    f"{original_model}. Falling back to gemini/gemma-3-27b-it..."
+                    f"{original_model}. "
+                    "Falling back to gemini/gemma-3-27b-it..."
                 ),
             )
         return (
@@ -218,8 +220,10 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
             logger.warning(log_message)
         if not next_fallback:
             logger.error(
-                "Search decider fallback options exhausted (mistral and gemma), "
-                "skipping web search",
+                (
+                    "Search decider fallback options exhausted (mistral and "
+                    "gemma), skipping web search"
+                ),
             )
             return default_result
 

@@ -12,7 +12,10 @@ def _get_safety_settings(model_parameters: dict | None) -> object | None:
     return safety_settings
 
 
-def _resolve_thinking_level(model: str, model_parameters: dict | None) -> str | None:
+def _resolve_thinking_level(
+    model: str,
+    model_parameters: dict | None,
+) -> str | None:
     thinking_level = (
         model_parameters.get("thinking_level") if model_parameters else None
     )

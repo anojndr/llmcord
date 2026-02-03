@@ -84,7 +84,10 @@ def get_response_data(message_id: int) -> ResponseData:
 
 
 def _get_textis_client() -> httpx.AsyncClient:
-    """Get or create the shared text.is httpx client using the DRY factory pattern."""
+    """Get or create the shared text.is httpx client.
+
+    Uses the DRY factory pattern.
+    """
     config = get_config()
     proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
@@ -112,7 +115,8 @@ async def upload_to_textis(text: str) -> str | None:
         response = await client.get("https://text.is/", timeout=30)
 
         # Extract CSRF token from the form
-        soup = BeautifulSoup(response.text, "lxml")  # lxml is faster than html.parser
+        # lxml is faster than html.parser.
+        soup = BeautifulSoup(response.text, "lxml")
         csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
         if not csrf_input:
             # Debug: log a snippet of the response to help diagnose
@@ -157,7 +161,8 @@ async def upload_to_textis(text: str) -> str | None:
                     paste_url = f"https://text.is{paste_url}"
                 return paste_url
 
-        # If we got a 200, the paste might have been created and we're on the page
+        # If we got a 200, the paste might have been created and we're on the
+        # page.
         if post_response.status_code == HTTP_OK:
             # Check if the URL changed (we might be on the paste page)
             final_url = str(post_response.url)

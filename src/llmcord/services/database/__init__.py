@@ -1,10 +1,10 @@
 """Database service package."""
 from __future__ import annotations
 
-from .bad_keys import BadKeysMixin, KeyRotator
-from .core import DatabaseCore
-from .messages import MessageDataMixin
-from .users import UserPreferencesMixin
+from llmcord.services.database.bad_keys import BadKeysMixin, KeyRotator
+from llmcord.services.database.core import DatabaseCore
+from llmcord.services.database.messages import MessageDataMixin
+from llmcord.services.database.users import UserPreferencesMixin
 
 
 class LibsqlUnavailableError(RuntimeError):
@@ -59,7 +59,7 @@ class BadKeysDB(
         self._sync()
 
 
-# Global instance will be initialized with config values
+# Global instance initialized once to share the DB connection across services.
 _bad_keys_state: dict[str, BadKeysDB | None] = {"instance": None}
 
 
@@ -68,7 +68,10 @@ def init_bad_keys_db(
     auth_token: str | None = None,
 ) -> BadKeysDB:
     """Initialize the global bad keys database instance."""
-    _bad_keys_state["instance"] = BadKeysDB(db_url=db_url, auth_token=auth_token)
+    _bad_keys_state["instance"] = BadKeysDB(
+        db_url=db_url,
+        auth_token=auth_token,
+    )
     return _bad_keys_state["instance"]
 
 

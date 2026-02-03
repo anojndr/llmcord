@@ -61,10 +61,14 @@ if (
     and config.get("reddit_client_id")
     and config.get("reddit_client_secret")
 ):
+    user_agent = config.get(
+        "reddit_user_agent",
+        "llmcord:v1.0 (by /u/llmcord)",
+    )
     reddit_client = asyncpraw.Reddit(
         client_id=config.get("reddit_client_id"),
         client_secret=config.get("reddit_client_secret"),
-        user_agent=config.get("reddit_user_agent", "llmcord:v1.0 (by /u/llmcord)"),
+        user_agent=user_agent,
     )
 else:
     reddit_client = None

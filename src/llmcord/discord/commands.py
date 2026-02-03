@@ -160,13 +160,17 @@ async def search_decider_model_autocomplete(
     name="resetallpreferences",
     description="[Owner] Reset all users' model preferences",
 )
-async def reset_all_preferences_command(interaction: discord.Interaction) -> None:
+async def reset_all_preferences_command(
+    interaction: discord.Interaction,
+) -> None:
     """Handle the /resetallpreferences command."""
     # Only allow the bot owner to use this command
     owner_user_id = 676735636656357396
     if interaction.user.id != owner_user_id:
         await interaction.response.send_message(
-            embed=build_error_embed("This command can only be used by the bot owner."),
+            embed=build_error_embed(
+                "This command can only be used by the bot owner.",
+            ),
             ephemeral=True,
         )
         return
@@ -181,12 +185,17 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
     model_count = db.reset_all_user_model_preferences()
     decider_count = db.reset_all_user_search_decider_preferences()
 
-    await interaction.followup.send(
-        f"✅ Successfully reset all user preferences:\n"
-        f"• **Main model preferences**: {model_count} user(s) reset\n"
-        f"• **Search decider model preferences**: {decider_count} user(s) reset\n\n"
-        f"All users will now use the default models.",
-    )
+    message_lines = [
+        "✅ Successfully reset all user preferences:",
+        f"• **Main model preferences**: {model_count} user(s) reset",
+        (
+            "• **Search decider model preferences**: "
+            f"{decider_count} user(s) reset"
+        ),
+        "",
+        "All users will now use the default models.",
+    ]
+    await interaction.followup.send("\n".join(message_lines))
     logger.info(
         "Owner %s reset all user preferences (models: %s, deciders: %s)",
         interaction.user.id,
@@ -234,6 +243,9 @@ async def ytmp3_command(interaction: discord.Interaction, url: str) -> None:
         logger.exception("Error in /ytmp3 command")
         await interaction.followup.send(
             embed=build_error_embed(
-                "An error occurred while converting the video. Please try again later.",
+                (
+                    "An error occurred while converting the video. "
+                    "Please try again later."
+                ),
             ),
         )

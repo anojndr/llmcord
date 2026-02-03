@@ -15,7 +15,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 P = ParamSpec("P")
 T = TypeVar("T")
-LIBSQL_ERROR = getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception))
+LIBSQL_ERROR = getattr(
+    libsql,
+    "LibsqlError",
+    getattr(libsql, "Error", Exception),
+)
 
 
 def _with_reconnect(

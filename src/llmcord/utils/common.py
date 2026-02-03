@@ -51,7 +51,8 @@ def get_channel_locked_model(channel_id: int) -> str | None:
     """
     config_data = config_module.get_config()
     overrides = config_data.get("channel_model_overrides", {})
-    # Convert channel_id to string for comparison since YAML may parse keys as ints
+    # Convert channel_id to string for comparison since YAML may parse keys as
+    # ints or strings.
     # or strings.
     return overrides.get(channel_id) or overrides.get(str(channel_id))
 
@@ -64,7 +65,8 @@ async def _handle_model_switch(
 ) -> None:
     """Handle model switching for slash commands.
 
-    DRY: Consolidate the shared logic between /model and /searchdecidermodel commands.
+    DRY: Consolidate the shared logic between /model and /searchdecidermodel
+    commands.
 
     Args:
         interaction: Discord interaction object.
@@ -79,7 +81,10 @@ async def _handle_model_switch(
     if model not in config_data["models"]:
         await interaction.followup.send(
             embed=build_error_embed(
-                f"Model `{model}` is not available. Please choose another model.",
+                (
+                    f"Model `{model}` is not available. "
+                    "Please choose another model."
+                ),
             ),
             ephemeral=True,
         )
@@ -147,7 +152,10 @@ def _build_model_autocomplete(
 
     # Validate that user's saved model still exists in config
     if not user_model or user_model not in config_data.get("models", {}):
-        user_model = default_model or next(iter(config_data.get("models", {})), "")
+        user_model = default_model or next(
+            iter(config_data.get("models", {})),
+            "",
+        )
 
     if not user_model:
         return []

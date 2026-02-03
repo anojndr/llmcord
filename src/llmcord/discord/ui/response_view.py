@@ -3,7 +3,10 @@ from collections.abc import Awaitable, Callable, Mapping
 
 import discord
 
-from llmcord.discord.ui.constants import RETRY_RESPONSE_ID, VIEW_RESPONSE_BETTER_ID
+from llmcord.discord.ui.constants import (
+    RETRY_RESPONSE_ID,
+    VIEW_RESPONSE_BETTER_ID,
+)
 from llmcord.discord.ui.metadata import has_grounding_data
 from llmcord.discord.ui.sources_view import SourceButton, TavilySourceButton
 from llmcord.discord.ui.utils import (
@@ -65,7 +68,10 @@ class RetryButton(discord.ui.Button):
         if not response_data:
             response_data = get_response_data(interaction.message.id)
 
-        if not response_data.request_message_id or not response_data.request_user_id:
+        if (
+            not response_data.request_message_id
+            or not response_data.request_user_id
+        ):
             await interaction.followup.send(
                 embed=build_error_embed(
                     "Missing retry context for this message.",
@@ -128,7 +134,10 @@ class ViewResponseBetterButton(discord.ui.Button):
         else:
             await interaction.followup.send(
                 embed=build_error_embed(
-                    "Failed to upload response to text.is. Please try again later.",
+                    (
+                        "Failed to upload response to text.is. "
+                        "Please try again later."
+                    ),
                 ),
                 ephemeral=True,
             )
@@ -162,7 +171,7 @@ class ResponseView(discord.ui.View):
         if metadata and has_grounding_data(metadata):
             self.add_item(SourceButton(metadata))
 
-        # Add Tavily sources button if we have tavily metadata with URLs or queries
+        # Add Tavily sources button if we have metadata with URLs or queries.
         if tavily_metadata and (
             tavily_metadata.get("urls") or tavily_metadata.get("queries")
         ):

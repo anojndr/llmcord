@@ -28,8 +28,10 @@ def convert_messages_to_openai_format(
     Args:
         messages: List of message dicts with 'role' and 'content' keys
         system_prompt: Optional system prompt to prepend
-        reverse: Whether to reverse the message order (default True for chronological)
-        include_analysis_prompt: Whether to append the analysis instruction prompt
+        reverse: Whether to reverse the message order (default True for
+            chronological)
+        include_analysis_prompt: Whether to append the analysis instruction
+            prompt
 
     Returns:
         List of OpenAI-compatible message dicts
@@ -52,11 +54,15 @@ def convert_messages_to_openai_format(
             # Filter to only include types supported by OpenAI-compatible APIs
             # GitHub Copilot and others only accept 'text' and 'image_url' types
             filtered_content = [
-                part for part in content
-                if isinstance(part, dict) and part.get("type") in ("text", "image_url")
+                part
+                for part in content
+                if isinstance(part, dict)
+                and part.get("type") in ("text", "image_url")
             ]
             if filtered_content:
-                openai_messages.append({"role": role, "content": filtered_content})
+                openai_messages.append(
+                    {"role": role, "content": filtered_content}
+                )
         elif content:
             openai_messages.append({"role": role, "content": str(content)})
 

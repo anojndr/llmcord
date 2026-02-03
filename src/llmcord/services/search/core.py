@@ -202,7 +202,8 @@ async def perform_web_search(
     - Concurrent requests with asyncio.gather()
         - KeyRotator for synced bad key tracking with database persistence
             (Tavily only)
-    - Configurable search depth (Tavily: "basic", "advanced", "fast", "ultra-fast")
+        - Configurable search depth (Tavily: "basic", "advanced", "fast",
+            "ultra-fast")
 
     Args:
         queries: List of search queries
@@ -211,8 +212,8 @@ async def perform_web_search(
         options: Web search options for provider and formatting.
 
     Returns:
-        tuple: (formatted_results_string, {"queries": [...], "urls": [{...}, ...],
-            "provider": "..."})
+        tuple: (formatted_results_string, {"queries": [...], "urls": [{...},
+            ...], "provider": "..."})
 
     """
     if not queries:
@@ -257,10 +258,14 @@ async def perform_web_search(
     }
 
     if formatted_results:
+        results_text = "".join(formatted_results)
         return (
-            "\n\n---\nHere are the web search results in case the user asked you "
-            "to search the net or something:\n\n**Web Search Results:**"
-            + "".join(formatted_results),
+            (
+                "\n\n---\nHere are the web search results in case the user "
+                "asked you to search the net or something:\n\n"
+                "**Web Search Results:**"
+                f"{results_text}"
+            ),
             metadata,
         )
     return "", metadata

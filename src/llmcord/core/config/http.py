@@ -42,8 +42,8 @@ def get_or_create_httpx_client(
 ) -> httpx.AsyncClient:
     """Get or create a shared httpx.AsyncClient with lazy initialization.
 
-    This factory function provides a consistent pattern for creating httpx clients
-    across the codebase, avoiding duplication of client configuration.
+    This factory function provides a consistent pattern for creating httpx
+    clients across the codebase, avoiding duplication of client configuration.
 
     Args:
         client_holder: A mutable list containing the client instance (or empty).

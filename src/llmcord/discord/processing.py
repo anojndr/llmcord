@@ -28,7 +28,10 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         # Use the channel's locked model (ignore user preference)
         if locked_model not in config_data.get("models", {}):
             logger.error(
-                "Channel %s has locked model '%s' but it's not in config.yaml models",
+                (
+                    "Channel %s has locked model '%s' but it's not in "
+                    "config.yaml models"
+                ),
                 channel_id,
                 locked_model,
             )
@@ -47,7 +50,10 @@ async def _process_user_message(new_msg: discord.Message) -> None:
             logger.error("No models configured in config.yaml")
             return
 
-        if user_model is None or user_model not in config_data.get("models", {}):
+        if user_model is None or user_model not in config_data.get(
+            "models",
+            {},
+        ):
             user_model = default_model
 
     # Create a reference list to pass user's model by reference
@@ -63,7 +69,10 @@ async def _process_user_message(new_msg: discord.Message) -> None:
             curr_model_ref=curr_model_ref,
         )
         processing_module = importlib.import_module("llmcord.processing")
-        await processing_module.process_message(new_msg=new_msg, context=context)
+        await processing_module.process_message(
+            new_msg=new_msg,
+            context=context,
+        )
     except Exception:
         logger.exception("Error processing message")
         # Try to notify the user about the error

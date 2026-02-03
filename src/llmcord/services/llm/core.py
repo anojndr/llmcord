@@ -4,7 +4,9 @@ from typing import Any
 
 from llmcord.core.config import is_gemini_model
 from llmcord.services.llm.providers.gemini import configure_gemini_kwargs
-from llmcord.services.llm.providers.github import configure_github_copilot_kwargs
+from llmcord.services.llm.providers.github import (
+    configure_github_copilot_kwargs,
+)
 from llmcord.services.llm.types import LiteLLMOptions
 
 
@@ -38,7 +40,7 @@ def prepare_litellm_kwargs(
     *,
     options: LiteLLMOptions | None = None,
 ) -> dict[str, Any]:
-    """Prepare kwargs for LiteLLM acompletion() with provider-specific configuration.
+    """Prepare kwargs for LiteLLM acompletion() with provider configuration.
 
     This is the main entry point for creating consistent LiteLLM calls across
     both the main model handler and search decider.
@@ -72,7 +74,8 @@ def prepare_litellm_kwargs(
     if options.temperature is not None:
         kwargs["temperature"] = options.temperature
 
-    # Add base_url for OpenAI-compatible providers (not Gemini or GitHub Copilot)
+    # Add base_url for OpenAI-compatible providers (not Gemini or GitHub
+    # Copilot).
     if options.base_url and provider not in ("gemini", "github_copilot"):
         kwargs["base_url"] = options.base_url
 
@@ -92,6 +95,9 @@ def prepare_litellm_kwargs(
     if options.extra_headers and "extra_headers" not in kwargs:
         kwargs["extra_headers"] = options.extra_headers
     elif options.extra_headers and "extra_headers" in kwargs:
-        kwargs["extra_headers"] = {**kwargs["extra_headers"], **options.extra_headers}
+        kwargs["extra_headers"] = {
+            **kwargs["extra_headers"],
+            **options.extra_headers,
+        }
 
     return kwargs

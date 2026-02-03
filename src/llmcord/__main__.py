@@ -1,11 +1,17 @@
-"""llmcord - A Discord bot for LLM interactions.
+"""Main entry point for running the llmcord application."""
 
-Main entry point.
-"""
 import asyncio
-import contextlib
 
-from .entrypoint import main
+import llmcord.entrypoint
 
-with contextlib.suppress(KeyboardInterrupt):
-    asyncio.run(main())
+
+def main() -> None:
+    """Run the application entry point."""
+    try:
+        asyncio.run(llmcord.entrypoint.main())
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

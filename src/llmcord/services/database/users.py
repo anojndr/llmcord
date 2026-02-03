@@ -39,10 +39,12 @@ class UserPreferencesMixin:
 
         Returns None if not set.
         """
-        # _with_reconnect should be applied by the consumer or we need to import it.
-        # Ideally, we apply it here if we can import it, or rely on the main class.
-        # For simplicity in this mixin structure, we assume the methods utilizing I/O
-        # will be decorated in the final class OR we import the decorator here.
+        # _with_reconnect should be applied by the consumer or we need to
+        # import it.
+        # Ideally, we apply it here if we can import it, or rely on the main
+        # class. For simplicity in this mixin structure, we assume the methods
+        # utilizing I/O will be decorated in the final class OR we import the
+        # decorator here.
         # Let's import the decorator to keep it self-contained.
         return self._get_user_model_impl(user_id)
 
@@ -81,7 +83,10 @@ class UserPreferencesMixin:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT model FROM user_search_decider_preferences WHERE user_id = ?",
+            (
+                "SELECT model FROM user_search_decider_preferences "
+                "WHERE user_id = ?"
+            ),
             (str(user_id),),
         )
         result = cursor.fetchone()
@@ -92,11 +97,12 @@ class UserPreferencesMixin:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            """INSERT INTO user_search_decider_preferences (user_id, model, updated_at)
-               VALUES (?, ?, CURRENT_TIMESTAMP)
-               ON CONFLICT(user_id) DO UPDATE SET
-                   model = ?,
-                   updated_at = CURRENT_TIMESTAMP""",
+            (
+                "INSERT INTO user_search_decider_preferences "
+                "(user_id, model, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_id) DO UPDATE SET model = ?, "
+                "updated_at = CURRENT_TIMESTAMP"
+            ),
             (str(user_id), model, model),
         )
         conn.commit()
@@ -119,7 +125,10 @@ class UserPreferencesMixin:
         cursor.execute("DELETE FROM user_model_preferences")
         conn.commit()
         self._sync()
-        logger.info("Reset all user model preferences (%d users affected)", count)
+        logger.info(
+            "Reset all user model preferences (%d users affected)",
+            count,
+        )
         return count
 
     def reset_all_user_search_decider_preferences(self) -> int:
@@ -135,7 +144,10 @@ class UserPreferencesMixin:
         conn.commit()
         self._sync()
         logger.info(
-            "Reset all user search decider model preferences (%d users affected)",
+            (
+                "Reset all user search decider model preferences "
+                "(%d users affected)"
+            ),
             count,
         )
         return count

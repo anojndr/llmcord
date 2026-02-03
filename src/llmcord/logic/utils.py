@@ -135,7 +135,8 @@ def build_node_text_parts(
         embeds: List of Discord embeds
         components: List of Discord components
         text_attachments: Optional list of text attachment contents
-        extra_parts: Optional list of additional text parts (transcripts, tweets, etc.)
+        extra_parts: Optional list of additional text parts (transcripts,
+            tweets, etc.)
 
     Returns:
         Joined text content
@@ -156,7 +157,8 @@ def build_node_text_parts(
     parts.extend(
         component.content
         for component in components
-        if component.type == discord.ComponentType.text_display and component.content
+        if component.type == discord.ComponentType.text_display
+        and component.content
     )
 
     # Add text attachments
@@ -179,7 +181,8 @@ def append_search_to_content(
     Handles both string and multimodal formats.
 
     Args:
-        content: Either a string or a list of content parts (for multimodal messages)
+        content: Either a string or a list of content parts (for multimodal
+            messages)
         search_results: The search results text to append
 
     Returns:
@@ -193,7 +196,8 @@ def append_search_to_content(
         # For multimodal content, append to the text part
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":
-                part["text"] = str(part.get("text", "")) + "\n\n" + search_results
+                new_text = str(part.get("text", ""))
+                part["text"] = f"{new_text}\n\n{search_results}"
                 break
         return content
     if content:
@@ -205,7 +209,7 @@ def replace_content_text(
     content: str | list[dict[str, object]],
     new_text: str,
 ) -> str | list[dict[str, object]]:
-    """Replace text content in a message while preserving multimodal structure."""
+    """Replace text content while preserving multimodal structure."""
     if isinstance(content, list):
         for part in content:
             if isinstance(part, dict) and part.get("type") == "text":

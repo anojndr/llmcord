@@ -14,7 +14,10 @@ import pymupdf4llm
 from bs4 import BeautifulSoup
 from PIL import Image
 from twscrape import gather
-from youtube_transcript_api import YouTubeTranscriptApi, YouTubeTranscriptApiException
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    YouTubeTranscriptApiException,
+)
 from youtube_transcript_api.proxies import GenericProxyConfig
 
 from llmcord.core.config import BROWSER_HEADERS
@@ -137,7 +140,10 @@ async def fetch_tweet_with_replies(
 
     """
     try:
-        tweet = await asyncio.wait_for(twitter_api.tweet_details(tweet_id), timeout=10)
+        tweet = await asyncio.wait_for(
+            twitter_api.tweet_details(tweet_id),
+            timeout=10,
+        )
 
         # Handle edge case where tweet or user is None
         if not tweet or not tweet.user:
@@ -299,7 +305,8 @@ async def perform_yandex_lookup(
                 f"- [{title}]({link}) ({domain}) - {desc}",
             )
 
-            # Check if the link is a Twitter/X URL and extract for later processing
+            # Check if the link is a Twitter/X URL and extract for later
+            # processing.
             if re.search(
                 r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
                 link,
@@ -363,12 +370,18 @@ async def extract_youtube_transcript(
         html = response.text
         title_match = re.search(r'<meta name="title" content="(.*?)">', html)
         title = title_match.group(1) if title_match else "Unknown Title"
-        channel_match = re.search(r'<link itemprop="name" content="(.*?)">', html)
+        channel_match = re.search(
+            r'<link itemprop="name" content="(.*?)">',
+            html,
+        )
         channel = channel_match.group(1) if channel_match else "Unknown Channel"
 
+        transcript_text = " ".join(x["text"] for x in transcript)
         return (
-            f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\n"
-            f"Transcript:\n" + " ".join(x["text"] for x in transcript)
+            f"YouTube Video ID: {video_id}\n"
+            f"Title: {title}\n"
+            f"Channel: {channel}\n"
+            f"Transcript:\n{transcript_text}"
         )
     except (
         YouTubeTranscriptApiException,
@@ -377,7 +390,11 @@ async def extract_youtube_transcript(
         ValueError,
         KeyError,
     ) as exc:
-        logger.debug("Failed to fetch YouTube transcript for %s: %s", video_id, exc)
+        logger.debug(
+            "Failed to fetch YouTube transcript for %s: %s",
+            video_id,
+            exc,
+        )
         return None
 
 
@@ -471,9 +488,13 @@ async def extract_reddit_post_praw(
         # Safely access attributes with defaults
         title = getattr(submission, "title", "Untitled")
         subreddit_name = (
-            submission.subreddit.display_name if submission.subreddit else "unknown"
+            submission.subreddit.display_name
+            if submission.subreddit
+            else "unknown"
         )
-        author_name = submission.author.name if submission.author else "[deleted]"
+        author_name = (
+            submission.author.name if submission.author else "[deleted]"
+        )
         selftext = getattr(submission, "selftext", "") or ""
 
         post_text = (
@@ -488,7 +509,9 @@ async def extract_reddit_post_praw(
 
         submission.comment_sort = "top"
         await submission.comments()
-        comments_list = submission.comments.list() if submission.comments else []
+        comments_list = (
+            submission.comments.list() if submission.comments else []
+        )
         top_comments = comments_list[:5]
 
         if top_comments:
@@ -496,7 +519,9 @@ async def extract_reddit_post_praw(
             for comment in top_comments:
                 if isinstance(comment, asyncpraw.models.MoreComments):
                     continue
-                comment_author = comment.author.name if comment.author else "[deleted]"
+                comment_author = (
+                    comment.author.name if comment.author else "[deleted]"
+                )
                 comment_body = getattr(comment, "body", "") or ""
                 post_text += f"\n- u/{comment_author}: {comment_body}"
 

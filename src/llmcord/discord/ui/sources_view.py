@@ -48,7 +48,10 @@ class SourceButton(discord.ui.Button):
 
 
 class TavilySourcesView(discord.ui.View):
-    """Paginated view for displaying web search sources (supports Tavily and Exa)."""
+    """Paginated view for displaying web search sources.
+
+    Supports Tavily and Exa.
+    """
 
     # Limits for embed content
     MAX_EMBED_SIZE = 5500  # Leave buffer below 6000
@@ -99,7 +102,8 @@ class TavilySourcesView(discord.ui.View):
         # Account for queries field size (on every page)
         queries_size = 0
         if self.queries:
-            queries_text = "\n".join(f"• {q}" for q in self.queries)[:self.FIELD_LIMIT]
+            queries_text = "\n".join(f"• {q}" for q in self.queries)
+            queries_text = queries_text[: self.FIELD_LIMIT]
             queries_size = len("Search Queries") + len(queries_text) + 50
 
         base_size = len("Web Search Sources") + queries_size + 100
@@ -132,21 +136,38 @@ class TavilySourcesView(discord.ui.View):
 
     def build_embed(self) -> discord.Embed:
         """Build the embed for the current page."""
-        embed = discord.Embed(title="Web Search Sources", color=discord.Color.blue())
+        embed = discord.Embed(
+            title="Web Search Sources",
+            color=discord.Color.blue(),
+        )
 
         # Display search queries (on every page)
         if self.queries:
-            queries_text = "\n".join(f"• {q}" for q in self.queries)[:self.FIELD_LIMIT]
-            embed.add_field(name="Search Queries", value=queries_text, inline=False)
+            queries_text = "\n".join(f"• {q}" for q in self.queries)
+            queries_text = queries_text[: self.FIELD_LIMIT]
+            embed.add_field(
+                name="Search Queries",
+                value=queries_text,
+                inline=False,
+            )
 
         # Display sources for current page
         if self.pages and self.pages[self.current_page]:
             page_sources = self.pages[self.current_page]
 
             # Split into multiple fields if needed
-            add_chunked_embed_field(embed, page_sources, "Sources", self.FIELD_LIMIT)
+            add_chunked_embed_field(
+                embed,
+                page_sources,
+                "Sources",
+                self.FIELD_LIMIT,
+            )
         elif not self.urls:
-            embed.add_field(name="Sources", value="No URLs available", inline=False)
+            embed.add_field(
+                name="Sources",
+                value="No URLs available",
+                inline=False,
+            )
 
         # Footer with pagination info - show provider name
         mode = self.search_metadata.get("mode")
@@ -178,7 +199,10 @@ class TavilySourcesView(discord.ui.View):
         """Show the previous page of sources."""
         self.current_page = max(0, self.current_page - 1)
         self.update_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self,
+        )
 
     @discord.ui.button(
         label="Next",
@@ -193,7 +217,10 @@ class TavilySourcesView(discord.ui.View):
         """Show the next page of sources."""
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self.update_buttons()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await interaction.response.edit_message(
+            embed=self.build_embed(),
+            view=self,
+        )
 
     @discord.ui.button(
         label="Go to Page",
@@ -232,7 +259,8 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
         try:
             page_num = int(self.page_input.value)
             if 1 <= page_num <= self.sources_view.total_pages:
-                self.sources_view.current_page = page_num - 1  # Convert to 0-indexed
+                # Convert to 0-indexed.
+                self.sources_view.current_page = page_num - 1
                 self.sources_view.update_buttons()
                 await interaction.response.edit_message(
                     embed=self.sources_view.build_embed(),
@@ -242,8 +270,8 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
                 await interaction.response.send_message(
                     embed=build_error_embed(
                         (
-                            "Invalid page number. Please enter a number between 1 "
-                            f"and {self.sources_view.total_pages}."
+                            "Invalid page number. Please enter a number "
+                            f"between 1 and {self.sources_view.total_pages}."
                         ),
                     ),
                     ephemeral=True,
@@ -258,7 +286,10 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
 class TavilySourceButton(discord.ui.Button):
     """Button to show sources from web search (supports Tavily and Exa)."""
 
-    def __init__(self, search_metadata: Mapping[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        search_metadata: Mapping[str, object] | None = None,
+    ) -> None:
         """Initialize the web-search sources button."""
         super().__init__(
             label="Show Sources",
@@ -286,7 +317,11 @@ class TavilySourceButton(discord.ui.Button):
 
         view = TavilySourcesView(search_metadata)
         embed = view.build_embed()
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(
+            embed=embed,
+            view=view,
+            ephemeral=True,
+        )
 
 
 class SourceView(discord.ui.View):

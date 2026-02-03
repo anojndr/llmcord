@@ -3,13 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import AsyncIterator, Iterator
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
-
-
-from .core import _with_reconnect
+from llmcord.services.database.core import _with_reconnect
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +55,10 @@ class BadKeysMixin:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT OR REPLACE INTO bad_keys (provider, key_hash, error_message)"
-            " VALUES (?, ?, ?)",
+            (
+                "INSERT OR REPLACE INTO bad_keys "
+                "(provider, key_hash, error_message) VALUES (?, ?, ?)"
+            ),
             (provider, self._hash_key(api_key), error_message),
         )
         conn.commit()
@@ -77,10 +75,10 @@ class BadKeysMixin:
 
     @_with_reconnect
     def is_key_bad_synced(self, provider: str, api_key: str) -> bool:
-        """Check if an API key is marked as bad for the main or decider provider.
+        """Check if an API key is bad for the main or decider provider.
 
-        This ensures keys marked bad by main model are also recognized by decider
-        and vice versa.
+        This ensures keys marked bad by the main model are also
+        recognized by the decider model, and vice versa.
         Uses a single optimized query instead of two separate calls.
         """
         base_provider = provider.removeprefix("decider_")
@@ -105,7 +103,8 @@ class BadKeysMixin:
     ) -> None:
         """Mark an API key as bad for both the main and decider providers.
 
-        This ensures a bad key is recognized by both main model and search decider.
+        This ensures a bad key is recognized by both the main model and the
+        search decider.
         """
         base_provider = provider.removeprefix("decider_")
         decider_provider = f"decider_{base_provider}"
@@ -116,13 +115,17 @@ class BadKeysMixin:
 
         # Mark for both base provider and decider provider
         cursor.execute(
-            "INSERT OR REPLACE INTO bad_keys (provider, key_hash, error_message)"
-            " VALUES (?, ?, ?)",
+            (
+                "INSERT OR REPLACE INTO bad_keys "
+                "(provider, key_hash, error_message) VALUES (?, ?, ?)"
+            ),
             (base_provider, key_hash, error_message),
         )
         cursor.execute(
-            "INSERT OR REPLACE INTO bad_keys (provider, key_hash, error_message)"
-            " VALUES (?, ?, ?)",
+            (
+                "INSERT OR REPLACE INTO bad_keys "
+                "(provider, key_hash, error_message) VALUES (?, ?, ?)"
+            ),
             (decider_provider, key_hash, error_message),
         )
         conn.commit()
@@ -135,7 +138,11 @@ class BadKeysMixin:
         )
 
     @_with_reconnect
-    def get_good_keys_synced(self, provider: str, all_keys: list[str]) -> list[str]:
+    def get_good_keys_synced(
+        self,
+        provider: str,
+        all_keys: list[str],
+    ) -> list[str]:
         """Filter out bad keys, checking both main and decider providers.
 
         This ensures keys marked bad by either are filtered out for both.
@@ -158,7 +165,9 @@ class BadKeysMixin:
         bad_hashes = {row[0] for row in cursor.fetchall()}
 
         # Filter keys locally using the pre-fetched bad hashes
-        return [key for key in all_keys if self._hash_key(key) not in bad_hashes]
+        return [
+            key for key in all_keys if self._hash_key(key) not in bad_hashes
+        ]
 
     @_with_reconnect
     def reset_provider_keys_synced(self, provider: str) -> None:
@@ -215,8 +224,9 @@ class BadKeysMixin:
 class KeyRotator:
     """Reusable key rotation mechanism with synced bad key tracking.
 
-    This provides a consistent pattern for all services (main model, search decider,
-    Tavily, and any future services) to handle API key rotation and retry logic.
+    This provides a consistent pattern for all services (main model, search
+    decider, Tavily, and any future services) to handle API key rotation and
+    retry logic.
 
     Usage:
         rotator = KeyRotator("my_provider", api_keys, db=get_bad_keys_db())
@@ -251,7 +261,8 @@ class KeyRotator:
             provider: The provider name (e.g., "gemini", "openai", "tavily")
             all_keys: List of all API keys for this provider
             db: Database instance used for bad key tracking
-            max_retries_multiplier: How many times to cycle through keys (default: 2)
+            max_retries_multiplier: How many times to cycle through keys
+                (default: 2)
 
         """
         self.provider = provider
@@ -265,7 +276,8 @@ class KeyRotator:
     def _init_good_keys(self) -> None:
         """Initialize the good keys list from the database."""
         if self._good_keys is None:
-            # Get good keys (filter out known bad ones - synced across all providers)
+            # Get good keys (filter out known bad ones - synced across
+            # providers).
             self._good_keys = self._db.get_good_keys_synced(
                 self.provider,
                 self.all_keys,
@@ -283,8 +295,9 @@ class KeyRotator:
     def get_keys(self) -> Iterator[str]:
         """Yield API keys to try, handling rotation and retries.
 
-        Yields keys one at a time. If a key fails, call mark_current_bad() before
-        the next iteration to mark it as bad and remove it from the rotation.
+        Yields keys one at a time. If a key fails, call mark_current_bad()
+        before the next iteration to mark it as bad and remove it from the
+        rotation.
         """
         self._init_good_keys()
         max_attempts = len(self.all_keys) * self.max_retries_multiplier
@@ -298,8 +311,9 @@ class KeyRotator:
 
             yield self._current_key
 
-            # If we get here without mark_current_bad being called, the key worked
-            # Reset for potential reuse
+            # If we get here without mark_current_bad being called, the
+            # key worked.
+            # Reset for potential reuse.
             self._current_key = None
 
     async def get_keys_async(self) -> AsyncIterator[str]:
@@ -329,7 +343,11 @@ class KeyRotator:
         )
 
         # Mark the current key as bad (synced across providers)
-        self._db.mark_key_bad_synced(self.provider, self._current_key, error_msg)
+        self._db.mark_key_bad_synced(
+            self.provider,
+            self._current_key,
+            error_msg,
+        )
 
         # Remove the bad key from good_keys list for this session
         if self._current_key in self._good_keys:
@@ -338,7 +356,10 @@ class KeyRotator:
         # If all keys are exhausted, try resetting once
         if not self._good_keys and self._attempt_count >= len(self.all_keys):
             logger.warning(
-                "All keys exhausted for '%s'. Resetting synced keys for retry...",
+                (
+                    "All keys exhausted for '%s'. "
+                    "Resetting synced keys for retry..."
+                ),
                 self.provider,
             )
             self._db.reset_provider_keys_synced(self.provider)

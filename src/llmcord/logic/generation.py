@@ -29,13 +29,9 @@ from llmcord.core.exceptions import (
     _raise_empty_response,
 )
 from llmcord.core.models import MsgNode
-from llmcord.discord.ui.metadata import (
-    get_grounding_chunks,
-    get_grounding_queries,
-    has_grounding_data,
-)
-from llmcord.discord.ui.response_view import LayoutView, ResponseView, TextDisplay
-from llmcord.discord.ui.sources_view import SourceButton, SourceView, TavilySourceButton
+from llmcord.discord.ui import metadata as ui_metadata
+from llmcord.discord.ui import response_view
+from llmcord.discord.ui import sources_view
 from llmcord.logic.utils import (
     count_conversation_tokens,
     count_text_tokens,
@@ -195,7 +191,10 @@ def _get_good_keys(provider: str, api_keys: list[str]) -> list[str]:
 
 def _reset_provider_keys(provider: str, api_keys: list[str]) -> list[str]:
     logger.warning(
-        "All API keys for provider '%s' (synced) are marked as bad. Resetting...",
+        (
+            "All API keys for provider '%s' (synced) are marked as bad. "
+            "Resetting..."
+        ),
         provider,
     )
     try:
@@ -217,7 +216,10 @@ def _get_next_fallback(
             next_fallback = fallback_chain[state.fallback_index]
             state.fallback_index += 1
             logger.warning(
-                "All %s keys exhausted for provider '%s'. Falling back to %s...",
+                (
+                    "All %s keys exhausted for provider '%s'. "
+                    "Falling back to %s..."
+                ),
                 initial_key_count,
                 provider,
                 next_fallback[2],
@@ -263,7 +265,10 @@ def _get_next_fallback(
             "gemini/gemma-3-27b-it",
         )
         logger.warning(
-            "Mistral fallback also failed. Falling back to gemini/gemma-3-27b-it...",
+            (
+                "Mistral fallback also failed. "
+                "Falling back to gemini/gemma-3-27b-it..."
+            ),
         )
         return next_fallback
 
@@ -401,8 +406,12 @@ def _extract_images_from_dict(obj: dict) -> list[GeneratedImage]:
     if image_url:
         images.extend(_extract_images_from_image_url(image_url))
 
-    images.extend(_extract_images_from_mime_data(obj.get("data"), obj.get("mime_type")))
-    images.extend(_extract_images_from_mime_data(obj.get("data"), obj.get("mimeType")))
+    images.extend(
+        _extract_images_from_mime_data(obj.get("data"), obj.get("mime_type"))
+    )
+    images.extend(
+        _extract_images_from_mime_data(obj.get("data"), obj.get("mimeType"))
+    )
     return images
 
 
@@ -471,8 +480,9 @@ async def _initialize_generation_state(
     context: GenerationContext,
 ) -> GenerationState:
     response_msgs = [context.processing_msg]
-    context.msg_nodes[context.processing_msg.id] = MsgNode(parent_msg=context.new_msg)
-    await context.msg_nodes[context.processing_msg.id].lock.acquire()
+    processing_msg_id = context.processing_msg.id
+    context.msg_nodes[processing_msg_id] = MsgNode(parent_msg=context.new_msg)
+    await context.msg_nodes[processing_msg_id].lock.acquire()
 
     input_tokens = count_conversation_tokens(context.messages)
     use_plain_responses = context.config.get("use_plain_responses", False)
@@ -490,11 +500,10 @@ async def _initialize_generation_state(
                 ],
             },
         )
-        embed.set_footer(
-            text=(
-                f"{context.provider_slash_model} | total tokens: {input_tokens:,}"
-            ),
+        footer_text = (
+            f"{context.provider_slash_model} | total tokens: {input_tokens:,}"
         )
+        embed.set_footer(text=footer_text)
 
     return GenerationState(
         response_msgs=response_msgs,
@@ -535,7 +544,10 @@ def _release_response_locks(
     context: GenerationContext,
     state: GenerationState,
 ) -> str:
-    full_response = "".join(state.response_contents) if state.response_contents else ""
+    if state.response_contents:
+        full_response = "".join(state.response_contents)
+    else:
+        full_response = ""
     for response_msg in state.response_msgs:
         context.msg_nodes[response_msg.id].text = full_response
         context.msg_nodes[response_msg.id].lock.release()
@@ -545,14 +557,23 @@ def _release_response_locks(
 def _build_grounding_payload(
     grounding_metadata: object | None,
 ) -> dict[str, object] | None:
-    if not grounding_metadata or not has_grounding_data(grounding_metadata):
+    if not grounding_metadata or not ui_metadata.has_grounding_data(
+        grounding_metadata
+    ):
         return None
 
     return {
-        "web_search_queries": get_grounding_queries(grounding_metadata),
+        "web_search_queries": ui_metadata.get_grounding_queries(
+            grounding_metadata
+        ),
         "grounding_chunks": [
-            {"web": {"title": chunk.get("title", ""), "uri": chunk.get("uri", "")}}
-            for chunk in get_grounding_chunks(grounding_metadata)
+            {
+                "web": {
+                    "title": chunk.get("title", ""),
+                    "uri": chunk.get("uri", ""),
+                }
+            }
+            for chunk in ui_metadata.get_grounding_chunks(grounding_metadata)
         ],
     }
 
@@ -601,7 +622,7 @@ async def _update_response_view(
     ):
         return
 
-    response_view = ResponseView(
+    response_view_instance = response_view.ResponseView(
         full_response,
         grounding_metadata,
         context.tavily_metadata,
@@ -615,14 +636,13 @@ async def _update_response_view(
     if last_msg_index < len(state.response_contents) and state.embed:
         state.embed.description = state.response_contents[last_msg_index]
         state.embed.color = EMBED_COLOR_COMPLETE
-        state.embed.set_footer(
-            text=(
-                f"{context.provider_slash_model} | total tokens: {total_tokens:,}"
-            ),
+        footer_text = (
+            f"{context.provider_slash_model} | total tokens: {total_tokens:,}"
         )
+        state.embed.set_footer(text=footer_text)
         await state.response_msgs[last_msg_index].edit(
             embed=state.embed,
-            view=response_view,
+            view=response_view_instance,
         )
 
 
@@ -643,7 +663,9 @@ async def _send_generated_images(
         len(state.generated_images),
         context.new_msg.id,
     )
-    reply_target = state.response_msgs[-1] if state.response_msgs else context.new_msg
+    reply_target = (
+        state.response_msgs[-1] if state.response_msgs else context.new_msg
+    )
     batch_size = 10
     for index in range(0, len(state.generated_images), batch_size):
         batch = state.generated_images[index : index + batch_size]
@@ -670,7 +692,10 @@ async def _send_generated_images(
             )
         except Exception:
             logger.exception(
-                "Failed to send Gemini-generated image batch %s-%s for message %s",
+                (
+                    "Failed to send Gemini-generated image batch %s-%s for "
+                    "message %s"
+                ),
                 index,
                 index + len(batch) - 1,
                 context.new_msg.id,
@@ -782,7 +807,9 @@ async def _get_stream(
     *,
     context: GenerationContext,
     stream_config: StreamConfig,
-) -> AsyncIterator[tuple[str, object | None, object | None, list[GeneratedImage]]]:
+) -> AsyncIterator[
+    tuple[str, object | None, object | None, list[GeneratedImage]]
+]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
     enable_grounding = not re.search(r"https?://", context.new_msg.content)
 
@@ -821,7 +848,9 @@ async def _get_stream(
         )
 
         if chunk_finish_reason and is_gemini_model(stream_config.actual_model):
-            chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
+            chunk_attrs = [
+                attr for attr in dir(chunk) if not attr.startswith("_")
+            ]
             logger.debug("Gemini chunk finish - attributes: %s", chunk_attrs)
             if hasattr(chunk, "model_extra") and chunk.model_extra:
                 logger.info(
@@ -835,7 +864,12 @@ async def _get_stream(
                     list(hidden_params.keys()),
                 )
 
-        yield delta_content, chunk_finish_reason, grounding_metadata, image_payloads
+        yield (
+            delta_content,
+            chunk_finish_reason,
+            grounding_metadata,
+            image_payloads,
+        )
 
 
 def _append_stream_content(
@@ -847,7 +881,10 @@ def _append_stream_content(
     max_message_length: int,
 ) -> StreamEditDecision | None:
     previous = prev_content or ""
-    new_content = previous if finish_reason is None else (previous + delta_content)
+    if finish_reason is None:
+        new_content = previous
+    else:
+        new_content = previous + delta_content
 
     if response_contents == [] and new_content == "":
         return None
@@ -909,8 +946,9 @@ async def _maybe_edit_stream_message(
     )
 
     view = (
-        SourceView(grounding_metadata)
-        if decision.is_final_edit and has_grounding_data(grounding_metadata)
+        sources_view.SourceView(grounding_metadata)
+        if decision.is_final_edit
+        and ui_metadata.has_grounding_data(grounding_metadata)
         else None
     )
 
@@ -935,15 +973,21 @@ async def _render_plain_responses(
     tavily_metadata: dict[str, object] | None,
 ) -> None:
     for i, content in enumerate(response_contents):
-        layout = LayoutView().add_item(TextDisplay(content=content))
+        layout = response_view.LayoutView().add_item(
+            response_view.TextDisplay(content=content)
+        )
 
         if i == len(response_contents) - 1:
-            if has_grounding_data(grounding_metadata):
-                layout.add_item(SourceButton(grounding_metadata))
+            if ui_metadata.has_grounding_data(grounding_metadata):
+                layout.add_item(
+                    sources_view.SourceButton(grounding_metadata)
+                )
             if tavily_metadata and (
                 tavily_metadata.get("urls") or tavily_metadata.get("queries")
             ):
-                layout.add_item(TavilySourceButton(tavily_metadata))
+                layout.add_item(
+                    sources_view.TavilySourceButton(tavily_metadata)
+                )
 
         if i < len(response_msgs):
             await response_msgs[i].edit(view=layout)
@@ -962,8 +1006,8 @@ def _handle_generation_exception(
     logger.exception("Error while generating response")
 
     is_first_token_timeout = isinstance(error, FirstTokenTimeoutError)
-    is_timeout_error = (
-        isinstance(error, asyncio.TimeoutError) or "timeout" in str(error).lower()
+    is_timeout_error = isinstance(error, asyncio.TimeoutError) or (
+        "timeout" in str(error).lower()
     )
     is_empty_response = "no content" in str(error).lower()
 
@@ -1045,7 +1089,9 @@ def _initialize_loop_state(context: GenerationContext) -> GenerationLoopState:
     actual_model = context.actual_model
     fallback_chain = context.fallback_chain or []
     use_custom_fallbacks = context.fallback_chain is not None
-    is_original_mistral = provider == "mistral" and "mistral" in actual_model.lower()
+    is_original_mistral = (
+        provider == "mistral" and "mistral" in actual_model.lower()
+    )
 
     fallback_state = FallbackState(
         fallback_level=0,
@@ -1207,7 +1253,9 @@ async def _run_generation_loop(
     response_msgs = state.response_msgs
 
     async def reply_helper(**reply_kwargs: object) -> None:
-        reply_target = context.new_msg if not response_msgs else response_msgs[-1]
+        reply_target = (
+            context.new_msg if not response_msgs else response_msgs[-1]
+        )
         response_msg = await reply_target.reply(**reply_kwargs)
         response_msgs.append(response_msg)
 

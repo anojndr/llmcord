@@ -19,7 +19,10 @@ _exa_client_holder: list = []
 
 
 def _get_exa_client() -> httpx.AsyncClient:
-    """Get or create the shared Exa MCP httpx client using the DRY factory pattern."""
+    """Get or create the shared Exa MCP httpx client.
+
+    Uses the DRY factory pattern.
+    """
     config = get_config()
     proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
@@ -75,9 +78,10 @@ def _parse_exa_block(block: str) -> dict | None:
 
 
 def parse_exa_text_format(text_content: str) -> list[dict]:
-    """Parse Exa MCP's structured text response format into a list of result dicts.
+    """Parse Exa MCP text response format into a list of result dicts.
 
-    Exa returns results in this format (multiple results separated by blank lines):
+    Exa returns results in this format (multiple results separated by
+    blank lines):
     Title: ...
     Author: ...
     Published Date: ...
@@ -199,7 +203,10 @@ async def _parse_json_response(response: httpx.Response, query: str) -> dict:
         return {"error": f"JSON parse error: {exc}", "query": query}
 
 
-async def _parse_exa_http_response(response: httpx.Response, query: str) -> dict:
+async def _parse_exa_http_response(
+    response: httpx.Response,
+    query: str,
+) -> dict:
     """Parse the HTTP response from Exa MCP into a JSON dict."""
     logger.info("Exa MCP response status: %s", response.status_code)
 
@@ -278,12 +285,18 @@ def _extract_exa_results(result: dict, query: str) -> dict:
         search_data = json.loads(text_content) if text_content else {}
     except json.JSONDecodeError:
         logger.info(
-            "Exa MCP returned text format, parsing structured text for query '%s'",
+            (
+                "Exa MCP returned text format, parsing structured text for "
+                "query '%s'"
+            ),
             query,
         )
         results = parse_exa_text_format(text_content)
         if results:
-            logger.info("Exa MCP parsed %s results from text format", len(results))
+            logger.info(
+                "Exa MCP parsed %s results from text format",
+                len(results),
+            )
             return {"results": results, "query": query}
 
         logger.warning(
@@ -357,7 +370,10 @@ async def exa_search(
                     and attempt < retries
                 ):
                     logger.warning(
-                        "Exa MCP transient HTTP %s for query '%s', retrying (%s/%s)",
+                        (
+                            "Exa MCP transient HTTP %s for query '%s', "
+                            "retrying (%s/%s)"
+                        ),
                         response.status_code,
                         query,
                         attempt + 1,
@@ -385,7 +401,10 @@ async def exa_search(
         except httpx.RequestError as exc:
             if attempt < retries:
                 logger.warning(
-                    "Exa MCP connection error for query '%s', retrying (%s/%s): %s",
+                    (
+                        "Exa MCP connection error for query '%s', "
+                        "retrying (%s/%s): %s"
+                    ),
                     query,
                     attempt + 1,
                     retries,

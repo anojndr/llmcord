@@ -49,7 +49,10 @@ def configure_github_copilot_token(access_token: str) -> None:
     )
     access_token_file.write_text(access_token, encoding="utf-8")
 
-    logger.debug("Configured GitHub Copilot access token at %s", access_token_file)
+    logger.debug(
+        "Configured GitHub Copilot access token at %s",
+        access_token_file,
+    )
 
     # Also exchange the access token for a Copilot API key
     # This replicates what LiteLLM's authenticator does
@@ -72,9 +75,13 @@ def configure_github_copilot_token(access_token: str) -> None:
 
             # Write the API key file in the format LiteLLM expects
             api_key_file = token_dir / "api-key.json"
+            expires_at = token_data.get(
+                "expires_at",
+                int(time.time()) + 3600,
+            )
             api_key_data = {
                 "token": token_data.get("token"),
-                "expires_at": token_data.get("expires_at", int(time.time()) + 3600),
+                "expires_at": expires_at,
                 "endpoints": token_data.get("endpoints", {}),
             }
 
@@ -92,7 +99,10 @@ def configure_github_copilot_token(access_token: str) -> None:
                 response.text[:200],
             )
     except (requests.RequestException, ValueError, OSError) as exc:
-        logger.warning("Error exchanging GitHub token for Copilot API key: %s", exc)
+        logger.warning(
+            "Error exchanging GitHub token for Copilot API key: %s",
+            exc,
+        )
 
 
 def configure_github_copilot_kwargs(

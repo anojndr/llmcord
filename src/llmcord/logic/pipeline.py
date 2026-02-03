@@ -204,7 +204,8 @@ async def _resolve_provider_settings(
             processing_msg,
             (
                 "❌ Invalid model configuration: "
-                f"'{provider_slash_model}'. Expected format: 'provider/model'.\n"
+                f"'{provider_slash_model}'. Expected format: "
+                "'provider/model'.\n"
                 "Please contact an administrator."
             ),
         )
@@ -225,7 +226,9 @@ async def _resolve_provider_settings(
         return None
 
     base_url = provider_config.get("base_url")
-    api_keys = ensure_list(provider_config.get("api_key")) or ["sk-no-key-required"]
+    api_keys = ensure_list(provider_config.get("api_key"))
+    if not api_keys:
+        api_keys = ["sk-no-key-required"]
     model_parameters = config["models"].get(provider_slash_model, None)
     override_model = None
     if model_parameters:
@@ -241,7 +244,9 @@ async def _resolve_provider_settings(
     actual_model = override_model or model
     extra_headers = provider_config.get("extra_headers")
     extra_query = provider_config.get("extra_query")
-    extra_body = (provider_config.get("extra_body") or {}) | (model_parameters or {})
+    extra_body = (provider_config.get("extra_body") or {}) | (
+        model_parameters or {}
+    )
     extra_body = extra_body or None
 
     return ProviderSettings(
@@ -463,7 +468,10 @@ async def _apply_googlelens(context: GoogleLensContext) -> str:
                 context.curr_msg.id,
                 lens_results=result_text,
             )
-            logger.info("Saved lens results for message %s", context.curr_msg.id)
+            logger.info(
+                "Saved lens results for message %s",
+                context.curr_msg.id,
+            )
     except Exception:
         logger.exception("Error fetching Yandex results")
 
@@ -556,7 +564,9 @@ async def _extract_pdf_texts(
     return pdf_texts
 
 
-async def _collect_external_content(context: ExternalContentContext) -> list[str]:
+async def _collect_external_content(
+    context: ExternalContentContext,
+) -> list[str]:
     video_ids = re.findall(
         (
             r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?"
@@ -675,7 +685,11 @@ async def _set_parent_message(
             and "at ai" not in curr_msg.content.lower()
         ):
             history = [
-                m async for m in curr_msg.channel.history(before=curr_msg, limit=1)
+                message
+                async for message in curr_msg.channel.history(
+                    before=curr_msg,
+                    limit=1,
+                )
             ]
             prev_msg_in_channel = history[0] if history else None
 
@@ -690,7 +704,9 @@ async def _set_parent_message(
             curr_node.parent_msg = prev_msg_in_channel
             return
 
-        is_public_thread = curr_msg.channel.type == discord.ChannelType.public_thread
+        is_public_thread = (
+            curr_msg.channel.type == discord.ChannelType.public_thread
+        )
         parent_is_thread_start = (
             is_public_thread
             and curr_msg.reference is None
@@ -821,7 +837,9 @@ async def _populate_node_if_needed(
     )
 
     curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
-    curr_node.has_bad_attachments = len(curr_msg.attachments) > len(good_attachments)
+    curr_node.has_bad_attachments = len(curr_msg.attachments) > len(
+        good_attachments
+    )
 
     await _set_parent_message(
         curr_msg=curr_msg,
@@ -830,8 +848,14 @@ async def _populate_node_if_needed(
     )
 
 
-def _load_cached_search_data(curr_msg: discord.Message, curr_node: MsgNode) -> None:
-    if curr_node.search_results is not None and curr_node.lens_results is not None:
+def _load_cached_search_data(
+    curr_msg: discord.Message,
+    curr_node: MsgNode,
+) -> None:
+    if (
+        curr_node.search_results is not None
+        and curr_node.lens_results is not None
+    ):
         return
 
     (
@@ -878,7 +902,10 @@ def _build_content_payload(
         content.extend(gemini_file_attachments)
         if gemini_file_attachments:
             logger.info(
-                "Added %s Gemini file attachment(s) (audio/video/PDF) to message",
+                (
+                    "Added %s Gemini file attachment(s) "
+                    "(audio/video/PDF) to message"
+                ),
                 len(gemini_file_attachments),
             )
         if not content:
@@ -911,7 +938,8 @@ def _update_user_warnings(
     if curr_node.has_bad_attachments:
         user_warnings.add("⚠️ Unsupported attachments")
     if curr_node.fetch_parent_failed or (
-        curr_node.parent_msg is not None and messages_len == context.max_messages
+        curr_node.parent_msg is not None
+        and messages_len == context.max_messages
     ):
         user_warnings.add(
             f"⚠️ Only using last {messages_len} message"
@@ -945,7 +973,10 @@ async def _build_messages(
                 max_images=context.max_images,
             )
             if curr_node.search_results and curr_node.role == "user":
-                content = append_search_to_content(content, curr_node.search_results)
+                content = append_search_to_content(
+                    content,
+                    curr_node.search_results,
+                )
 
             if content:
                 message: dict[str, object] = {
@@ -985,7 +1016,8 @@ def _apply_system_prompt(
     )
     if accept_usernames:
         formatted_prompt += (
-            "\n\nUser's names are their Discord IDs and should be typed as '<@ID>'."
+            "\n\nUser's names are their Discord IDs and should be typed as "
+            "'<@ID>'."
         )
 
     messages.append({"role": "system", "content": formatted_prompt})
@@ -1094,9 +1126,14 @@ async def _maybe_run_web_search(
         }
 
         if decider_api_keys:
-            search_decision = await decide_web_search(context.messages, decider_config)
+            search_decision = await decide_web_search(
+                context.messages,
+                decider_config,
+            )
 
-            if search_decision.get("needs_search") and search_decision.get("queries"):
+            if search_decision.get("needs_search") and search_decision.get(
+                "queries"
+            ):
                 queries = search_decision["queries"]
                 logger.info(
                     "Web search triggered with %s. Queries: %s",
@@ -1104,7 +1141,10 @@ async def _maybe_run_web_search(
                     queries,
                 )
 
-                search_depth = context.config.get("tavily_search_depth", "advanced")
+                search_depth = context.config.get(
+                    "tavily_search_depth",
+                    "advanced",
+                )
                 effective_exa_mcp_url = context.exa_mcp_url or EXA_MCP_URL
                 search_options = WebSearchOptions(
                     max_results_per_query=5,
@@ -1200,9 +1240,9 @@ async def process_message(
     max_messages = config.get("max_messages", 25)
     max_tweet_replies = config.get("max_tweet_replies", 50)
     enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
-    youtube_transcript_proxy = config.get("youtube_transcript_proxy") or config.get(
-        "proxy_url",
-    )
+    youtube_transcript_proxy = config.get(
+        "youtube_transcript_proxy"
+    ) or config.get("proxy_url")
     build_result = await _build_messages(
         context=MessageBuildContext(
             new_msg=new_msg,
@@ -1224,7 +1264,10 @@ async def process_message(
     user_warnings = build_result.user_warnings
 
     logger.info(
-        "Message received (user ID: %s, attachments: %s, conversation length: %s):\n%s",
+        (
+            "Message received (user ID: %s, attachments: %s, "
+            "conversation length: %s):\n%s"
+        ),
         new_msg.author.id,
         len(new_msg.attachments),
         len(messages),
@@ -1233,7 +1276,9 @@ async def process_message(
 
     # Handle edge case: no valid messages could be built
     if not messages:
-        logger.warning("No valid messages could be built from the conversation.")
+        logger.warning(
+            "No valid messages could be built from the conversation."
+        )
         embed = discord.Embed(
             description="❌ Could not process your message. Please try again.",
             color=EMBED_COLOR_INCOMPLETE,

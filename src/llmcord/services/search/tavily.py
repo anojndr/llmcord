@@ -24,7 +24,10 @@ _tavily_client_holder: list = []
 
 
 def _get_tavily_client() -> httpx.AsyncClient:
-    """Get or create the shared Tavily httpx client using the DRY factory pattern."""
+    """Get or create the shared Tavily httpx client.
+
+    Uses the DRY factory pattern.
+    """
     config = get_config()
     proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
@@ -121,7 +124,10 @@ async def tavily_search(
         )
         if not result.get("results"):
             logger.warning(
-                "Tavily returned empty results for query '%s'. Full response: %s",
+                (
+                    "Tavily returned empty results for query '%s'. "
+                    "Full response: %s"
+                ),
                 query,
                 result,
             )
@@ -134,8 +140,9 @@ async def tavily_search(
             exc.response.status_code,
             exc.response.text[:MAX_ERROR_CHARS],
         )
+        error_text = exc.response.text[:200]
         return {
-            "error": f"HTTP {exc.response.status_code}: {exc.response.text[:200]}",
+            "error": f"HTTP {exc.response.status_code}: {error_text}",
             "query": query,
         }
     except httpx.TimeoutException as exc:
