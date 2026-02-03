@@ -13,6 +13,7 @@ from llmcord.core.config import (
     get_or_create_httpx_client,
 )
 from llmcord.services.database import get_bad_keys_db
+from llmcord.services.http import request_with_retries
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
 logger = logging.getLogger(__name__)
@@ -89,14 +90,17 @@ async def tavily_search(
             max_results,
         )
 
-        response = await client.post(
-            "https://api.tavily.com/search",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {tavily_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=timeout,
+        response = await request_with_retries(
+            lambda: client.post(
+                "https://api.tavily.com/search",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {tavily_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=timeout,
+            ),
+            log_context=f"Tavily search '{query}'",
         )
         logger.info("Tavily API response status: %s", response.status_code)
 
@@ -169,14 +173,17 @@ async def tavily_research_create(
             "stream": False,
         }
 
-        response = await client.post(
-            "https://api.tavily.com/research",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {tavily_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=30.0,
+        response = await request_with_retries(
+            lambda: client.post(
+                "https://api.tavily.com/research",
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {tavily_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30.0,
+            ),
+            log_context="Tavily research create",
         )
     except httpx.TimeoutException as exc:
         logger.exception("Tavily research create timeout")
@@ -220,13 +227,16 @@ async def tavily_research_get(
     """
     try:
         client = _get_tavily_client()
-        response = await client.get(
-            f"https://api.tavily.com/research/{request_id}",
-            headers={
-                "Authorization": f"Bearer {tavily_api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=30.0,
+        response = await request_with_retries(
+            lambda: client.get(
+                f"https://api.tavily.com/research/{request_id}",
+                headers={
+                    "Authorization": f"Bearer {tavily_api_key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=30.0,
+            ),
+            log_context=f"Tavily research get '{request_id}'",
         )
     except httpx.TimeoutException as exc:
         logger.exception("Tavily research get timeout")

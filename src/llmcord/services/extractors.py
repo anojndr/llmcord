@@ -19,6 +19,7 @@ from youtube_transcript_api.proxies import GenericProxyConfig
 
 from llmcord.core.config import BROWSER_HEADERS
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
+from llmcord.services.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,10 @@ async def download_attachments(
         att: discord.Attachment,
     ) -> httpx.Response | None:
         try:
-            return await httpx_client.get(att.url, timeout=60)
+            return await request_with_retries(
+                lambda: httpx_client.get(att.url, timeout=60),
+                log_context=f"attachment {att.filename}",
+            )
         except httpx.HTTPError as exc:
             logger.warning(
                 "Failed to download attachment %s: %s",
@@ -247,13 +251,28 @@ async def perform_yandex_lookup(
         "url": image_url,
     }
 
-    yandex_resp = await httpx_client.get(
-        "https://yandex.com/images/search",
-        params=params,
-        headers=BROWSER_HEADERS,
-        follow_redirects=True,
-        timeout=60,
-    )
+    try:
+        yandex_resp = await request_with_retries(
+            lambda: httpx_client.get(
+                "https://yandex.com/images/search",
+                params=params,
+                headers=BROWSER_HEADERS,
+                follow_redirects=True,
+                timeout=60,
+            ),
+            log_context="Yandex reverse image search",
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("Yandex lookup failed for %s: %s", image_url, exc)
+        return [], []
+
+    if yandex_resp.status_code != httpx.codes.OK:
+        logger.warning(
+            "Yandex lookup returned status %s for %s",
+            yandex_resp.status_code,
+            image_url,
+        )
+        return [], []
     soup = BeautifulSoup(
         yandex_resp.text,
         "lxml",
@@ -332,11 +351,15 @@ async def extract_youtube_transcript(
         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
         transcript = transcript_obj.to_raw_data()
 
-        response = await httpx_client.get(
-            f"https://www.youtube.com/watch?v={video_id}",
-            follow_redirects=True,
-            timeout=30,
+        response = await request_with_retries(
+            lambda: httpx_client.get(
+                f"https://www.youtube.com/watch?v={video_id}",
+                follow_redirects=True,
+                timeout=30,
+            ),
+            log_context=f"YouTube metadata {video_id}",
         )
+        response.raise_for_status()
         html = response.text
         title_match = re.search(r'<meta name="title" content="(.*?)">', html)
         title = title_match.group(1) if title_match else "Unknown Title"

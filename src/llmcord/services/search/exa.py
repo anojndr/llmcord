@@ -9,6 +9,7 @@ from llmcord.core.config import (
     get_config,
     get_or_create_httpx_client,
 )
+from llmcord.services.http import DEFAULT_RETRYABLE_STATUSES, wait_with_backoff
 from llmcord.services.search.config import EXA_MCP_URL, HTTP_OK, MAX_ERROR_CHARS
 
 logger = logging.getLogger(__name__)
@@ -329,36 +330,73 @@ async def exa_search(
         max_results: Maximum results to return
 
     """
-    try:
-        client = _get_exa_client()
-        payload = _build_exa_payload(query, max_results)
+    client = _get_exa_client()
+    payload = _build_exa_payload(query, max_results)
 
-        logger.info(
-            "Exa MCP request for query '%s': max_results=%s",
-            query,
-            max_results,
-        )
+    logger.info(
+        "Exa MCP request for query '%s': max_results=%s",
+        query,
+        max_results,
+    )
 
-        async with client.stream(
-            "POST",
-            exa_mcp_url,
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-            },
-            timeout=60.0,
-        ) as response:
-            result = await _parse_exa_http_response(response, query)
+    retries = 2
+    for attempt in range(retries + 1):
+        try:
+            async with client.stream(
+                "POST",
+                exa_mcp_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                timeout=60.0,
+            ) as response:
+                if (
+                    response.status_code in DEFAULT_RETRYABLE_STATUSES
+                    and attempt < retries
+                ):
+                    logger.warning(
+                        "Exa MCP transient HTTP %s for query '%s', retrying (%s/%s)",
+                        response.status_code,
+                        query,
+                        attempt + 1,
+                        retries,
+                    )
+                    await wait_with_backoff(attempt)
+                    continue
 
-        return _extract_exa_results(result, query)
+                result = await _parse_exa_http_response(response, query)
+                return _extract_exa_results(result, query)
 
-    except httpx.TimeoutException as exc:
-        logger.exception("Exa MCP timeout for query '%s'", query)
-        return {"error": f"Timeout: {exc}", "query": query}
-    except httpx.RequestError as exc:
-        logger.exception("Exa MCP connection error for query '%s'", query)
-        return {"error": f"Connection error: {exc}", "query": query}
-    except Exception as exc:
-        logger.exception("Exa MCP search error for query '%s'", query)
-        return {"error": str(exc), "query": query}
+        except httpx.TimeoutException as exc:
+            if attempt < retries:
+                logger.warning(
+                    "Exa MCP timeout for query '%s', retrying (%s/%s): %s",
+                    query,
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
+                await wait_with_backoff(attempt)
+                continue
+            logger.exception("Exa MCP timeout for query '%s'", query)
+            return {"error": f"Timeout: {exc}", "query": query}
+        except httpx.RequestError as exc:
+            if attempt < retries:
+                logger.warning(
+                    "Exa MCP connection error for query '%s', retrying (%s/%s): %s",
+                    query,
+                    attempt + 1,
+                    retries,
+                    exc,
+                )
+                await wait_with_backoff(attempt)
+                continue
+            logger.exception("Exa MCP connection error for query '%s'", query)
+            return {"error": f"Connection error: {exc}", "query": query}
+        except Exception as exc:
+            logger.exception("Exa MCP search error for query '%s'", query)
+            return {"error": str(exc), "query": query}
+
+    return {"error": "Retry attempts exhausted", "query": query}
