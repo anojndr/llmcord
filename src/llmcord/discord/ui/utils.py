@@ -7,7 +7,11 @@ import discord
 import httpx
 from bs4 import BeautifulSoup
 
-from llmcord.core.config import HttpxClientOptions, get_or_create_httpx_client
+from llmcord.core.config import (
+    HttpxClientOptions,
+    get_config,
+    get_or_create_httpx_client,
+)
 from llmcord.discord.ui.constants import HTTP_OK
 from llmcord.services.database import get_bad_keys_db
 
@@ -67,6 +71,8 @@ def get_response_data(message_id: int) -> ResponseData:
 
 def _get_textis_client() -> httpx.AsyncClient:
     """Get or create the shared text.is httpx client using the DRY factory pattern."""
+    config = get_config()
+    proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
         _textis_client_holder,
         options=HttpxClientOptions(
@@ -74,7 +80,7 @@ def _get_textis_client() -> httpx.AsyncClient:
             connect_timeout=10.0,
             max_connections=10,
             max_keepalive=5,
-            proxy_url=None,
+            proxy_url=proxy_url,
             follow_redirects=False,  # text.is needs redirect handling
         ),
     )

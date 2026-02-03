@@ -13,6 +13,9 @@ test:
 client_id: 
 status_message: 
 
+# Rotating proxy endpoint used for proxy-enabled requests
+proxy_url:  # e.g., http://user:pass@host:port
+
 # Response behavior:
 
 use_plain_responses: false
@@ -63,6 +66,10 @@ reddit_user_agent:
 reddit_mode: json 
 
 twitter_proxy: 
+
+# YouTube transcript settings:
+enable_youtube_transcripts: true
+youtube_transcript_proxy:  # Optional override (defaults to proxy_url if set)
 
 twitter_accounts:
   - username: 

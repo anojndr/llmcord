@@ -10,7 +10,11 @@ import httpx
 from discord.ext import commands
 from twscrape import API
 
-from llmcord.core.config import get_config
+from llmcord.core.config import (
+    HttpxClientOptions,
+    get_config,
+    get_or_create_httpx_client,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -41,8 +45,14 @@ discord_bot = commands.Bot(
     allowed_mentions=discord.AllowedMentions(replied_user=False),
 )
 
-httpx_client = httpx.AsyncClient()
-twitter_api = API(proxy=config.get("twitter_proxy"))
+_httpx_client_holder: list[httpx.AsyncClient | None] = []
+proxy_url = config.get("proxy_url") or None
+httpx_client = get_or_create_httpx_client(
+    _httpx_client_holder,
+    options=HttpxClientOptions(proxy_url=proxy_url),
+)
+twitter_proxy = config.get("twitter_proxy") or proxy_url
+twitter_api = API(proxy=twitter_proxy)
 
 
 

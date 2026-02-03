@@ -93,6 +93,8 @@ class ExternalContentContext:
     max_tweet_replies: int
     processed_attachments: list[dict[str, bytes | str | None]]
     actual_model: str
+    enable_youtube_transcripts: bool
+    youtube_transcript_proxy: str | None
 
 
 @dataclass(slots=True)
@@ -110,6 +112,8 @@ class MessageBuildContext:
     max_images: int
     max_messages: int
     max_tweet_replies: int
+    enable_youtube_transcripts: bool
+    youtube_transcript_proxy: str | None
 
 
 @dataclass(slots=True)
@@ -560,10 +564,14 @@ async def _collect_external_content(context: ExternalContentContext) -> list[str
         ),
         context.cleaned_content,
     )
-    if video_ids:
+    if video_ids and context.enable_youtube_transcripts:
         yt_results = await asyncio.gather(
             *[
-                extract_youtube_transcript(vid, context.httpx_client)
+                extract_youtube_transcript(
+                    vid,
+                    context.httpx_client,
+                    proxy_url=context.youtube_transcript_proxy,
+                )
                 for vid in video_ids
             ],
         )
@@ -782,6 +790,8 @@ async def _populate_node_if_needed(
             max_tweet_replies=context.max_tweet_replies,
             processed_attachments=processed_attachments,
             actual_model=context.actual_model,
+            enable_youtube_transcripts=context.enable_youtube_transcripts,
+            youtube_transcript_proxy=context.youtube_transcript_proxy,
         ),
     )
 
@@ -1189,6 +1199,10 @@ async def process_message(
     max_images = config.get("max_images", 5) if accept_images else 0
     max_messages = config.get("max_messages", 25)
     max_tweet_replies = config.get("max_tweet_replies", 50)
+    enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
+    youtube_transcript_proxy = config.get("youtube_transcript_proxy") or config.get(
+        "proxy_url",
+    )
     build_result = await _build_messages(
         context=MessageBuildContext(
             new_msg=new_msg,
@@ -1202,6 +1216,8 @@ async def process_message(
             max_images=max_images,
             max_messages=max_messages,
             max_tweet_replies=max_tweet_replies,
+            enable_youtube_transcripts=enable_youtube_transcripts,
+            youtube_transcript_proxy=youtube_transcript_proxy,
         ),
     )
     messages = build_result.messages

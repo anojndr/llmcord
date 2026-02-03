@@ -14,7 +14,8 @@ import pymupdf4llm
 from bs4 import BeautifulSoup
 from PIL import Image
 from twscrape import gather
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, YouTubeTranscriptApiException
+from youtube_transcript_api.proxies import GenericProxyConfig
 
 from llmcord.core.config import BROWSER_HEADERS
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
@@ -307,13 +308,27 @@ async def perform_yandex_lookup(
     return lens_results, twitter_content
 
 
+def _build_youtube_transcript_api(
+    proxy_url: str | None,
+) -> YouTubeTranscriptApi:
+    if proxy_url:
+        proxy_config = GenericProxyConfig(
+            http_url=proxy_url,
+            https_url=proxy_url,
+        )
+        return YouTubeTranscriptApi(proxy_config=proxy_config)
+    return YouTubeTranscriptApi()
+
+
 async def extract_youtube_transcript(
     video_id: str,
     httpx_client: httpx.AsyncClient,
+    *,
+    proxy_url: str | None = None,
 ) -> str | None:
     """Fetch YouTube transcript and metadata."""
     try:
-        ytt_api = YouTubeTranscriptApi()
+        ytt_api = _build_youtube_transcript_api(proxy_url)
         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
         transcript = transcript_obj.to_raw_data()
 
@@ -332,8 +347,14 @@ async def extract_youtube_transcript(
             f"YouTube Video ID: {video_id}\nTitle: {title}\nChannel: {channel}\n"
             f"Transcript:\n" + " ".join(x["text"] for x in transcript)
         )
-    except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as exc:
-        logger.debug("Failed to fetch YouTube transcript: %s", exc)
+    except (
+        YouTubeTranscriptApiException,
+        httpx.HTTPError,
+        RuntimeError,
+        ValueError,
+        KeyError,
+    ) as exc:
+        logger.debug("Failed to fetch YouTube transcript for %s: %s", video_id, exc)
         return None
 
 

@@ -4,7 +4,11 @@ import logging
 
 import httpx
 
-from llmcord.core.config import HttpxClientOptions, get_or_create_httpx_client
+from llmcord.core.config import (
+    HttpxClientOptions,
+    get_config,
+    get_or_create_httpx_client,
+)
 from llmcord.services.search.config import EXA_MCP_URL, HTTP_OK, MAX_ERROR_CHARS
 
 logger = logging.getLogger(__name__)
@@ -15,6 +19,8 @@ _exa_client_holder: list = []
 
 def _get_exa_client() -> httpx.AsyncClient:
     """Get or create the shared Exa MCP httpx client using the DRY factory pattern."""
+    config = get_config()
+    proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
         _exa_client_holder,
         options=HttpxClientOptions(
@@ -24,6 +30,7 @@ def _get_exa_client() -> httpx.AsyncClient:
             max_keepalive=10,
             follow_redirects=True,
             headers={},
+            proxy_url=proxy_url,
         ),
     )
 

@@ -7,7 +7,11 @@ import time
 
 import httpx
 
-from llmcord.core.config import HttpxClientOptions, get_or_create_httpx_client
+from llmcord.core.config import (
+    HttpxClientOptions,
+    get_config,
+    get_or_create_httpx_client,
+)
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
@@ -20,6 +24,8 @@ _tavily_client_holder: list = []
 
 def _get_tavily_client() -> httpx.AsyncClient:
     """Get or create the shared Tavily httpx client using the DRY factory pattern."""
+    config = get_config()
+    proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
         _tavily_client_holder,
         options=HttpxClientOptions(
@@ -29,6 +35,7 @@ def _get_tavily_client() -> httpx.AsyncClient:
             max_keepalive=10,
             follow_redirects=True,
             headers={},  # Tavily doesn't need browser headers, just defaults
+            proxy_url=proxy_url,
         ),
     )
 
