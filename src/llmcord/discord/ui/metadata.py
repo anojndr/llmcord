@@ -165,17 +165,15 @@ def add_chunked_embed_field(
             embed.add_field(name=field_name, value=current_chunk, inline=False)
             current_chunk = item
             field_count += 1
+        elif current_chunk:
+            current_chunk = f"{current_chunk}\n{item}"
         else:
-            if current_chunk:
-                current_chunk = f"{current_chunk}\n{item}"
-            else:
-                current_chunk = item
+            current_chunk = item
 
     if current_chunk:
-        if field_count > 1:
-            field_name = f"{base_name} ({field_count})"
-        else:
-            field_name = base_name
+        field_name = (
+            f"{base_name} ({field_count})" if field_count > 1 else base_name
+        )
         embed.add_field(name=field_name, value=current_chunk, inline=False)
 
 

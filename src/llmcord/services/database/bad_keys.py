@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import AsyncIterator, Iterator
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
 
 from llmcord.services.database.core import _with_reconnect
 

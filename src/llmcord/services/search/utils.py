@@ -61,7 +61,7 @@ def convert_messages_to_openai_format(
             ]
             if filtered_content:
                 openai_messages.append(
-                    {"role": role, "content": filtered_content}
+                    {"role": role, "content": filtered_content},
                 )
         elif content:
             openai_messages.append({"role": role, "content": str(content)})

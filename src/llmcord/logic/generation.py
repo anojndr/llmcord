@@ -30,8 +30,7 @@ from llmcord.core.exceptions import (
 )
 from llmcord.core.models import MsgNode
 from llmcord.discord.ui import metadata as ui_metadata
-from llmcord.discord.ui import response_view
-from llmcord.discord.ui import sources_view
+from llmcord.discord.ui import response_view, sources_view
 from llmcord.logic.utils import (
     count_conversation_tokens,
     count_text_tokens,
@@ -407,10 +406,10 @@ def _extract_images_from_dict(obj: dict) -> list[GeneratedImage]:
         images.extend(_extract_images_from_image_url(image_url))
 
     images.extend(
-        _extract_images_from_mime_data(obj.get("data"), obj.get("mime_type"))
+        _extract_images_from_mime_data(obj.get("data"), obj.get("mime_type")),
     )
     images.extend(
-        _extract_images_from_mime_data(obj.get("data"), obj.get("mimeType"))
+        _extract_images_from_mime_data(obj.get("data"), obj.get("mimeType")),
     )
     return images
 
@@ -544,10 +543,7 @@ def _release_response_locks(
     context: GenerationContext,
     state: GenerationState,
 ) -> str:
-    if state.response_contents:
-        full_response = "".join(state.response_contents)
-    else:
-        full_response = ""
+    full_response = "".join(state.response_contents) if state.response_contents else ""
     for response_msg in state.response_msgs:
         context.msg_nodes[response_msg.id].text = full_response
         context.msg_nodes[response_msg.id].lock.release()
@@ -558,20 +554,20 @@ def _build_grounding_payload(
     grounding_metadata: object | None,
 ) -> dict[str, object] | None:
     if not grounding_metadata or not ui_metadata.has_grounding_data(
-        grounding_metadata
+        grounding_metadata,
     ):
         return None
 
     return {
         "web_search_queries": ui_metadata.get_grounding_queries(
-            grounding_metadata
+            grounding_metadata,
         ),
         "grounding_chunks": [
             {
                 "web": {
                     "title": chunk.get("title", ""),
                     "uri": chunk.get("uri", ""),
-                }
+                },
             }
             for chunk in ui_metadata.get_grounding_chunks(grounding_metadata)
         ],
@@ -881,10 +877,7 @@ def _append_stream_content(
     max_message_length: int,
 ) -> StreamEditDecision | None:
     previous = prev_content or ""
-    if finish_reason is None:
-        new_content = previous
-    else:
-        new_content = previous + delta_content
+    new_content = previous if finish_reason is None else previous + delta_content
 
     if response_contents == [] and new_content == "":
         return None
@@ -974,19 +967,19 @@ async def _render_plain_responses(
 ) -> None:
     for i, content in enumerate(response_contents):
         layout = response_view.LayoutView().add_item(
-            response_view.TextDisplay(content=content)
+            response_view.TextDisplay(content=content),
         )
 
         if i == len(response_contents) - 1:
             if ui_metadata.has_grounding_data(grounding_metadata):
                 layout.add_item(
-                    sources_view.SourceButton(grounding_metadata)
+                    sources_view.SourceButton(grounding_metadata),
                 )
             if tavily_metadata and (
                 tavily_metadata.get("urls") or tavily_metadata.get("queries")
             ):
                 layout.add_item(
-                    sources_view.TavilySourceButton(tavily_metadata)
+                    sources_view.TavilySourceButton(tavily_metadata),
                 )
 
         if i < len(response_msgs):

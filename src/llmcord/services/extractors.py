@@ -377,12 +377,6 @@ async def extract_youtube_transcript(
         channel = channel_match.group(1) if channel_match else "Unknown Channel"
 
         transcript_text = " ".join(x["text"] for x in transcript)
-        return (
-            f"YouTube Video ID: {video_id}\n"
-            f"Title: {title}\n"
-            f"Channel: {channel}\n"
-            f"Transcript:\n{transcript_text}"
-        )
     except (
         YouTubeTranscriptApiException,
         httpx.HTTPError,
@@ -396,6 +390,13 @@ async def extract_youtube_transcript(
             exc,
         )
         return None
+    else:
+        return (
+            f"YouTube Video ID: {video_id}\n"
+            f"Title: {title}\n"
+            f"Channel: {channel}\n"
+            f"Transcript:\n{transcript_text}"
+        )
 
 
 async def extract_reddit_post_json(

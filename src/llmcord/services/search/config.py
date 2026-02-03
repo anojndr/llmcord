@@ -58,6 +58,7 @@ On-Ear vs VDSF 5128 Demo Target Response In-Ear vs 5128 Harman
 In-Ear 2024 Beta vs 4128/4195 VDSF Target Response"]
 5. Make queries search-engine friendly
 6. Preserve the user's original intent
+7. Exclude years from search queries unless explicitly requested by the user.
 
 BAD QUERIES (never output these):
 - "events mentioned by Joeii in their reply" ❌ (meta-description, not

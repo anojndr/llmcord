@@ -77,7 +77,7 @@ async def should_process_message(
         else allow_all_channels or bool(channel_ids & allowed_channel_ids)
     )
     is_bad_channel = not is_good_channel or bool(
-        channel_ids & blocked_channel_ids
+        channel_ids & blocked_channel_ids,
     )
 
     if is_bad_user or is_bad_channel:

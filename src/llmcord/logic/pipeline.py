@@ -838,7 +838,7 @@ async def _populate_node_if_needed(
 
     curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
     curr_node.has_bad_attachments = len(curr_msg.attachments) > len(
-        good_attachments
+        good_attachments,
     )
 
     await _set_parent_message(
@@ -1132,7 +1132,7 @@ async def _maybe_run_web_search(
             )
 
             if search_decision.get("needs_search") and search_decision.get(
-                "queries"
+                "queries",
             ):
                 queries = search_decision["queries"]
                 logger.info(
@@ -1241,7 +1241,7 @@ async def process_message(
     max_tweet_replies = config.get("max_tweet_replies", 50)
     enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
     youtube_transcript_proxy = config.get(
-        "youtube_transcript_proxy"
+        "youtube_transcript_proxy",
     ) or config.get("proxy_url")
     build_result = await _build_messages(
         context=MessageBuildContext(
@@ -1277,7 +1277,7 @@ async def process_message(
     # Handle edge case: no valid messages could be built
     if not messages:
         logger.warning(
-            "No valid messages could be built from the conversation."
+            "No valid messages could be built from the conversation.",
         )
         embed = discord.Embed(
             description="❌ Could not process your message. Please try again.",
