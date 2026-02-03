@@ -7,6 +7,7 @@ import discord
 from discord.app_commands import Choice
 
 from llmcord import config as config_module
+from llmcord.discord.ui.utils import build_error_embed
 from llmcord.globals import discord_bot
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.ytmp3 import Ytmp3Service
@@ -41,8 +42,12 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
     locked_model = get_channel_locked_model(channel_id)
     if locked_model:
         await interaction.followup.send(
-            f"❌ This channel is locked to model `{locked_model}`. "
-            f"The /model command is disabled here.",
+            embed=build_error_embed(
+                (
+                    f"This channel is locked to model `{locked_model}`. "
+                    "The /model command is disabled here."
+                ),
+            ),
             ephemeral=True,
         )
         return
@@ -161,7 +166,7 @@ async def reset_all_preferences_command(interaction: discord.Interaction) -> Non
     owner_user_id = 676735636656357396
     if interaction.user.id != owner_user_id:
         await interaction.response.send_message(
-            "❌ This command can only be used by the bot owner.",
+            embed=build_error_embed("This command can only be used by the bot owner."),
             ephemeral=True,
         )
         return
@@ -200,7 +205,9 @@ async def ytmp3_command(interaction: discord.Interaction, url: str) -> None:
 
     # Basic URL validation
     if "youtube.com" not in url and "youtu.be" not in url:
-        await interaction.followup.send("❌ Please provide a valid YouTube URL.")
+        await interaction.followup.send(
+            embed=build_error_embed("Please provide a valid YouTube URL."),
+        )
         return
 
     try:
@@ -218,9 +225,15 @@ async def ytmp3_command(interaction: discord.Interaction, url: str) -> None:
                 logger.exception("Failed to remove temp file %s", file_path)
         else:
             await interaction.followup.send(
-                "❌ Failed to convert video. Please try again later.",
+                embed=build_error_embed(
+                    "Could not convert the video. Please try again later.",
+                ),
             )
 
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError):
         logger.exception("Error in /ytmp3 command")
-        await interaction.followup.send(f"❌ An error occurred: {exc!s}")
+        await interaction.followup.send(
+            embed=build_error_embed(
+                "An error occurred while converting the video. Please try again later.",
+            ),
+        )

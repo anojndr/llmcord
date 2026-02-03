@@ -7,6 +7,7 @@ from llmcord.discord.ui.constants import RETRY_RESPONSE_ID, VIEW_RESPONSE_BETTER
 from llmcord.discord.ui.metadata import has_grounding_data
 from llmcord.discord.ui.sources_view import SourceButton, TavilySourceButton
 from llmcord.discord.ui.utils import (
+    build_error_embed,
     get_response_data,
     get_retry_handler,
     upload_to_textis,
@@ -40,7 +41,7 @@ class RetryButton(discord.ui.Button):
 
         if not self.user_id or interaction.user.id != self.user_id:
             await interaction.response.send_message(
-                "❌ You cannot retry this message.",
+                embed=build_error_embed("You can only retry your own message."),
                 ephemeral=True,
             )
             return
@@ -54,7 +55,9 @@ class RetryButton(discord.ui.Button):
         retry_handler = get_retry_handler()
         if not retry_handler:
             await interaction.followup.send(
-                "❌ Retry is unavailable right now. Please try again later.",
+                embed=build_error_embed(
+                    "Retry is unavailable right now. Please try again later.",
+                ),
                 ephemeral=True,
             )
             return
@@ -64,7 +67,9 @@ class RetryButton(discord.ui.Button):
 
         if not response_data.request_message_id or not response_data.request_user_id:
             await interaction.followup.send(
-                "❌ Missing retry context for this message.",
+                embed=build_error_embed(
+                    "Missing retry context for this message.",
+                ),
                 ephemeral=True,
             )
             return
@@ -100,7 +105,9 @@ class ViewResponseBetterButton(discord.ui.Button):
 
         if not full_response:
             await interaction.followup.send(
-                "❌ Missing response content for this message.",
+                embed=build_error_embed(
+                    "Missing response content for this message.",
+                ),
                 ephemeral=True,
             )
             return
@@ -120,7 +127,9 @@ class ViewResponseBetterButton(discord.ui.Button):
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send(
-                "❌ Failed to upload response to text.is. Please try again later.",
+                embed=build_error_embed(
+                    "Failed to upload response to text.is. Please try again later.",
+                ),
                 ephemeral=True,
             )
 

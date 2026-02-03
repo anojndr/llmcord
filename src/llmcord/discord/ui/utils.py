@@ -8,6 +8,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from llmcord.core.config import (
+    EMBED_COLOR_INCOMPLETE,
     HttpxClientOptions,
     get_config,
     get_or_create_httpx_client,
@@ -32,6 +33,19 @@ def set_retry_handler(handler: RetryHandler | None) -> None:
 def get_retry_handler() -> RetryHandler | None:
     """Get the global retry handler."""
     return _retry_handler_holder[0]
+
+
+def build_error_embed(
+    description: str,
+    *,
+    title: str = "Something went wrong",
+) -> discord.Embed:
+    """Build a standardized error embed for user-facing failures."""
+    return discord.Embed(
+        title=title,
+        description=description,
+        color=EMBED_COLOR_INCOMPLETE,
+    )
 
 
 @dataclass(slots=True)

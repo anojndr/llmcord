@@ -12,7 +12,7 @@ from llmcord.discord.ui.metadata import (
     add_chunked_embed_field,
     build_grounding_sources_embed,
 )
-from llmcord.discord.ui.utils import get_response_data
+from llmcord.discord.ui.utils import build_error_embed, get_response_data
 
 
 class SourceButton(discord.ui.Button):
@@ -36,7 +36,9 @@ class SourceButton(discord.ui.Button):
 
         if not metadata:
             await interaction.response.send_message(
-                "❌ No source information available for this message.",
+                embed=build_error_embed(
+                    "No source information available for this message.",
+                ),
                 ephemeral=True,
             )
             return
@@ -238,15 +240,17 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
                 )
             else:
                 await interaction.response.send_message(
-                    (
-                        "❌ Invalid page number. Please enter a number between 1 "
-                        f"and {self.sources_view.total_pages}."
+                    embed=build_error_embed(
+                        (
+                            "Invalid page number. Please enter a number between 1 "
+                            f"and {self.sources_view.total_pages}."
+                        ),
                     ),
                     ephemeral=True,
                 )
         except ValueError:
             await interaction.response.send_message(
-                "❌ Please enter a valid number.",
+                embed=build_error_embed("Please enter a valid number."),
                 ephemeral=True,
             )
 
@@ -273,7 +277,9 @@ class TavilySourceButton(discord.ui.Button):
 
         if not search_metadata:
             await interaction.response.send_message(
-                "❌ No web search sources available for this message.",
+                embed=build_error_embed(
+                    "No web search sources available for this message.",
+                ),
                 ephemeral=True,
             )
             return
@@ -309,7 +315,9 @@ class SourceView(discord.ui.View):
 
         if not metadata:
             await interaction.response.send_message(
-                "❌ No source information available for this message.",
+                embed=build_error_embed(
+                    "No source information available for this message.",
+                ),
                 ephemeral=True,
             )
             return

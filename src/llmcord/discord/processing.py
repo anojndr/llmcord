@@ -8,6 +8,7 @@ import discord
 
 from llmcord import config as config_module
 from llmcord import globals as app_globals
+from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.pipeline import ProcessContext
 from llmcord.services.database import get_bad_keys_db
 from llmcord.utils.common import get_channel_locked_model
@@ -68,8 +69,10 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         # Try to notify the user about the error
         with suppress(Exception):
             await new_msg.reply(
-                "❌ An internal error occurred while processing your request."
-                " Please try again later.",
+                embed=build_error_embed(
+                    "An internal error occurred while processing your request. "
+                    "Please try again later.",
+                ),
             )
 
 
@@ -81,7 +84,7 @@ async def _handle_retry_request(
     """Retry a previous prompt using its original message."""
     if interaction.user.id != request_user_id:
         await interaction.followup.send(
-            "❌ You cannot retry this message.",
+            embed=build_error_embed("You can only retry your own message."),
             ephemeral=True,
         )
         return
@@ -89,7 +92,9 @@ async def _handle_retry_request(
     channel = interaction.channel
     if channel is None or not hasattr(channel, "fetch_message"):
         await interaction.followup.send(
-            "❌ Unable to locate the original channel for this message.",
+            embed=build_error_embed(
+                "Unable to locate the original channel for this message.",
+            ),
             ephemeral=True,
         )
         return
@@ -98,7 +103,9 @@ async def _handle_retry_request(
         request_msg = await channel.fetch_message(request_message_id)
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         await interaction.followup.send(
-            "❌ Unable to fetch the original message for retry.",
+            embed=build_error_embed(
+                "Unable to fetch the original message for retry.",
+            ),
             ephemeral=True,
         )
         return

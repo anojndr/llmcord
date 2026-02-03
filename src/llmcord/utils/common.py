@@ -9,6 +9,7 @@ import discord
 from discord.app_commands import Choice
 
 from llmcord import config as config_module
+from llmcord.discord.ui.utils import build_error_embed
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,9 @@ async def _handle_model_switch(
     config_data = config_module.get_config()
     if model not in config_data["models"]:
         await interaction.followup.send(
-            f"❌ Model `{model}` is not configured in `config.yaml`.",
+            embed=build_error_embed(
+                f"Model `{model}` is not available. Please choose another model.",
+            ),
             ephemeral=True,
         )
         return
@@ -91,9 +94,11 @@ async def _handle_model_switch(
 
     if current_user_model is None:
         await interaction.followup.send(
-            (
-                f"❌ No valid {model_type_label} configured. "
-                "Please ask an administrator to check `config.yaml`."
+            embed=build_error_embed(
+                (
+                    f"No valid {model_type_label} is configured. "
+                    "Please contact an administrator."
+                ),
             ),
             ephemeral=True,
         )

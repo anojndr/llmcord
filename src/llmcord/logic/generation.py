@@ -295,25 +295,20 @@ async def _render_exhausted_response(
         logger.error("All fallback options exhausted (mistral and gemma)")
 
     error_text = (
-        "❌ All API keys (including all fallbacks) exhausted. "
-        "Please try again later."
+        "❌ All API keys are currently unavailable. Please try again later."
     )
     if last_error_msg:
-        error_text += f"\nLast error: {last_error_msg}"
-
-    if state.use_plain_responses:
-        layout = LayoutView().add_item(TextDisplay(content=error_text))
-        if state.response_msgs:
-            await state.response_msgs[-1].edit(view=layout)
-        else:
-            await reply_helper(view=layout)
-        return [error_text]
+        logger.info("Last fallback error summary: %s", last_error_msg)
 
     if state.embed is None:
-        return [error_text]
+        state.embed = discord.Embed(
+            description=error_text,
+            color=EMBED_COLOR_INCOMPLETE,
+        )
+    else:
+        state.embed.description = error_text
+        state.embed.color = EMBED_COLOR_INCOMPLETE
 
-    state.embed.description = error_text
-    state.embed.color = EMBED_COLOR_INCOMPLETE
     if state.response_msgs:
         await state.response_msgs[-1].edit(embed=state.embed, view=None)
     else:
