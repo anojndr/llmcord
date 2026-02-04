@@ -86,48 +86,20 @@ turso_auth_token:    # Your Turso authentication token
 
 providers:
   # Remote providers:
-  azure-openai:
-    base_url: https://<resource name>.openai.azure.com/openai/deployments/<deployment name>
-    api_key: 
-    extra_query:
-      api-version: 2024-12-01-preview
-
   gemini:
-    api_key: 
-
-  google:
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    api_key: 
-
-  groq:
-    base_url: https://api.groq.com/openai/v1
     api_key: 
 
   mistral:
     base_url: https://api.mistral.ai/v1
     api_key: 
 
-  openai:
-    base_url: https://api.openai.com/v1
-    api_key: 
-
   openrouter:
     base_url: https://openrouter.ai/api/v1
     api_key: 
-
-  x-ai:
-    base_url: https://api.x.ai/v1
-    api_key: 
-
-  # Local providers:
-  lmstudio:
-    base_url: http://localhost:1234/v1
-
-  ollama:
-    base_url: http://localhost:11434/v1
-
-  vllm:
-    base_url: http://localhost:8000/v1
+    # Optional OpenRouter metadata headers
+    # extra_headers:
+    #   HTTP-Referer: https://your-site.example
+    #   X-Title: Your App Name
 
 models:
   gemini/gemini-3-flash-low:
