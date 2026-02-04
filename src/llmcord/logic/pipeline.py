@@ -999,13 +999,44 @@ async def _build_messages(
     return MessageBuildResult(messages=messages, user_warnings=user_warnings)
 
 
+def _is_system_prompt_disabled(
+    *,
+    provider_settings: ProviderSettings,
+    config: dict[str, object],
+) -> bool:
+    model_parameters = provider_settings.model_parameters or {}
+    disable_override = model_parameters.get("disable_system_prompt")
+    if isinstance(disable_override, bool):
+        return disable_override
+
+    disabled_models = ensure_list(config.get("disable_system_prompt_models"))
+    normalized_targets = {
+        provider_settings.provider_slash_model.lower(),
+        f"{provider_settings.provider}/{provider_settings.actual_model}".lower(),
+        provider_settings.actual_model.lower(),
+        provider_settings.model.lower(),
+    }
+    for model_name in disabled_models:
+        if not isinstance(model_name, str):
+            continue
+        model_name_lower = model_name.strip().lower()
+        if model_name_lower and model_name_lower in normalized_targets:
+            return True
+
+    return (
+        provider_settings.provider == "openrouter"
+        and provider_settings.model == "free"
+    )
+
+
 def _apply_system_prompt(
     *,
     messages: list[dict[str, object]],
     system_prompt: str | None,
     accept_usernames: bool,
+    apply_system_prompt: bool,
 ) -> None:
-    if not system_prompt:
+    if not system_prompt or not apply_system_prompt:
         return
 
     date_str, time_str = get_current_datetime_strings()
@@ -1287,10 +1318,15 @@ async def process_message(
         return
 
     system_prompt = config.get("system_prompt")
+    apply_system_prompt = not _is_system_prompt_disabled(
+        provider_settings=provider_settings,
+        config=config,
+    )
     _apply_system_prompt(
         messages=messages,
         system_prompt=system_prompt,
         accept_usernames=accept_usernames,
+        apply_system_prompt=apply_system_prompt,
     )
 
     # Web Search Integration for non-Gemini models and Gemini preview models

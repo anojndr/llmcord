@@ -1038,6 +1038,10 @@ def _handle_generation_exception(
         return [], last_error_msg
 
     error_str = str(error).lower()
+    is_developer_instruction_error = (
+        "developer instruction" in error_str
+        and "not enabled" in error_str
+    )
     key_error_patterns = [
         "unauthorized",
         "invalid_api_key",
@@ -1054,6 +1058,14 @@ def _handle_generation_exception(
         "expired",
     ]
     is_key_error = any(pattern in error_str for pattern in key_error_patterns)
+
+    if is_developer_instruction_error:
+        logger.warning(
+            "Developer instructions unsupported for provider '%s'; "
+            "forcing fallback model.",
+            provider,
+        )
+        return [], last_error_msg
 
     if is_key_error:
         error_msg = str(error)[:200] if error else "Unknown error"
