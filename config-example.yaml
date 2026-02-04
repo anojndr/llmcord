@@ -65,8 +65,6 @@ reddit_user_agent:
 # 'json' (default, no API key needed) or 'praw' (requires API key)
 reddit_mode: json 
 
-twitter_proxy: 
-
 # YouTube transcript settings:
 enable_youtube_transcripts: true
 youtube_transcript_proxy:  # Optional override (defaults to proxy_url if set)
