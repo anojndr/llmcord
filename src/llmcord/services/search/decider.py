@@ -222,7 +222,7 @@ def _is_decider_system_prompt_disabled(
     model: str,
 ) -> bool:
     model_key = f"{provider}/{model}"
-    model_parameters = config.get("models", {}).get(model_key, {})
+    model_parameters = config.get("models", {}).get(model_key) or {}
     disable_override = model_parameters.get("disable_system_prompt")
     if isinstance(disable_override, bool):
         return disable_override
