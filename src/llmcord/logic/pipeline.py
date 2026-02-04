@@ -1036,7 +1036,7 @@ def _apply_system_prompt(
     accept_usernames: bool,
     apply_system_prompt: bool,
 ) -> None:
-    if not system_prompt or not apply_system_prompt:
+    if not system_prompt:
         return
 
     date_str, time_str = get_current_datetime_strings()
@@ -1050,8 +1050,10 @@ def _apply_system_prompt(
             "\n\nUser's names are their Discord IDs and should be typed as "
             "'<@ID>'."
         )
-
-    messages.append({"role": "system", "content": formatted_prompt})
+    if apply_system_prompt:
+        messages.append({"role": "system", "content": formatted_prompt})
+    else:
+        messages.append({"role": "user", "content": formatted_prompt})
 
 
 async def _run_research_command(
