@@ -120,7 +120,6 @@ class FallbackState:
     fallback_level: int
     fallback_index: int
     use_custom_fallbacks: bool
-    is_original_mistral: bool
     original_provider: str
     original_model: str
 
@@ -203,6 +202,45 @@ def _reset_provider_keys(provider: str, api_keys: list[str]) -> list[str]:
     return api_keys.copy()
 
 
+def _get_default_fallback_chain(
+    original_provider: str,
+    original_model: str,
+) -> list[tuple[str, str, str]]:
+    openrouter_fallback = (
+        "openrouter",
+        "openrouter/free",
+        "openrouter/openrouter/free",
+    )
+    mistral_fallback = (
+        "mistral",
+        "mistral-large-latest",
+        "mistral/mistral-large-latest",
+    )
+    gemini_fallback = (
+        "gemini",
+        "gemma-3-27b-it",
+        "gemini/gemma-3-27b-it",
+    )
+
+    if (
+        original_provider == "openrouter"
+        and original_model == "openrouter/free"
+    ):
+        return [mistral_fallback, gemini_fallback]
+    if (
+        original_provider == "mistral"
+        and original_model == "mistral-large-latest"
+    ):
+        return [openrouter_fallback, gemini_fallback]
+    if (
+        original_provider == "gemini"
+        and original_model == "gemma-3-27b-it"
+    ):
+        return [openrouter_fallback, mistral_fallback]
+
+    return [openrouter_fallback, mistral_fallback, gemini_fallback]
+
+
 def _get_next_fallback(
     *,
     state: FallbackState,
@@ -226,49 +264,28 @@ def _get_next_fallback(
             return next_fallback
         return None
 
-    if state.fallback_level == 0:
-        if state.is_original_mistral:
-            state.fallback_level = 2
-            next_fallback = (
-                "gemini",
-                "gemma-3-27b-it",
-                "gemini/gemma-3-27b-it",
-            )
+    default_fallbacks = _get_default_fallback_chain(
+        state.original_provider,
+        state.original_model,
+    )
+    if state.fallback_level < len(default_fallbacks):
+        next_fallback = default_fallbacks[state.fallback_level]
+        state.fallback_level += 1
+        if state.fallback_level == 1:
             logger.warning(
-                "All %s keys exhausted for mistral/%s. Falling back to gemini/"
-                "gemma-3-27b-it...",
+                (
+                    "All %s keys exhausted for provider '%s'. "
+                    "Falling back to %s..."
+                ),
                 initial_key_count,
-                state.original_model,
+                provider,
+                next_fallback[2],
             )
-            return next_fallback
-
-        state.fallback_level = 1
-        next_fallback = (
-            "mistral",
-            "mistral-large-latest",
-            "mistral/mistral-large-latest",
-        )
-        logger.warning(
-            "All %s keys exhausted for provider '%s'. Falling back to "
-            "mistral/mistral-large-latest...",
-            initial_key_count,
-            state.original_provider,
-        )
-        return next_fallback
-
-    if state.fallback_level == 1:
-        state.fallback_level = 2
-        next_fallback = (
-            "gemini",
-            "gemma-3-27b-it",
-            "gemini/gemma-3-27b-it",
-        )
-        logger.warning(
-            (
-                "Mistral fallback also failed. "
-                "Falling back to gemini/gemma-3-27b-it..."
-            ),
-        )
+        else:
+            logger.warning(
+                "Fallback also failed. Falling back to %s...",
+                next_fallback[2],
+            )
         return next_fallback
 
     return None
@@ -296,7 +313,7 @@ async def _render_exhausted_response(
     if fallback_state.use_custom_fallbacks:
         logger.error("All custom fallback options exhausted")
     else:
-        logger.error("All fallback options exhausted (mistral and gemma)")
+        logger.error("All fallback options exhausted")
 
     error_text = (
         "❌ All API keys are currently unavailable. Please try again later."
@@ -1082,15 +1099,11 @@ def _initialize_loop_state(context: GenerationContext) -> GenerationLoopState:
     actual_model = context.actual_model
     fallback_chain = context.fallback_chain or []
     use_custom_fallbacks = context.fallback_chain is not None
-    is_original_mistral = (
-        provider == "mistral" and "mistral" in actual_model.lower()
-    )
 
     fallback_state = FallbackState(
         fallback_level=0,
         fallback_index=0,
         use_custom_fallbacks=use_custom_fallbacks,
-        is_original_mistral=is_original_mistral,
         original_provider=provider,
         original_model=actual_model,
     )

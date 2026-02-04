@@ -126,42 +126,57 @@ async def _run_decider_once(
 def _get_next_decider_fallback(
     fallback_level: int,
     *,
-    is_original_mistral: bool,
     original_provider: str,
     original_model: str,
 ) -> tuple[int, tuple[str, str, str] | None, str | None]:
-    if fallback_level == 0:
-        # First fallback: mistral (unless original was already mistral)
-        if is_original_mistral:
-            return (
-                2,
-                ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
-                (
-                    "Search decider exhausted all keys for mistral/"
-                    f"{original_model}. "
-                    "Falling back to gemini/gemma-3-27b-it..."
-                ),
-            )
-        return (
-            1,
-            ("mistral", "mistral-large-latest", "mistral/mistral-large-latest"),
-            (
-                "Search decider exhausted all keys for provider "
-                f"'{original_provider}'. "
-                "Falling back to mistral/mistral-large-latest..."
-            ),
-        )
+    openrouter_fallback = (
+        "openrouter",
+        "openrouter/free",
+        "openrouter/openrouter/free",
+    )
+    mistral_fallback = (
+        "mistral",
+        "mistral-large-latest",
+        "mistral/mistral-large-latest",
+    )
+    gemini_fallback = (
+        "gemini",
+        "gemma-3-27b-it",
+        "gemini/gemma-3-27b-it",
+    )
 
-    if fallback_level == 1:
-        # Second fallback: gemma
-        return (
-            2,
-            ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
-            (
-                "Search decider mistral fallback failed. "
-                "Falling back to gemini/gemma-3-27b-it..."
-            ),
-        )
+    if (
+        original_provider == "openrouter"
+        and original_model == "openrouter/free"
+    ):
+        fallback_chain = [mistral_fallback, gemini_fallback]
+    elif (
+        original_provider == "mistral"
+        and original_model == "mistral-large-latest"
+    ):
+        fallback_chain = [openrouter_fallback, gemini_fallback]
+    elif (
+        original_provider == "gemini"
+        and original_model == "gemma-3-27b-it"
+    ):
+        fallback_chain = [openrouter_fallback, mistral_fallback]
+    else:
+        fallback_chain = [openrouter_fallback, mistral_fallback, gemini_fallback]
+
+    if fallback_level < len(fallback_chain):
+        next_fallback = fallback_chain[fallback_level]
+        next_level = fallback_level + 1
+        if fallback_level == 0:
+            log_message = (
+                "Search decider exhausted all keys for provider "
+                f"'{original_provider}'. Falling back to {next_fallback[2]}..."
+            )
+        else:
+            log_message = (
+                "Search decider fallback failed. "
+                f"Falling back to {next_fallback[2]}..."
+            )
+        return next_level, next_fallback, log_message
 
     return fallback_level, None, None
 
@@ -189,12 +204,9 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     default_result = {"needs_search": False}
     config = get_config()
 
-    fallback_level = 0  # 0 = original, 1 = mistral, 2 = gemma
+    fallback_level = 0
     original_provider = provider
     original_model = model
-    is_original_mistral = (
-        original_provider == "mistral" and "mistral" in original_model.lower()
-    )
 
     while True:
         runner = _get_decider_runner()
@@ -212,7 +224,6 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
 
         fallback_level, next_fallback, log_message = _get_next_decider_fallback(
             fallback_level,
-            is_original_mistral=is_original_mistral,
             original_provider=original_provider,
             original_model=original_model,
         )
@@ -221,8 +232,8 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
         if not next_fallback:
             logger.error(
                 (
-                    "Search decider fallback options exhausted (mistral and "
-                    "gemma), skipping web search"
+                    "Search decider fallback options exhausted, skipping web "
+                    "search"
                 ),
             )
             return default_result

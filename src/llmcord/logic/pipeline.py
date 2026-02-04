@@ -1330,6 +1330,11 @@ async def process_message(
             override_provider_slash_model="gemini/gemma-3-27b-it",
             fallback_chain=[
                 (
+                    "openrouter",
+                    "openrouter/free",
+                    "openrouter/openrouter/free",
+                ),
+                (
                     "mistral",
                     "mistral-large-latest",
                     "mistral/mistral-large-latest",
