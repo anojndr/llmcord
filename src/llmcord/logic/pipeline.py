@@ -1320,6 +1320,10 @@ async def process_message(
 
     # Continue with response generation
     async def retry_callback() -> None:
+        retry_model = config.get("retry_stable_model")
+        if not isinstance(retry_model, str) or not retry_model.strip():
+            retry_model = "gemini/gemma-3-27b-it"
+
         retry_context = ProcessContext(
             discord_bot=discord_bot,
             httpx_client=httpx_client,
@@ -1327,7 +1331,7 @@ async def process_message(
             msg_nodes=msg_nodes,
             curr_model_lock=curr_model_lock,
             curr_model_ref=curr_model_ref,
-            override_provider_slash_model="gemini/gemma-3-27b-it",
+            override_provider_slash_model=retry_model,
             fallback_chain=[
                 (
                     "openrouter",

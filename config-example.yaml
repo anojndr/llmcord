@@ -130,6 +130,9 @@ models:
 
   github_copilot/gpt-5-mini:
 
+# Model used for the "Retry with stable model" button
+retry_stable_model: gemini/gemma-3-27b-it
+
 # Channel model overrides (locks a channel to a specific model; disables /model there)
 channel_model_overrides:
   "123456789012345678": gemini/gemini-3-flash-low
