@@ -111,6 +111,7 @@ class GenerationState:
     last_edit_time: float
     generated_images: list["GeneratedImage"]
     generated_image_hashes: set[str]
+    display_model: str
 
 
 @dataclass(slots=True)
@@ -200,6 +201,12 @@ def _reset_provider_keys(provider: str, api_keys: list[str]) -> list[str]:
     except (OSError, RuntimeError, ValueError):
         logger.exception("Failed to reset provider keys")
     return api_keys.copy()
+
+
+def _format_display_model(provider: str, actual_model: str) -> str:
+    if actual_model.startswith(f"{provider}/"):
+        return actual_model
+    return f"{provider}/{actual_model}"
 
 
 def _get_default_fallback_chain(
@@ -516,10 +523,17 @@ async def _initialize_generation_state(
                 ],
             },
         )
-        footer_text = (
-            f"{context.provider_slash_model} | total tokens: {input_tokens:,}"
+        embed.set_footer(
+            text=_format_display_model(
+                context.provider,
+                context.actual_model,
+            ),
         )
-        embed.set_footer(text=footer_text)
+
+    display_model = _format_display_model(
+        context.provider,
+        context.actual_model,
+    )
 
     return GenerationState(
         response_msgs=response_msgs,
@@ -532,6 +546,7 @@ async def _initialize_generation_state(
         last_edit_time=context.last_edit_time,
         generated_images=[],
         generated_image_hashes=set(),
+        display_model=display_model,
     )
 
 
@@ -650,7 +665,7 @@ async def _update_response_view(
         state.embed.description = state.response_contents[last_msg_index]
         state.embed.color = EMBED_COLOR_COMPLETE
         footer_text = (
-            f"{context.provider_slash_model} | total tokens: {total_tokens:,}"
+            f"{state.display_model} | total tokens: {total_tokens:,}"
         )
         state.embed.set_footer(text=footer_text)
         await state.response_msgs[last_msg_index].edit(
@@ -1192,6 +1207,13 @@ async def _handle_exhausted_keys(
             next_fallback=next_fallback,
             config=context.config,
         )
+
+        state.display_model = _format_display_model(
+            loop_state.provider,
+            loop_state.actual_model,
+        )
+        if state.embed is not None:
+            state.embed.set_footer(text=state.display_model)
 
         if fallback_api_keys:
             loop_state.api_keys = fallback_api_keys
