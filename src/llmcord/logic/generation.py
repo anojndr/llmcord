@@ -1021,21 +1021,17 @@ def _handle_generation_exception(
     )
     is_empty_response = "no content" in str(error).lower()
 
+    special_case_message: str | None = None
     if is_first_token_timeout:
-        logger.warning(
+        special_case_message = (
             "No first token within %s seconds for provider '%s'; "
-            "forcing fallback model.",
-            FIRST_TOKEN_TIMEOUT_SECONDS,
-            provider,
+            "removing key and trying remaining keys."
         )
-        return [], last_error_msg
-
-    if is_empty_response:
-        logger.warning(
-            "Empty response for provider '%s'; forcing fallback model.",
-            provider,
+    elif is_empty_response:
+        special_case_message = (
+            "Empty response for provider '%s'; removing key and trying "
+            "remaining keys."
         )
-        return [], last_error_msg
 
     error_str = str(error).lower()
     is_developer_instruction_error = (
@@ -1060,13 +1056,48 @@ def _handle_generation_exception(
     is_key_error = any(pattern in error_str for pattern in key_error_patterns)
 
     if is_developer_instruction_error:
-        logger.warning(
+        special_case_message = (
             "Developer instructions unsupported for provider '%s'; "
-            "forcing fallback model.",
-            provider,
+            "removing key and trying remaining keys."
         )
-        return [], last_error_msg
 
+    if special_case_message:
+        if is_first_token_timeout:
+            logger.warning(
+                special_case_message,
+                FIRST_TOKEN_TIMEOUT_SECONDS,
+                provider,
+            )
+        else:
+            logger.warning(special_case_message, provider)
+        _remove_key(good_keys, current_api_key)
+        return good_keys, last_error_msg
+
+    _handle_key_rotation_error(
+        error=error,
+        provider=provider,
+        current_api_key=current_api_key,
+        good_keys=good_keys,
+        error_flags=(is_key_error, is_timeout_error),
+    )
+
+    return good_keys, last_error_msg
+
+
+def _remove_key(good_keys: list[str], current_api_key: str) -> None:
+    if current_api_key in good_keys:
+        good_keys.remove(current_api_key)
+
+
+def _handle_key_rotation_error(
+    *,
+    error: Exception,
+    provider: str,
+    current_api_key: str,
+    good_keys: list[str],
+    error_flags: tuple[bool, bool],
+) -> None:
+    is_key_error, is_timeout_error = error_flags
     if is_key_error:
         error_msg = str(error)[:200] if error else "Unknown error"
         try:
@@ -1078,32 +1109,30 @@ def _handle_generation_exception(
         except Exception:
             logger.exception("Failed to mark key as bad")
 
-        if current_api_key in good_keys:
-            good_keys.remove(current_api_key)
-            logger.info(
-                "Removed bad key for '%s', %s keys remaining",
-                provider,
-                len(good_keys),
-            )
-    elif is_timeout_error:
-        if current_api_key in good_keys:
-            good_keys.remove(current_api_key)
+        _remove_key(good_keys, current_api_key)
+        logger.info(
+            "Removed bad key for '%s', %s keys remaining",
+            provider,
+            len(good_keys),
+        )
+        return
+
+    if is_timeout_error:
+        _remove_key(good_keys, current_api_key)
         logger.warning(
             "Non-key error for provider '%s': %s, %s keys remaining",
             provider,
             "timeout",
             len(good_keys),
         )
-    else:
-        if current_api_key in good_keys:
-            good_keys.remove(current_api_key)
-        logger.warning(
-            "Unknown error for provider '%s', %s keys remaining",
-            provider,
-            len(good_keys),
-        )
+        return
 
-    return good_keys, last_error_msg
+    _remove_key(good_keys, current_api_key)
+    logger.warning(
+        "Unknown error for provider '%s', %s keys remaining",
+        provider,
+        len(good_keys),
+    )
 
 
 def _initialize_loop_state(context: GenerationContext) -> GenerationLoopState:
