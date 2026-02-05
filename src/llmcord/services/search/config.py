@@ -59,6 +59,19 @@ In-Ear 2024 Beta vs 4128/4195 VDSF Target Response"]
 5. Make queries search-engine friendly
 6. Preserve the user's original intent
 7. Exclude years from search queries unless explicitly requested by the user.
+8. PRESERVE EXACT NAMES, VERSION NUMBERS, AND IDENTIFIERS. Never
+paraphrase, generalize, or "simplify" specific entity names, model
+names, version numbers, or product identifiers. Use the EXACT name
+or identifier the user used—including version numbers, prefixes,
+and suffixes.
+   - If the user says "5.2 Codex", search for "GPT-5.2-Codex" or
+"5.2 Codex", NOT "OpenAI Codex".
+   - If the user says "Claude 3.5 Sonnet", search for "Claude 3.5
+Sonnet", NOT "Anthropic Claude".
+   - If the user says "Llama 3.1 405B", search for "Llama 3.1
+405B", NOT "Meta Llama".
+   - NEVER strip version numbers or collapse a specific versioned
+name into its generic family name.
 
 BAD QUERIES (never output these):
 - "events mentioned by Joeii in their reply" ❌ (meta-description, not
@@ -92,4 +105,9 @@ Examples:
 - Conversation mentions "Greenland invasion by Russia" and user says
    "look that up" → {"needs_search": true,
    "queries": ["Russia Greenland invasion"]}
+- "5.2 Codex weren't available on the API initially. How long did it
+   take for OpenAI to release on API after its release date?" →
+   {"needs_search": true,
+   "queries": ["GPT-5.2-Codex initial release date",
+   "GPT-5.2-Codex API availability date"]}
 """
