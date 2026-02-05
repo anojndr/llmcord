@@ -3,6 +3,7 @@ import asyncio
 import logging
 import re
 from base64 import b64encode
+from contextlib import suppress
 from dataclasses import dataclass
 
 import discord
@@ -17,6 +18,7 @@ from llmcord.core.config import (
     is_gemini_model,
 )
 from llmcord.core.models import MsgNode
+from llmcord.discord.ui.utils import build_error_embed
 from llmcord.globals import reddit_client
 from llmcord.logic.generation import GenerationContext, generate_response
 from llmcord.logic.permissions import should_process_message
@@ -411,7 +413,6 @@ def _clean_message_content(
         cleaned_content,
         flags=re.IGNORECASE,
     ).lstrip()
-
 
 async def _apply_googlelens(context: GoogleLensContext) -> str:
     cleaned_content = context.cleaned_content
@@ -1220,7 +1221,7 @@ async def _maybe_run_web_search(
     return search_metadata
 
 
-async def process_message(
+async def process_message(  # noqa: PLR0915
     new_msg: discord.Message,
     context: ProcessContext,
 ) -> None:
@@ -1248,167 +1249,195 @@ async def process_message(
     processing_msg = processing_msg_or_none
 
     config = get_config()  # Now cached, no need for to_thread
+    use_plain_responses = config.get("use_plain_responses", False)
 
-    provider_settings = await _resolve_provider_settings(
-        processing_msg=processing_msg,
-        curr_model_lock=curr_model_lock,
-        curr_model_ref=curr_model_ref,
-        override_provider_slash_model=override_provider_slash_model,
-        config=config,
-    )
-    if provider_settings is None:
-        return
+    try:
+        provider_settings = await _resolve_provider_settings(
+            processing_msg=processing_msg,
+            curr_model_lock=curr_model_lock,
+            curr_model_ref=curr_model_ref,
+            override_provider_slash_model=override_provider_slash_model,
+            config=config,
+        )
+        if provider_settings is None:
+            return
 
-    accept_images = any(
-        x in provider_settings.provider_slash_model.lower()
-        for x in VISION_MODEL_TAGS
-    )
-    accept_usernames = any(
-        provider_settings.provider_slash_model.lower().startswith(x)
-        for x in PROVIDERS_SUPPORTING_USERNAMES
-    )
+        accept_images = any(
+            x in provider_settings.provider_slash_model.lower()
+            for x in VISION_MODEL_TAGS
+        )
+        accept_usernames = any(
+            provider_settings.provider_slash_model.lower().startswith(x)
+            for x in PROVIDERS_SUPPORTING_USERNAMES
+        )
 
-    max_text = config.get("max_text", 100000)
-    max_images = config.get("max_images", 5) if accept_images else 0
-    max_messages = config.get("max_messages", 25)
-    max_tweet_replies = config.get("max_tweet_replies", 50)
-    enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
-    youtube_transcript_proxy = config.get(
-        "youtube_transcript_proxy",
-    ) or config.get("proxy_url")
-    build_result = await _build_messages(
-        context=MessageBuildContext(
-            new_msg=new_msg,
-            discord_bot=discord_bot,
-            httpx_client=httpx_client,
-            twitter_api=twitter_api,
-            msg_nodes=msg_nodes,
-            actual_model=provider_settings.actual_model,
+        max_text = config.get("max_text", 100000)
+        max_images = config.get("max_images", 5) if accept_images else 0
+        max_messages = config.get("max_messages", 25)
+        max_tweet_replies = config.get("max_tweet_replies", 50)
+        enable_youtube_transcripts = config.get(
+            "enable_youtube_transcripts",
+            True,
+        )
+        youtube_transcript_proxy = config.get(
+            "youtube_transcript_proxy",
+        ) or config.get("proxy_url")
+        build_result = await _build_messages(
+            context=MessageBuildContext(
+                new_msg=new_msg,
+                discord_bot=discord_bot,
+                httpx_client=httpx_client,
+                twitter_api=twitter_api,
+                msg_nodes=msg_nodes,
+                actual_model=provider_settings.actual_model,
+                accept_usernames=accept_usernames,
+                max_text=max_text,
+                max_images=max_images,
+                max_messages=max_messages,
+                max_tweet_replies=max_tweet_replies,
+                enable_youtube_transcripts=enable_youtube_transcripts,
+                youtube_transcript_proxy=youtube_transcript_proxy,
+            ),
+        )
+        messages = build_result.messages
+        user_warnings = build_result.user_warnings
+
+        logger.info(
+            (
+                "Message received (user ID: %s, attachments: %s, "
+                "conversation length: %s):\n%s"
+            ),
+            new_msg.author.id,
+            len(new_msg.attachments),
+            len(messages),
+            new_msg.content,
+        )
+
+        # Handle edge case: no valid messages could be built
+        if not messages:
+            logger.warning(
+                "No valid messages could be built from the conversation.",
+            )
+            embed = discord.Embed(
+                description=(
+                    "❌ Could not process your message. Please try again."
+                ),
+                color=EMBED_COLOR_INCOMPLETE,
+            )
+            await processing_msg.edit(embed=embed)
+            return
+
+        system_prompt = config.get("system_prompt")
+        apply_system_prompt = not _is_system_prompt_disabled(
+            provider_settings=provider_settings,
+            config=config,
+        )
+        _apply_system_prompt(
+            messages=messages,
+            system_prompt=system_prompt,
             accept_usernames=accept_usernames,
-            max_text=max_text,
-            max_images=max_images,
-            max_messages=max_messages,
-            max_tweet_replies=max_tweet_replies,
-            enable_youtube_transcripts=enable_youtube_transcripts,
-            youtube_transcript_proxy=youtube_transcript_proxy,
-        ),
-    )
-    messages = build_result.messages
-    user_warnings = build_result.user_warnings
-
-    logger.info(
-        (
-            "Message received (user ID: %s, attachments: %s, "
-            "conversation length: %s):\n%s"
-        ),
-        new_msg.author.id,
-        len(new_msg.attachments),
-        len(messages),
-        new_msg.content,
-    )
-
-    # Handle edge case: no valid messages could be built
-    if not messages:
-        logger.warning(
-            "No valid messages could be built from the conversation.",
+            apply_system_prompt=apply_system_prompt,
         )
-        embed = discord.Embed(
-            description="❌ Could not process your message. Please try again.",
-            color=EMBED_COLOR_INCOMPLETE,
+
+        # Web Search Integration for non-Gemini models and Gemini preview models
+        # Supports both Tavily and Exa MCP as search providers
+        tavily_api_keys = ensure_list(config.get("tavily_api_key"))
+        exa_mcp_url = config.get("exa_mcp_url", "")
+        web_search_provider, web_search_available = (
+            _resolve_web_search_provider(
+                config,
+                tavily_api_keys,
+                exa_mcp_url,
+            )
         )
-        await processing_msg.edit(embed=embed)
-        return
+        search_metadata = await _resolve_search_metadata(
+            SearchResolutionContext(
+                new_msg=new_msg,
+                discord_bot=discord_bot,
+                msg_nodes=msg_nodes,
+                messages=messages,
+                user_warnings=user_warnings,
+                tavily_api_keys=tavily_api_keys,
+                config=config,
+                web_search_available=web_search_available,
+                web_search_provider=web_search_provider,
+                exa_mcp_url=exa_mcp_url,
+                actual_model=provider_settings.actual_model,
+            ),
+        )
 
-    system_prompt = config.get("system_prompt")
-    apply_system_prompt = not _is_system_prompt_disabled(
-        provider_settings=provider_settings,
-        config=config,
-    )
-    _apply_system_prompt(
-        messages=messages,
-        system_prompt=system_prompt,
-        accept_usernames=accept_usernames,
-        apply_system_prompt=apply_system_prompt,
-    )
+        # Continue with response generation
+        async def retry_callback() -> None:
+            retry_model = config.get("retry_stable_model")
+            if not isinstance(retry_model, str) or not retry_model.strip():
+                retry_model = "gemini/gemma-3-27b-it"
 
-    # Web Search Integration for non-Gemini models and Gemini preview models
-    # Supports both Tavily and Exa MCP as search providers
-    tavily_api_keys = ensure_list(config.get("tavily_api_key"))
-    exa_mcp_url = config.get("exa_mcp_url", "")
-    web_search_provider, web_search_available = _resolve_web_search_provider(
-        config,
-        tavily_api_keys,
-        exa_mcp_url,
-    )
-    search_metadata = await _resolve_search_metadata(
-        SearchResolutionContext(
+            retry_context = ProcessContext(
+                discord_bot=discord_bot,
+                httpx_client=httpx_client,
+                twitter_api=twitter_api,
+                msg_nodes=msg_nodes,
+                curr_model_lock=curr_model_lock,
+                curr_model_ref=curr_model_ref,
+                override_provider_slash_model=retry_model,
+                fallback_chain=[
+                    (
+                        "openrouter",
+                        "openrouter/free",
+                        "openrouter/openrouter/free",
+                    ),
+                    (
+                        "mistral",
+                        "mistral-large-latest",
+                        "mistral/mistral-large-latest",
+                    ),
+                ],
+            )
+            await process_message(new_msg=new_msg, context=retry_context)
+
+        tavily_metadata = search_metadata
+        generation_context = GenerationContext(
             new_msg=new_msg,
             discord_bot=discord_bot,
             msg_nodes=msg_nodes,
             messages=messages,
             user_warnings=user_warnings,
-            tavily_api_keys=tavily_api_keys,
-            config=config,
-            web_search_available=web_search_available,
-            web_search_provider=web_search_provider,
-            exa_mcp_url=exa_mcp_url,
+            provider=provider_settings.provider,
+            model=provider_settings.model,
             actual_model=provider_settings.actual_model,
-        ),
-    )
-
-    # Continue with response generation
-    async def retry_callback() -> None:
-        retry_model = config.get("retry_stable_model")
-        if not isinstance(retry_model, str) or not retry_model.strip():
-            retry_model = "gemini/gemma-3-27b-it"
-
-        retry_context = ProcessContext(
-            discord_bot=discord_bot,
-            httpx_client=httpx_client,
-            twitter_api=twitter_api,
-            msg_nodes=msg_nodes,
-            curr_model_lock=curr_model_lock,
-            curr_model_ref=curr_model_ref,
-            override_provider_slash_model=retry_model,
-            fallback_chain=[
-                (
-                    "openrouter",
-                    "openrouter/free",
-                    "openrouter/openrouter/free",
-                ),
-                (
-                    "mistral",
-                    "mistral-large-latest",
-                    "mistral/mistral-large-latest",
-                ),
-            ],
+            provider_slash_model=provider_settings.provider_slash_model,
+            base_url=provider_settings.base_url,
+            api_keys=provider_settings.api_keys,
+            model_parameters=provider_settings.model_parameters,
+            extra_headers=provider_settings.extra_headers,
+            extra_query=provider_settings.extra_query,
+            extra_body=provider_settings.extra_body,
+            system_prompt=system_prompt,
+            config=config,
+            max_text=max_text,
+            tavily_metadata=tavily_metadata,
+            last_edit_time=last_edit_time,
+            processing_msg=processing_msg,
+            retry_callback=retry_callback,
+            fallback_chain=fallback_chain,
         )
-        await process_message(new_msg=new_msg, context=retry_context)
-
-    tavily_metadata = search_metadata
-    generation_context = GenerationContext(
-        new_msg=new_msg,
-        discord_bot=discord_bot,
-        msg_nodes=msg_nodes,
-        messages=messages,
-        user_warnings=user_warnings,
-        provider=provider_settings.provider,
-        model=provider_settings.model,
-        actual_model=provider_settings.actual_model,
-        provider_slash_model=provider_settings.provider_slash_model,
-        base_url=provider_settings.base_url,
-        api_keys=provider_settings.api_keys,
-        model_parameters=provider_settings.model_parameters,
-        extra_headers=provider_settings.extra_headers,
-        extra_query=provider_settings.extra_query,
-        extra_body=provider_settings.extra_body,
-        system_prompt=system_prompt,
-        config=config,
-        max_text=max_text,
-        tavily_metadata=tavily_metadata,
-        last_edit_time=last_edit_time,
-        processing_msg=processing_msg,
-        retry_callback=retry_callback,
-        fallback_chain=fallback_chain,
-    )
-    await generate_response(generation_context)
+        await generate_response(generation_context)
+    except Exception:
+        logger.exception("Error processing message")
+        with suppress(Exception):
+            error_message = (
+                "An internal error occurred while processing your request. "
+                "Please try again later."
+            )
+            if use_plain_responses:
+                await processing_msg.edit(
+                    content=error_message,
+                    embed=None,
+                    view=None,
+                )
+            else:
+                await processing_msg.edit(
+                    embed=build_error_embed(error_message),
+                    view=None,
+                )
+        return
