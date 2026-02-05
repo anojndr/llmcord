@@ -143,6 +143,10 @@ channel_model_overrides:
 system_prompt: |
   You are a helpful assistant.
 
+  When sharing URLs, output them as plain text on their own line with no
+  markdown, no brackets, and no duplicated links. Ensure each URL is complete
+  and starts with http:// or https://, and avoid trailing punctuation.
+
   Today's date is {date}. The current time is {time}.
 
 # Optional: disable system prompt injection for specific models
