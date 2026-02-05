@@ -49,6 +49,7 @@ LITELLM_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     litellm.exceptions.OpenAIError,
 )
 for _exception_name in (
+    "BadRequestError",
     "RateLimitError",
     "APIError",
     "APIConnectionError",
