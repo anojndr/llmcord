@@ -81,6 +81,103 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
         return None
 
 
+async def extract_pdf_images(
+    pdf_content: bytes,
+) -> list[tuple[str, bytes]]:
+    """Extract embedded images from a PDF file using PyMuPDF.
+
+    This is used for non-Gemini models so they can view images
+    contained in PDF attachments.
+    Runs in a thread pool since PyMuPDF operations are CPU-bound.
+
+    Args:
+        pdf_content: The raw PDF file bytes
+
+    Returns:
+        List of (content_type, image_bytes) tuples for each extracted image
+
+    """
+
+    def _extract() -> list[tuple[str, bytes]]:
+        if fitz is None:
+            return []
+        try:
+            doc = fitz.open(stream=pdf_content, filetype="pdf")
+        except (RuntimeError, ValueError) as exc:
+            logger.warning("Failed to open PDF for image extraction: %s", exc)
+            return []
+
+        images: list[tuple[str, bytes]] = []
+        seen_xrefs: set[int] = set()
+        try:
+            for page in doc:
+                for img_info in page.get_images(full=True):
+                    xref = img_info[0]
+                    if xref in seen_xrefs:
+                        continue
+                    seen_xrefs.add(xref)
+                    result = _extract_single_pdf_image(doc, xref)
+                    if result is not None:
+                        images.append(result)
+        finally:
+            doc.close()
+
+        return images
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_extract),
+            timeout=30,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("PDF image extraction timed out")
+        return []
+    except (RuntimeError, ValueError, OSError) as exc:
+        logger.warning("PDF image extraction error: %s", exc)
+        return []
+
+
+_PDF_IMAGE_MIME_MAP: dict[str, str] = {
+    "png": "image/png",
+    "jpeg": "image/jpeg",
+    "jpg": "image/jpeg",
+    "webp": "image/webp",
+    "bmp": "image/bmp",
+    "gif": "image/png",
+    "tiff": "image/tiff",
+    "tif": "image/tiff",
+}
+
+
+def _extract_single_pdf_image(
+    doc: object,
+    xref: int,
+) -> tuple[str, bytes] | None:
+    """Extract a single image from a PDF document by xref."""
+    try:
+        extracted = doc.extract_image(xref)  # type: ignore[union-attr]
+    except (RuntimeError, ValueError):
+        return None
+    if not extracted or not extracted.get("image"):
+        return None
+
+    ext = extracted.get("ext", "png")
+    content_type = _PDF_IMAGE_MIME_MAP.get(ext, f"image/{ext}")
+    img_bytes: bytes = extracted["image"]
+
+    if ext == "gif":
+        try:
+            with Image.open(io.BytesIO(img_bytes)) as img:
+                output = io.BytesIO()
+                img.save(output, format="PNG")
+                img_bytes = output.getvalue()
+        except OSError:
+            logger.debug("Failed to convert PDF GIF image")
+            return None
+
+    return content_type, img_bytes
+
+
 class TweetUserProtocol(Protocol):
     """Protocol for tweet user objects."""
 

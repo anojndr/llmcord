@@ -32,6 +32,7 @@ from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import (
     TwitterApiProtocol,
     download_attachments,
+    extract_pdf_images,
     extract_pdf_text,
     extract_reddit_post,
     extract_youtube_transcript,
@@ -565,6 +566,52 @@ async def _extract_pdf_texts(
     return pdf_texts
 
 
+async def _extract_pdf_images(
+    *,
+    processed_attachments: list[dict[str, bytes | str | None]],
+    actual_model: str,
+) -> list[dict[str, object]]:
+    """Extract images from PDF attachments for non-Gemini models."""
+    if is_gemini_model(actual_model):
+        return []
+
+    pdf_attachments = [
+        att
+        for att in processed_attachments
+        if att["content_type"] == "application/pdf"
+    ]
+    if not pdf_attachments:
+        return []
+
+    extraction_tasks = [
+        extract_pdf_images(att["content"]) for att in pdf_attachments
+    ]
+    all_results = await asyncio.gather(*extraction_tasks)
+
+    image_dicts: list[dict[str, object]] = []
+    for pdf_images in all_results:
+        for content_type, img_bytes in pdf_images:
+            image_dicts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": (
+                            f"data:{content_type};base64,"
+                            f"{b64encode(img_bytes).decode('utf-8')}"
+                        ),
+                    },
+                },
+            )
+
+    if image_dicts:
+        logger.info(
+            "Extracted %s image(s) from PDF attachment(s)",
+            len(image_dicts),
+        )
+
+    return image_dicts
+
+
 async def _collect_external_content(
     context: ExternalContentContext,
 ) -> list[str]:
@@ -819,6 +866,13 @@ async def _populate_node_if_needed(
         attachment_responses=attachment_responses,
         extra_parts=extra_parts,
     )
+
+    pdf_images = await _extract_pdf_images(
+        processed_attachments=processed_attachments,
+        actual_model=context.actual_model,
+    )
+    if pdf_images:
+        curr_node.images.extend(pdf_images)
 
     if not curr_node.text and curr_node.images:
         curr_node.text = "What is in this image?"
