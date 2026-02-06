@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import litellm
 
 from llmcord.core.config import ensure_list, get_config
+from llmcord.core.config.utils import is_gemini_model
 from llmcord.services.database import KeyRotator, get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.search.config import (
@@ -61,12 +62,15 @@ async def _run_decider_once(
                 f"Current time: {time_str}."
             )
 
+            decider_is_gemini = is_gemini_model(run_config.model)
+
             if run_config.disable_system_prompt:
                 litellm_messages = convert_messages_to_openai_format(
                     messages,
                     system_prompt=None,
                     reverse=True,
                     include_analysis_prompt=False,
+                    is_gemini=decider_is_gemini,
                 )
                 litellm_messages.append(
                     {"role": "user", "content": system_prompt_with_date},
@@ -88,6 +92,7 @@ async def _run_decider_once(
                     system_prompt=system_prompt_with_date,
                     reverse=True,
                     include_analysis_prompt=True,
+                    is_gemini=decider_is_gemini,
                 )
 
             if len(litellm_messages) <= MIN_DECIDER_MESSAGES:
