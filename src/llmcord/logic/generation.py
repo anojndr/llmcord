@@ -214,11 +214,6 @@ def _get_default_fallback_chain(
     original_provider: str,
     original_model: str,
 ) -> list[tuple[str, str, str]]:
-    openrouter_fallback = (
-        "openrouter",
-        "openrouter/free",
-        "openrouter/openrouter/free",
-    )
     mistral_fallback = (
         "mistral",
         "mistral-large-latest",
@@ -231,22 +226,17 @@ def _get_default_fallback_chain(
     )
 
     if (
-        original_provider == "openrouter"
-        and original_model == "openrouter/free"
-    ):
-        return [mistral_fallback, gemini_fallback]
-    if (
         original_provider == "mistral"
         and original_model == "mistral-large-latest"
     ):
-        return [openrouter_fallback, gemini_fallback]
+        return [gemini_fallback]
     if (
         original_provider == "gemini"
         and original_model == "gemma-3-27b-it"
     ):
-        return [openrouter_fallback, mistral_fallback]
+        return [mistral_fallback]
 
-    return [openrouter_fallback, mistral_fallback, gemini_fallback]
+    return [mistral_fallback, gemini_fallback]
 
 
 def _get_next_fallback(

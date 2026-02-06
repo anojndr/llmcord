@@ -1024,10 +1024,7 @@ def _is_system_prompt_disabled(
         if model_name_lower and model_name_lower in normalized_targets:
             return True
 
-    return (
-        provider_settings.provider == "openrouter"
-        and provider_settings.model == "free"
-    )
+    return False
 
 
 def _apply_system_prompt(
@@ -1038,6 +1035,9 @@ def _apply_system_prompt(
     apply_system_prompt: bool,
 ) -> None:
     if not system_prompt:
+        return
+
+    if not apply_system_prompt:
         return
 
     date_str, time_str = get_current_datetime_strings()
@@ -1051,10 +1051,7 @@ def _apply_system_prompt(
             "\n\nUser's names are their Discord IDs and should be typed as "
             "'<@ID>'."
         )
-    if apply_system_prompt:
-        messages.append({"role": "system", "content": formatted_prompt})
-    else:
-        messages.append({"role": "user", "content": formatted_prompt})
+    messages.append({"role": "system", "content": formatted_prompt})
 
 
 async def _run_research_command(
@@ -1381,11 +1378,6 @@ async def process_message(  # noqa: PLR0915
                 curr_model_ref=curr_model_ref,
                 override_provider_slash_model=retry_model,
                 fallback_chain=[
-                    (
-                        "openrouter",
-                        "openrouter/free",
-                        "openrouter/openrouter/free",
-                    ),
                     (
                         "mistral",
                         "mistral-large-latest",

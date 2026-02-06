@@ -91,14 +91,6 @@ providers:
     base_url: https://api.mistral.ai/v1
     api_key: 
 
-  openrouter:
-    base_url: https://openrouter.ai/api/v1
-    api_key: 
-    # Optional OpenRouter metadata headers
-    # extra_headers:
-    #   HTTP-Referer: https://your-site.example
-    #   X-Title: Your App Name
-
 models:
   gemini/gemini-3-flash-low:
     model_name: gemini/gemini-3-flash-preview
@@ -129,7 +121,7 @@ models:
   github_copilot/gpt-5-mini:
 
   # Example: disable system prompt for models that reject developer instructions
-  # openrouter/free:
+  # some-provider/some-model:
   #   disable_system_prompt: true
 
 # Model used for the "Retry with stable model" button
@@ -151,5 +143,4 @@ system_prompt: |
 
 # Optional: disable system prompt injection for specific models
 # disable_system_prompt_models:
-#   - openrouter/free
 #   - gemini/gemma-3-4b-it

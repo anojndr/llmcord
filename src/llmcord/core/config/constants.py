@@ -15,7 +15,6 @@ VISION_MODEL_TAGS = (
     "mistral",
     "o3",
     "o4",
-    "openrouter/openrouter/free",
     "vision",
     "vl",
 )

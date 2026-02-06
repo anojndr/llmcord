@@ -30,7 +30,6 @@ class DeciderRunConfig:
     model: str
     api_keys: list[str]
     base_url: str | None
-    disable_system_prompt: bool
 
 
 def _get_decider_runner() -> object:
@@ -64,36 +63,14 @@ async def _run_decider_once(
 
             decider_is_gemini = is_gemini_model(run_config.model)
 
-            if run_config.disable_system_prompt:
-                litellm_messages = convert_messages_to_openai_format(
-                    messages,
-                    system_prompt=None,
-                    reverse=True,
-                    include_analysis_prompt=False,
-                    is_gemini=decider_is_gemini,
-                )
-                litellm_messages.append(
-                    {"role": "user", "content": system_prompt_with_date},
-                )
-                litellm_messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "Based on the conversation above, analyze the "
-                            "last user query and respond with your JSON "
-                            "decision."
-                        ),
-                    },
-                )
-            else:
-                # Convert messages to OpenAI format (LiteLLM uses OpenAI format)
-                litellm_messages = convert_messages_to_openai_format(
-                    messages,
-                    system_prompt=system_prompt_with_date,
-                    reverse=True,
-                    include_analysis_prompt=True,
-                    is_gemini=decider_is_gemini,
-                )
+            # Convert messages to OpenAI format (LiteLLM uses OpenAI format)
+            litellm_messages = convert_messages_to_openai_format(
+                messages,
+                system_prompt=system_prompt_with_date,
+                reverse=True,
+                include_analysis_prompt=True,
+                is_gemini=decider_is_gemini,
+            )
 
             if len(litellm_messages) <= MIN_DECIDER_MESSAGES:
                 exhausted_keys = False
@@ -168,11 +145,6 @@ def _get_next_decider_fallback(
     original_provider: str,
     original_model: str,
 ) -> tuple[int, tuple[str, str, str] | None, str | None]:
-    openrouter_fallback = (
-        "openrouter",
-        "openrouter/free",
-        "openrouter/openrouter/free",
-    )
     mistral_fallback = (
         "mistral",
         "mistral-large-latest",
@@ -185,22 +157,17 @@ def _get_next_decider_fallback(
     )
 
     if (
-        original_provider == "openrouter"
-        and original_model == "openrouter/free"
-    ):
-        fallback_chain = [mistral_fallback, gemini_fallback]
-    elif (
         original_provider == "mistral"
         and original_model == "mistral-large-latest"
     ):
-        fallback_chain = [openrouter_fallback, gemini_fallback]
+        fallback_chain = [gemini_fallback]
     elif (
         original_provider == "gemini"
         and original_model == "gemma-3-27b-it"
     ):
-        fallback_chain = [openrouter_fallback, mistral_fallback]
+        fallback_chain = [mistral_fallback]
     else:
-        fallback_chain = [openrouter_fallback, mistral_fallback, gemini_fallback]
+        fallback_chain = [mistral_fallback, gemini_fallback]
 
     if fallback_level < len(fallback_chain):
         next_fallback = fallback_chain[fallback_level]
@@ -218,30 +185,6 @@ def _get_next_decider_fallback(
         return next_level, next_fallback, log_message
 
     return fallback_level, None, None
-
-
-def _is_decider_system_prompt_disabled(
-    *,
-    config: dict,
-    provider: str,
-    model: str,
-) -> bool:
-    model_key = f"{provider}/{model}"
-    model_parameters = config.get("models", {}).get(model_key) or {}
-    disable_override = model_parameters.get("disable_system_prompt")
-    if isinstance(disable_override, bool):
-        return disable_override
-
-    disabled_models = ensure_list(config.get("disable_system_prompt_models"))
-    normalized_targets = {model_key.lower(), model.lower()}
-    for model_name in disabled_models:
-        if not isinstance(model_name, str):
-            continue
-        model_name_lower = model_name.strip().lower()
-        if model_name_lower and model_name_lower in normalized_targets:
-            return True
-
-    return provider == "openrouter" and model == "free"
 
 
 async def decide_web_search(messages: list, decider_config: dict) -> dict:
@@ -270,11 +213,6 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     fallback_level = 0
     original_provider = provider
     original_model = model
-    disable_system_prompt = _is_decider_system_prompt_disabled(
-        config=config,
-        provider=provider,
-        model=model,
-    )
 
     while True:
         runner = _get_decider_runner()
@@ -285,7 +223,6 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 model=model,
                 api_keys=api_keys,
                 base_url=base_url,
-                disable_system_prompt=disable_system_prompt,
             ),
         )
         if result is not None:
@@ -312,11 +249,6 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
         new_provider, new_model, _ = next_fallback
         provider = new_provider
         model = new_model
-        disable_system_prompt = _is_decider_system_prompt_disabled(
-            config=config,
-            provider=provider,
-            model=model,
-        )
 
         fallback_provider_config = config.get("providers", {}).get(provider, {})
         base_url = fallback_provider_config.get("base_url")

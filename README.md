@@ -38,7 +38,6 @@ llmcord supports remote models from:
 - [Google Gemini API](https://ai.google.dev/gemini-api/docs/models)
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
-- [OpenRouter API](https://openrouter.ai/models)
 
 Or run local models with:
 - [Ollama](https://ollama.com)
@@ -163,8 +162,7 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
 
 | Setting | Description |
 | --- | --- |
-| **providers** | Add the LLM providers you want to use, each with a `base_url` and optional `api_key` entry. Popular providers (`openai`, `openrouter`, `ollama`, etc.) are already included.<br /><br />**Only supports OpenAI compatible APIs.**<br /><br />**Some providers may need `extra_headers` / `extra_query` / `extra_body` entries for extra HTTP data. See the included `azure-openai` provider for an example.** |
-| **providers.openrouter.extra_headers** | Optional metadata headers for OpenRouter. Use `HTTP-Referer` and `X-Title` to identify your app/site. You can also set `OR_SITE_URL` and `OR_APP_NAME` environment variables. |
+| **providers** | Add the LLM providers you want to use, each with a `base_url` and optional `api_key` entry. Popular providers (`openai`, `ollama`, etc.) are already included.<br /><br />**Only supports OpenAI compatible APIs.**<br /><br />**Some providers may need `extra_headers` / `extra_query` / `extra_body` entries for extra HTTP data. See the included `azure-openai` provider for an example.** |
 | **models** | Add the models you want to use in `<provider>/<model>: <parameters>` format (examples are included). When you run `/model` these models will show up as autocomplete suggestions.<br /><br />**Refer to each provider's documentation for supported parameters.**<br /><br />**The first model in your `models` list will be the default model at startup.**<br /><br />**Some vision models may need `:vision` added to the end of their name to enable image support.** |
 | **retry_stable_model** | The model used when clicking the “Retry with stable model” button. Format: `provider/model`. If unset, defaults to `gemini/gemma-3-27b-it`. |
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
