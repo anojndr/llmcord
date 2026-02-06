@@ -64,7 +64,7 @@ paraphrase, generalize, or "simplify" specific entity names, model
 names, version numbers, or product identifiers. Use the EXACT name
 or identifier the user used—including version numbers, prefixes,
 and suffixes.
-   - If the user says "5.2 Codex", search for "GPT-5.2-Codex" or
+   - If the user says "5.2 Codex", search for "5.2 Codex" or
 "5.2 Codex", NOT "OpenAI Codex".
    - If the user says "Claude 3.5 Sonnet", search for "Claude 3.5
 Sonnet", NOT "Anthropic Claude".
@@ -108,6 +108,6 @@ Examples:
 - "5.2 Codex weren't available on the API initially. How long did it
    take for OpenAI to release on API after its release date?" →
    {"needs_search": true,
-   "queries": ["GPT-5.2-Codex initial release date",
-   "GPT-5.2-Codex API availability date"]}
+   "queries": ["5.2 Codex initial release date",
+   "5.2 Codex API availability date"]}
 """
