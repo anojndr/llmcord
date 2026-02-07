@@ -12,15 +12,31 @@ def _get_safety_settings(model_parameters: dict | None) -> object | None:
     return safety_settings
 
 
+def _extract_thinking_level_suffix(model: str) -> tuple[str, str | None]:
+    suffixes = {
+        "-minimal": "MINIMAL",
+        "-low": "LOW",
+        "-medium": "MEDIUM",
+        "-high": "HIGH",
+    }
+    for suffix, level in suffixes.items():
+        if model.endswith(suffix):
+            return model.removesuffix(suffix), level
+    return model, None
+
+
 def _resolve_thinking_level(
     model: str,
     model_parameters: dict | None,
+    suffix_level: str | None = None,
 ) -> str | None:
     thinking_level = (
         model_parameters.get("thinking_level") if model_parameters else None
     )
     if thinking_level:
         return thinking_level
+    if suffix_level:
+        return suffix_level
     if "gemini-3-flash" in model:
         return "MINIMAL"
     if "gemini-3-pro" in model:
@@ -32,8 +48,13 @@ def _apply_thinking_config(
     kwargs: dict[str, Any],
     model: str,
     model_parameters: dict | None,
+    suffix_level: str | None = None,
 ) -> None:
-    thinking_level = _resolve_thinking_level(model, model_parameters)
+    thinking_level = _resolve_thinking_level(
+        model,
+        model_parameters,
+        suffix_level=suffix_level,
+    )
     if not thinking_level:
         return
     thinking_map = {
@@ -132,13 +153,25 @@ def configure_gemini_kwargs(
     enable_grounding: bool = False,
 ) -> None:
     """Configure Gemini-specific kwargs."""
+    clean_model, suffix_level = _extract_thinking_level_suffix(model)
+    if clean_model != model:
+        if kwargs.get("model", "").endswith(model):
+            prefix = kwargs["model"][: -len(model)]
+            kwargs["model"] = f"{prefix}{clean_model}"
+        model = clean_model
+
     is_gemini_3 = "gemini-3" in model
     is_preview = "preview" in model
 
     if safety_settings := _get_safety_settings(model_parameters):
         kwargs["safety_settings"] = safety_settings
 
-    _apply_thinking_config(kwargs, model, model_parameters)
+    _apply_thinking_config(
+        kwargs,
+        model,
+        model_parameters,
+        suffix_level=suffix_level,
+    )
 
     tools = _build_gemini_tools(
         kwargs=kwargs,
