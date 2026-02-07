@@ -496,7 +496,7 @@ async def extract_youtube_transcript(
         )
 
 
-async def extract_reddit_post_json(
+async def extract_reddit_post_json(  # noqa: C901, PLR0912, PLR0915
     post_url: str,
     httpx_client: httpx.AsyncClient,
     *,
@@ -518,7 +518,7 @@ async def extract_reddit_post_json(
     try:
         # Resolve Reddit share URLs first (format: /r/.../s/...)
         # Share links don't support .json suffix - must resolve first
-        if re.search(r'/r/\w+/s/', post_url):
+        if re.search(r"/r/\w+/s/", post_url):
             if proxy_url:
                 async with httpx.AsyncClient(
                     proxy=proxy_url,
@@ -600,7 +600,11 @@ async def extract_reddit_post_json(
             post_text += f"\nLink: {url}"
 
         # Extract comments (limited by max_comments if specified)
-        top_comments = comments_listing if max_comments is None else comments_listing[:max_comments]
+        top_comments = (
+            comments_listing
+            if max_comments is None
+            else comments_listing[:max_comments]
+        )
         if top_comments:
             post_text += "\n\nTop Comments:"
             for comment in top_comments:
@@ -677,7 +681,11 @@ async def extract_reddit_post_praw(
         comments_list = (
             submission.comments.list() if submission.comments else []
         )
-        top_comments = comments_list if max_comments is None else comments_list[:max_comments]
+        top_comments = (
+            comments_list
+            if max_comments is None
+            else comments_list[:max_comments]
+        )
 
         if top_comments:
             post_text += "\n\nTop Comments:"
@@ -729,7 +737,7 @@ async def extract_reddit_post(
     """
     # Resolve Reddit share URLs first (format: /r/.../s/...)
     # Share links need to be resolved to canonical URLs for both methods
-    if re.search(r'/r/\w+/s/', post_url):
+    if re.search(r"/r/\w+/s/", post_url):
         try:
             if proxy_url:
                 async with httpx.AsyncClient(
@@ -758,7 +766,16 @@ async def extract_reddit_post(
             return None
 
     if reddit_client:
-        return await extract_reddit_post_praw(post_url, reddit_client, max_comments=max_comments)
+        return await extract_reddit_post_praw(
+            post_url,
+            reddit_client,
+            max_comments=max_comments,
+        )
 
-    return await extract_reddit_post_json(post_url, httpx_client, proxy_url=proxy_url, max_comments=max_comments)
+    return await extract_reddit_post_json(
+        post_url,
+        httpx_client,
+        proxy_url=proxy_url,
+        max_comments=max_comments,
+    )
 

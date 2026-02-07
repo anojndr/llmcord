@@ -2,14 +2,34 @@
 
 from typing import Any
 
+DEFAULT_SAFETY_SETTINGS = [
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE",
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "BLOCK_NONE",
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "BLOCK_NONE",
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "BLOCK_NONE",
+    },
+]
+
 
 def _get_safety_settings(model_parameters: dict | None) -> object | None:
     if not model_parameters:
-        return None
-    safety_settings = model_parameters.get("safety_settings")
-    if safety_settings is None:
-        safety_settings = model_parameters.get("safetySettings")
-    return safety_settings
+        return DEFAULT_SAFETY_SETTINGS
+    if safety_settings := model_parameters.get("safety_settings"):
+        return safety_settings
+    if safety_settings := model_parameters.get("safetySettings"):
+        return safety_settings
+    return DEFAULT_SAFETY_SETTINGS
 
 
 def _extract_thinking_level_suffix(model: str) -> tuple[str, str | None]:
