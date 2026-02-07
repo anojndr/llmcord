@@ -499,6 +499,8 @@ async def extract_youtube_transcript(
 async def extract_reddit_post_json(
     post_url: str,
     httpx_client: httpx.AsyncClient,
+    *,
+    proxy_url: str | None = None,
 ) -> str | None:
     """Extract Reddit post content using JSON endpoints."""
     try:
@@ -513,14 +515,29 @@ async def extract_reddit_post_json(
         else:
             json_url = post_url
 
-        response = await httpx_client.get(
-            json_url,
-            headers=BROWSER_HEADERS,
-            follow_redirects=True,
-            timeout=30,
-        )
-        response.raise_for_status()
-        data = response.json()
+        # Use a dedicated client with proxy if specified
+        if proxy_url:
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                follow_redirects=True,
+            ) as proxy_client:
+                response = await proxy_client.get(
+                    json_url,
+                    headers=BROWSER_HEADERS,
+                    timeout=30,
+                )
+                response.raise_for_status()
+                data = response.json()
+        else:
+            response = await httpx_client.get(
+                json_url,
+                headers=BROWSER_HEADERS,
+                follow_redirects=True,
+                timeout=30,
+            )
+            response.raise_for_status()
+            data = response.json()
+
 
         # Reddit JSON API returns a list of two objects:
         # 0: The post submission
@@ -643,9 +660,11 @@ async def extract_reddit_post(
     post_url: str,
     httpx_client: httpx.AsyncClient,
     reddit_client: asyncpraw.Reddit | None = None,
+    *,
+    proxy_url: str | None = None,
 ) -> str | None:
     """Extract Reddit post content using the configured method."""
     if reddit_client:
         return await extract_reddit_post_praw(post_url, reddit_client)
 
-    return await extract_reddit_post_json(post_url, httpx_client)
+    return await extract_reddit_post_json(post_url, httpx_client, proxy_url=proxy_url)

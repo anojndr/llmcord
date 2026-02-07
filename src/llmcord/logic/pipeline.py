@@ -98,6 +98,7 @@ class ExternalContentContext:
     actual_model: str
     enable_youtube_transcripts: bool
     youtube_transcript_proxy: str | None
+    reddit_proxy: str | None
 
 
 @dataclass(slots=True)
@@ -117,6 +118,7 @@ class MessageBuildContext:
     max_tweet_replies: int
     enable_youtube_transcripts: bool
     youtube_transcript_proxy: str | None
+    reddit_proxy: str | None
 
 
 @dataclass(slots=True)
@@ -668,6 +670,7 @@ async def _collect_external_content(
             post_url,
             context.httpx_client,
             reddit_client,
+            proxy_url=context.reddit_proxy,
         )
         if post_text:
             reddit_posts.append(post_text)
@@ -856,6 +859,7 @@ async def _populate_node_if_needed(
             actual_model=context.actual_model,
             enable_youtube_transcripts=context.enable_youtube_transcripts,
             youtube_transcript_proxy=context.youtube_transcript_proxy,
+            reddit_proxy=context.reddit_proxy,
         ),
     )
 
@@ -1333,6 +1337,9 @@ async def process_message(  # noqa: PLR0915
         youtube_transcript_proxy = config.get(
             "youtube_transcript_proxy",
         ) or config.get("proxy_url")
+        reddit_proxy = config.get(
+            "reddit_proxy",
+        ) or config.get("proxy_url")
         build_result = await _build_messages(
             context=MessageBuildContext(
                 new_msg=new_msg,
@@ -1348,6 +1355,7 @@ async def process_message(  # noqa: PLR0915
                 max_tweet_replies=max_tweet_replies,
                 enable_youtube_transcripts=enable_youtube_transcripts,
                 youtube_transcript_proxy=youtube_transcript_proxy,
+                reddit_proxy=reddit_proxy,
             ),
         )
         messages = build_result.messages
