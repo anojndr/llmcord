@@ -504,6 +504,32 @@ async def extract_reddit_post_json(
 ) -> str | None:
     """Extract Reddit post content using JSON endpoints."""
     try:
+        # Resolve Reddit share URLs first (format: /r/.../s/...)
+        # Share links don't support .json suffix - must resolve first
+        if re.search(r'/r/\w+/s/', post_url):
+            if proxy_url:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url,
+                    follow_redirects=True,
+                ) as proxy_client:
+                    resolve_resp = await proxy_client.head(
+                        post_url,
+                        headers=BROWSER_HEADERS,
+                        timeout=30,
+                    )
+                    post_url = str(resolve_resp.url)
+            else:
+                resolve_resp = await httpx_client.head(
+                    post_url,
+                    headers=BROWSER_HEADERS,
+                    follow_redirects=True,
+                    timeout=30,
+                )
+                post_url = str(resolve_resp.url)
+            # Strip query params added by Reddit share redirect
+            if "?" in post_url:
+                post_url = post_url.split("?")[0]
+
         # Ensure we request the JSON version of the page
         if not post_url.endswith(".json"):
             # Handle URLs that might already have query params
@@ -641,7 +667,7 @@ async def extract_reddit_post_praw(
                 post_text += f"\n- u/{comment_author}: {comment_body}"
 
     except (
-        asyncprawcore.exceptions.PrawcoreException,
+        asyncprawcore.exceptions.AsyncPrawcoreException,
         asyncpraw.exceptions.RedditAPIException,
         AttributeError,
         ValueError,
@@ -664,7 +690,38 @@ async def extract_reddit_post(
     proxy_url: str | None = None,
 ) -> str | None:
     """Extract Reddit post content using the configured method."""
+    # Resolve Reddit share URLs first (format: /r/.../s/...)
+    # Share links need to be resolved to canonical URLs for both methods
+    if re.search(r'/r/\w+/s/', post_url):
+        try:
+            if proxy_url:
+                async with httpx.AsyncClient(
+                    proxy=proxy_url,
+                    follow_redirects=True,
+                ) as proxy_client:
+                    resolve_resp = await proxy_client.head(
+                        post_url,
+                        headers=BROWSER_HEADERS,
+                        timeout=30,
+                    )
+                    post_url = str(resolve_resp.url)
+            else:
+                resolve_resp = await httpx_client.head(
+                    post_url,
+                    headers=BROWSER_HEADERS,
+                    follow_redirects=True,
+                    timeout=30,
+                )
+                post_url = str(resolve_resp.url)
+            # Strip query params added by Reddit share redirect
+            if "?" in post_url:
+                post_url = post_url.split("?")[0]
+        except httpx.HTTPError as exc:
+            logger.debug("Failed to resolve Reddit share URL %s: %s", post_url, exc)
+            return None
+
     if reddit_client:
         return await extract_reddit_post_praw(post_url, reddit_client)
 
     return await extract_reddit_post_json(post_url, httpx_client, proxy_url=proxy_url)
+

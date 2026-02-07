@@ -660,7 +660,7 @@ async def _collect_external_content(
     for post_url in re.findall(
         (
             r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?"
-            r"(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/comments\/"
+            r"(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/(?:comments|s)\/"
             r"[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)"
             r"|redd\.it\/[a-zA-Z0-9_]+))"
         ),
