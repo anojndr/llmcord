@@ -127,28 +127,73 @@ class MessageDataMixin:
         """Save web search results, lens results, and metadata for a message."""
         conn = self._get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            """INSERT INTO message_search_data (
-                   message_id,
-                   search_results,
-                   tavily_metadata,
-                   lens_results
-               )
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(message_id) DO UPDATE SET
-                   search_results = COALESCE(?, search_results),
-                   tavily_metadata = COALESCE(?, tavily_metadata),
-                   lens_results = COALESCE(?, lens_results)""",
-            (
-                str(message_id),
-                search_results,
-                json.dumps(tavily_metadata) if tavily_metadata else None,
-                lens_results,
-                search_results,
-                json.dumps(tavily_metadata) if tavily_metadata else None,
-                lens_results,
-            ),
+
+        # Ensure all parameters are primitive types that libsql can handle
+        # (str, int, float, None) - convert any non-primitive types to strings
+        # Use int() first to strip any subclass metadata (e.g., Discord Snowflake)
+        try:
+            msg_id_str = str(int(message_id))
+        except (ValueError, TypeError):
+            msg_id_str = str(message_id)
+
+        # Ensure search_results is a plain string or None
+        search_results_str: str | None = None
+        if search_results:
+            search_results_str = str(search_results)
+
+        # Serialize metadata with fallback for non-JSON types
+        tavily_json: str | None = None
+        if tavily_metadata:
+            try:
+                tavily_json = json.dumps(tavily_metadata, default=str)
+            except (TypeError, ValueError) as exc:
+                logger.warning("Failed to serialize tavily_metadata: %s", exc)
+                tavily_json = None
+
+        # Ensure lens_results is a plain string or None
+        lens_results_str: str | None = None
+        if lens_results:
+            lens_results_str = str(lens_results)
+
+        # Build params tuple with verified types
+        params = (
+            msg_id_str,
+            search_results_str,
+            tavily_json,
+            lens_results_str,
+            search_results_str,
+            tavily_json,
+            lens_results_str,
         )
+
+        # Debug log parameter types if there's an issue
+        try:
+            cursor.execute(
+                """INSERT INTO message_search_data (
+                       message_id,
+                       search_results,
+                       tavily_metadata,
+                       lens_results
+                   )
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(message_id) DO UPDATE SET
+                       search_results = COALESCE(?, search_results),
+                       tavily_metadata = COALESCE(?, tavily_metadata),
+                       lens_results = COALESCE(?, lens_results)""",
+                params,
+            )
+        except ValueError:
+            # Log parameter types to help debug "Unsupported parameter type" errors
+            param_types = [
+                (i, type(p).__name__, repr(p)[:100])
+                for i, p in enumerate(params)
+            ]
+            logger.exception(
+                "libsql parameter type error. Param types: %s",
+                param_types,
+            )
+            raise
+
         conn.commit()
         # Sync in background to avoid blocking
         try:
