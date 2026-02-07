@@ -501,8 +501,20 @@ async def extract_reddit_post_json(
     httpx_client: httpx.AsyncClient,
     *,
     proxy_url: str | None = None,
+    max_comments: int | None = None,
 ) -> str | None:
-    """Extract Reddit post content using JSON endpoints."""
+    """Extract Reddit post content using JSON endpoints.
+
+    Args:
+        post_url: The Reddit post URL to extract content from
+        httpx_client: The HTTP client to use for requests
+        proxy_url: Optional proxy URL to use for requests
+        max_comments: Maximum number of comments to extract. None = unlimited.
+
+    Returns:
+        Formatted post text with comments, or None if extraction failed
+
+    """
     try:
         # Resolve Reddit share URLs first (format: /r/.../s/...)
         # Share links don't support .json suffix - must resolve first
@@ -587,8 +599,8 @@ async def extract_reddit_post_json(
         if not is_self and url:
             post_text += f"\nLink: {url}"
 
-        # Extract top 5 comments
-        top_comments = comments_listing[:5]
+        # Extract comments (limited by max_comments if specified)
+        top_comments = comments_listing if max_comments is None else comments_listing[:max_comments]
         if top_comments:
             post_text += "\n\nTop Comments:"
             for comment in top_comments:
@@ -617,8 +629,20 @@ async def extract_reddit_post_json(
 async def extract_reddit_post_praw(
     post_url: str,
     reddit_client: asyncpraw.Reddit,
+    *,
+    max_comments: int | None = None,
 ) -> str | None:
-    """Extract Reddit post content using AsyncPRAW."""
+    """Extract Reddit post content using AsyncPRAW.
+
+    Args:
+        post_url: The Reddit post URL to extract content from
+        reddit_client: The AsyncPRAW Reddit client instance
+        max_comments: Maximum number of comments to extract. None = unlimited.
+
+    Returns:
+        Formatted post text with comments, or None if extraction failed
+
+    """
     try:
         submission = await reddit_client.submission(url=post_url)
 
@@ -653,7 +677,7 @@ async def extract_reddit_post_praw(
         comments_list = (
             submission.comments.list() if submission.comments else []
         )
-        top_comments = comments_list[:5]
+        top_comments = comments_list if max_comments is None else comments_list[:max_comments]
 
         if top_comments:
             post_text += "\n\nTop Comments:"
@@ -688,8 +712,21 @@ async def extract_reddit_post(
     reddit_client: asyncpraw.Reddit | None = None,
     *,
     proxy_url: str | None = None,
+    max_comments: int | None = None,
 ) -> str | None:
-    """Extract Reddit post content using the configured method."""
+    """Extract Reddit post content using the configured method.
+
+    Args:
+        post_url: The Reddit post URL to extract content from
+        httpx_client: The HTTP client to use for requests
+        reddit_client: Optional AsyncPRAW Reddit client instance
+        proxy_url: Optional proxy URL to use for requests
+        max_comments: Maximum number of comments to extract. None = unlimited.
+
+    Returns:
+        Formatted post text with comments, or None if extraction failed
+
+    """
     # Resolve Reddit share URLs first (format: /r/.../s/...)
     # Share links need to be resolved to canonical URLs for both methods
     if re.search(r'/r/\w+/s/', post_url):
@@ -721,7 +758,7 @@ async def extract_reddit_post(
             return None
 
     if reddit_client:
-        return await extract_reddit_post_praw(post_url, reddit_client)
+        return await extract_reddit_post_praw(post_url, reddit_client, max_comments=max_comments)
 
-    return await extract_reddit_post_json(post_url, httpx_client, proxy_url=proxy_url)
+    return await extract_reddit_post_json(post_url, httpx_client, proxy_url=proxy_url, max_comments=max_comments)
 
