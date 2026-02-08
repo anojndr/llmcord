@@ -545,8 +545,14 @@ async def _fetch_reddit_json(
     json_url: str,
     httpx_client: httpx.AsyncClient,
     proxy_url: str | None,
-) -> dict:
-    """Fetch Reddit JSON data from the given URL."""
+) -> tuple[dict, str]:
+    """Fetch Reddit JSON data from the given URL.
+
+    Returns:
+        Tuple of (json_data, resolved_url) where resolved_url is the final URL
+        after following redirects (useful for share URL resolution).
+
+    """
     if proxy_url:
         async with httpx.AsyncClient(
             proxy=proxy_url,
@@ -558,7 +564,7 @@ async def _fetch_reddit_json(
                 timeout=30,
             )
             response.raise_for_status()
-            return response.json()
+            return response.json(), str(response.url)
 
     response = await httpx_client.get(
         json_url,
@@ -567,7 +573,7 @@ async def _fetch_reddit_json(
         timeout=30,
     )
     response.raise_for_status()
-    return response.json()
+    return response.json(), str(response.url)
 
 
 def _format_reddit_comments(
@@ -593,6 +599,73 @@ def _format_reddit_comments(
     return result
 
 
+async def _extract_reddit_json_direct(
+    post_url: str,
+    httpx_client: httpx.AsyncClient,  # noqa: ARG001 - unused, kept for signature
+    max_comments: int | None,
+) -> str:
+    """Extract Reddit post using direct connection (no proxy).
+
+    Note: Creates its own client to ensure no proxy is used, even if the
+    passed httpx_client has proxy configured.
+
+    Args:
+        post_url: The Reddit post URL (may be share URL)
+        httpx_client: Unused, kept for signature compatibility
+        max_comments: Maximum number of comments to extract
+
+    Returns:
+        Formatted post text
+
+    Raises:
+        httpx.HTTPError: If request fails
+        KeyError, TypeError, ValueError: If parsing fails
+
+    """
+    # Create a fresh client with NO proxy to ensure direct connection
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        # Resolve share URLs first if needed
+        if re.search(r"/r/\w+/s/", post_url):
+            resolve_resp = await client.head(
+                post_url,
+                headers=BROWSER_HEADERS,
+                timeout=30,
+            )
+            post_url = str(resolve_resp.url)
+            if "?" in post_url:
+                post_url = post_url.split("?")[0]
+
+        json_url = _build_reddit_json_url(post_url)
+        response = await client.get(
+            json_url,
+            headers=BROWSER_HEADERS,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+    post_listing = data[0]["data"]["children"][0]["data"]
+    comments_listing = data[1]["data"]["children"]
+
+    title = post_listing.get("title", "Untitled")
+    subreddit_name = post_listing.get("subreddit", "unknown")
+    author_name = post_listing.get("author", "unknown")
+    selftext = post_listing.get("selftext", "")
+    url = post_listing.get("url", "")
+    is_self = post_listing.get("is_self", True)
+
+    post_text = (
+        f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\n"
+        f"Author: u/{author_name}\n\n{selftext}"
+    )
+
+    if not is_self and url:
+        post_text += f"\nLink: {url}"
+
+    post_text += _format_reddit_comments(comments_listing, max_comments)
+    return post_text
+
+
 async def extract_reddit_post_json(
     post_url: str,
     httpx_client: httpx.AsyncClient,
@@ -601,6 +674,11 @@ async def extract_reddit_post_json(
     max_comments: int | None = None,
 ) -> str | None:
     """Extract Reddit post content using JSON endpoints.
+
+    If a proxy is configured, tries with proxy first. If proxy fails
+    (e.g., 403 blocked by Reddit's anti-proxy measures), falls back to
+    direct connection. Reddit's public JSON endpoints don't require
+    proxying.
 
     Args:
         post_url: The Reddit post URL to extract content from
@@ -612,40 +690,77 @@ async def extract_reddit_post_json(
         Formatted post text with comments, or None if extraction failed
 
     """
+    original_url = post_url
+
+    # If proxy is configured, try proxy first with fallback to direct
+    if proxy_url:
+        try:
+            async with httpx.AsyncClient(
+                proxy=proxy_url,
+                follow_redirects=True,
+            ) as client:
+                # Resolve share URLs first if needed
+                if re.search(r"/r/\w+/s/", post_url):
+                    resolve_resp = await client.head(
+                        post_url,
+                        headers=BROWSER_HEADERS,
+                        timeout=30,
+                    )
+                    post_url = str(resolve_resp.url)
+                    if "?" in post_url:
+                        post_url = post_url.split("?")[0]
+
+                json_url = _build_reddit_json_url(post_url)
+                response = await client.get(
+                    json_url,
+                    headers=BROWSER_HEADERS,
+                    timeout=30,
+                )
+                response.raise_for_status()
+                data = response.json()
+
+            post_listing = data[0]["data"]["children"][0]["data"]
+            comments_listing = data[1]["data"]["children"]
+
+            title = post_listing.get("title", "Untitled")
+            subreddit_name = post_listing.get("subreddit", "unknown")
+            author_name = post_listing.get("author", "unknown")
+            selftext = post_listing.get("selftext", "")
+            url = post_listing.get("url", "")
+            is_self = post_listing.get("is_self", True)
+
+            post_text = (
+                f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\n"
+                f"Author: u/{author_name}\n\n{selftext}"
+            )
+
+            if not is_self and url:
+                post_text += f"\nLink: {url}"
+
+            return post_text + _format_reddit_comments(
+                comments_listing, max_comments
+            )
+        except httpx.HTTPError as exc:
+            # Proxy failed (likely blocked by Reddit) - fallback to direct
+            logger.debug(
+                "Proxy request failed for %s (%s), falling back to direct",
+                original_url,
+                exc,
+            )
+            # Fall through to direct attempt below
+
+    # Direct connection (no proxy) - either as primary or fallback
     try:
-        post_url = await _resolve_reddit_share_url(post_url, httpx_client, proxy_url)
-        json_url = _build_reddit_json_url(post_url)
-        data = await _fetch_reddit_json(json_url, httpx_client, proxy_url)
-
-        post_listing = data[0]["data"]["children"][0]["data"]
-        comments_listing = data[1]["data"]["children"]
-
-        title = post_listing.get("title", "Untitled")
-        subreddit_name = post_listing.get("subreddit", "unknown")
-        author_name = post_listing.get("author", "unknown")
-        selftext = post_listing.get("selftext", "")
-        url = post_listing.get("url", "")
-        is_self = post_listing.get("is_self", True)
-
-        post_text = (
-            f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\n"
-            f"Author: u/{author_name}\n\n{selftext}"
+        return await _extract_reddit_json_direct(
+            original_url, httpx_client, max_comments
         )
-
-        if not is_self and url:
-            post_text += f"\nLink: {url}"
-
-        post_text += _format_reddit_comments(comments_listing, max_comments)
-
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         logger.debug(
             "Failed to fetch Reddit content (JSON) for %s: %s",
-            post_url,
+            original_url,
             exc,
         )
         return None
-    else:
-        return post_text
 
 
 async def extract_reddit_post_praw(
@@ -753,43 +868,49 @@ async def extract_reddit_post(
         Formatted post text with comments, or None if extraction failed
 
     """
-    # Resolve Reddit share URLs first (format: /r/.../s/...)
-    # Share links need to be resolved to canonical URLs for both methods
-    if re.search(r"/r/\w+/s/", post_url):
-        try:
-            if proxy_url:
-                async with httpx.AsyncClient(
-                    proxy=proxy_url,
-                    follow_redirects=True,
-                ) as proxy_client:
-                    resolve_resp = await proxy_client.head(
+    if reddit_client:
+        # For PRAW, we need to resolve share URLs first since PRAW requires
+        # canonical URLs. Share links (format: /r/.../s/...) need to be
+        # resolved via HTTP redirect.
+        if re.search(r"/r/\w+/s/", post_url):
+            try:
+                if proxy_url:
+                    async with httpx.AsyncClient(
+                        proxy=proxy_url,
+                        follow_redirects=True,
+                    ) as proxy_client:
+                        resolve_resp = await proxy_client.head(
+                            post_url,
+                            headers=BROWSER_HEADERS,
+                            timeout=30,
+                        )
+                        post_url = str(resolve_resp.url)
+                else:
+                    resolve_resp = await httpx_client.head(
                         post_url,
                         headers=BROWSER_HEADERS,
+                        follow_redirects=True,
                         timeout=30,
                     )
                     post_url = str(resolve_resp.url)
-            else:
-                resolve_resp = await httpx_client.head(
-                    post_url,
-                    headers=BROWSER_HEADERS,
-                    follow_redirects=True,
-                    timeout=30,
+                # Strip query params added by Reddit share redirect
+                if "?" in post_url:
+                    post_url = post_url.split("?")[0]
+            except httpx.HTTPError as exc:
+                logger.debug(
+                    "Failed to resolve Reddit share URL %s: %s", post_url, exc
                 )
-                post_url = str(resolve_resp.url)
-            # Strip query params added by Reddit share redirect
-            if "?" in post_url:
-                post_url = post_url.split("?")[0]
-        except httpx.HTTPError as exc:
-            logger.debug("Failed to resolve Reddit share URL %s: %s", post_url, exc)
-            return None
+                return None
 
-    if reddit_client:
         return await extract_reddit_post_praw(
             post_url,
             reddit_client,
             max_comments=max_comments,
         )
 
+    # For JSON extraction, share URL resolution is handled automatically
+    # via follow_redirects during the GET request, avoiding extra HEAD
+    # requests that can fail with rotating proxies.
     return await extract_reddit_post_json(
         post_url,
         httpx_client,
