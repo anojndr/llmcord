@@ -496,7 +496,104 @@ async def extract_youtube_transcript(
         )
 
 
-async def extract_reddit_post_json(  # noqa: C901, PLR0912, PLR0915
+async def _resolve_reddit_share_url(
+    post_url: str,
+    httpx_client: httpx.AsyncClient,
+    proxy_url: str | None,
+) -> str:
+    """Resolve Reddit share URL to canonical URL."""
+    if not re.search(r"/r/\w+/s/", post_url):
+        return post_url
+
+    if proxy_url:
+        async with httpx.AsyncClient(
+            proxy=proxy_url,
+            follow_redirects=True,
+        ) as proxy_client:
+            resolve_resp = await proxy_client.head(
+                post_url,
+                headers=BROWSER_HEADERS,
+                timeout=30,
+            )
+            resolved_url = str(resolve_resp.url)
+    else:
+        resolve_resp = await httpx_client.head(
+            post_url,
+            headers=BROWSER_HEADERS,
+            follow_redirects=True,
+            timeout=30,
+        )
+        resolved_url = str(resolve_resp.url)
+
+    # Strip query params added by Reddit share redirect
+    if "?" in resolved_url:
+        resolved_url = resolved_url.split("?")[0]
+    return resolved_url
+
+
+def _build_reddit_json_url(post_url: str) -> str:
+    """Convert a Reddit post URL to its JSON endpoint."""
+    if post_url.endswith(".json"):
+        return post_url
+    if "?" in post_url:
+        base_url, query = post_url.split("?", 1)
+        return f"{base_url.rstrip('/')}.json?{query}"
+    return f"{post_url.rstrip('/')}.json"
+
+
+async def _fetch_reddit_json(
+    json_url: str,
+    httpx_client: httpx.AsyncClient,
+    proxy_url: str | None,
+) -> dict:
+    """Fetch Reddit JSON data from the given URL."""
+    if proxy_url:
+        async with httpx.AsyncClient(
+            proxy=proxy_url,
+            follow_redirects=True,
+        ) as proxy_client:
+            response = await proxy_client.get(
+                json_url,
+                headers=BROWSER_HEADERS,
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    response = await httpx_client.get(
+        json_url,
+        headers=BROWSER_HEADERS,
+        follow_redirects=True,
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _format_reddit_comments(
+    comments_listing: list[dict],
+    max_comments: int | None,
+) -> str:
+    """Format Reddit comments into a string."""
+    top_comments = (
+        comments_listing if max_comments is None else comments_listing[:max_comments]
+    )
+    if not top_comments:
+        return ""
+
+    result = "\n\nTop Comments:"
+    for comment in top_comments:
+        c_data = comment.get("data", {})
+        if comment.get("kind") == "more":
+            continue
+        comment_author = c_data.get("author", "[deleted]")
+        comment_body = c_data.get("body", "")
+        if comment_body:
+            result += f"\n- u/{comment_author}: {comment_body}"
+    return result
+
+
+async def extract_reddit_post_json(
     post_url: str,
     httpx_client: httpx.AsyncClient,
     *,
@@ -516,70 +613,10 @@ async def extract_reddit_post_json(  # noqa: C901, PLR0912, PLR0915
 
     """
     try:
-        # Resolve Reddit share URLs first (format: /r/.../s/...)
-        # Share links don't support .json suffix - must resolve first
-        if re.search(r"/r/\w+/s/", post_url):
-            if proxy_url:
-                async with httpx.AsyncClient(
-                    proxy=proxy_url,
-                    follow_redirects=True,
-                ) as proxy_client:
-                    resolve_resp = await proxy_client.head(
-                        post_url,
-                        headers=BROWSER_HEADERS,
-                        timeout=30,
-                    )
-                    post_url = str(resolve_resp.url)
-            else:
-                resolve_resp = await httpx_client.head(
-                    post_url,
-                    headers=BROWSER_HEADERS,
-                    follow_redirects=True,
-                    timeout=30,
-                )
-                post_url = str(resolve_resp.url)
-            # Strip query params added by Reddit share redirect
-            if "?" in post_url:
-                post_url = post_url.split("?")[0]
+        post_url = await _resolve_reddit_share_url(post_url, httpx_client, proxy_url)
+        json_url = _build_reddit_json_url(post_url)
+        data = await _fetch_reddit_json(json_url, httpx_client, proxy_url)
 
-        # Ensure we request the JSON version of the page
-        if not post_url.endswith(".json"):
-            # Handle URLs that might already have query params
-            if "?" in post_url:
-                base_url, query = post_url.split("?", 1)
-                json_url = f"{base_url.rstrip('/')}.json?{query}"
-            else:
-                json_url = f"{post_url.rstrip('/')}.json"
-        else:
-            json_url = post_url
-
-        # Use a dedicated client with proxy if specified
-        if proxy_url:
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                follow_redirects=True,
-            ) as proxy_client:
-                response = await proxy_client.get(
-                    json_url,
-                    headers=BROWSER_HEADERS,
-                    timeout=30,
-                )
-                response.raise_for_status()
-                data = response.json()
-        else:
-            response = await httpx_client.get(
-                json_url,
-                headers=BROWSER_HEADERS,
-                follow_redirects=True,
-                timeout=30,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-
-        # Reddit JSON API returns a list of two objects:
-        # 0: The post submission
-        # 1: The comments
         post_listing = data[0]["data"]["children"][0]["data"]
         comments_listing = data[1]["data"]["children"]
 
@@ -588,7 +625,6 @@ async def extract_reddit_post_json(  # noqa: C901, PLR0912, PLR0915
         author_name = post_listing.get("author", "unknown")
         selftext = post_listing.get("selftext", "")
         url = post_listing.get("url", "")
-        # is_self is True for text posts, False for link/image/video posts
         is_self = post_listing.get("is_self", True)
 
         post_text = (
@@ -599,25 +635,7 @@ async def extract_reddit_post_json(  # noqa: C901, PLR0912, PLR0915
         if not is_self and url:
             post_text += f"\nLink: {url}"
 
-        # Extract comments (limited by max_comments if specified)
-        top_comments = (
-            comments_listing
-            if max_comments is None
-            else comments_listing[:max_comments]
-        )
-        if top_comments:
-            post_text += "\n\nTop Comments:"
-            for comment in top_comments:
-                c_data = comment.get("data", {})
-                # Skip 'more' type comments (load more buttons)
-                if comment.get("kind") == "more":
-                    continue
-
-                comment_author = c_data.get("author", "[deleted]")
-                comment_body = c_data.get("body", "")
-
-                if comment_body:
-                    post_text += f"\n- u/{comment_author}: {comment_body}"
+        post_text += _format_reddit_comments(comments_listing, max_comments)
 
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         logger.debug(

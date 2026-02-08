@@ -51,7 +51,10 @@ class _ConfigCacheState:
 _CONFIG_STATE = _ConfigCacheState()
 CONFIG_CACHE_TTL = 5  # Check file modification time every 5 seconds
 PROFILE_NAMES = ("main", "test")
-PROFILE_KEYS = {"bot_token", "port"}
+# Keys allowed in profile blocks (these are validated)
+PROFILE_KEYS = {"bot_token", "port", "host"}
+# Keys required in profile blocks (subset of PROFILE_KEYS)
+REQUIRED_PROFILE_KEYS = {"bot_token", "port"}
 
 
 def _normalize_profile_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -87,12 +90,12 @@ def _normalize_profile_config(config: dict[str, Any]) -> dict[str, Any]:
         if invalid_keys:
             invalid_keys_list = ", ".join(sorted(invalid_keys))
             message = (
-                "Profiles may only define 'bot_token' and 'port'. "
+                "Profiles may only define 'bot_token', 'port', and 'host'. "
                 f"Invalid keys in '{profile}': {invalid_keys_list}."
             )
             raise ProfileConfigError(message)
 
-        missing_keys = PROFILE_KEYS - set(profile_config)
+        missing_keys = REQUIRED_PROFILE_KEYS - set(profile_config)
         if missing_keys:
             missing_keys_list = ", ".join(sorted(missing_keys))
             message = f"Profile '{profile}' is missing: {missing_keys_list}."

@@ -1,8 +1,14 @@
 """Utility functions for search service."""
 import base64
+import binascii
 import logging
 import re
 from datetime import datetime
+
+try:
+    import fitz
+except ImportError:
+    fitz = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +49,16 @@ def _extract_pdf_text_for_decider(file_data: str) -> str:
         Extracted text with header, or a placeholder string.
 
     """
+    if fitz is None:
+        return "[PDF document attached]"
+
     b64_data = file_data.split(",", 1)[1] if "," in file_data else ""
     try:
         pdf_bytes = base64.b64decode(b64_data)
-    except Exception:  # noqa: BLE001
+    except (ValueError, binascii.Error):
         return "[PDF document attached]"
 
     try:
-        import fitz  # noqa: PLC0415
-
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         try:
             text = "\n".join(page.get_text() for page in doc)
@@ -59,7 +66,7 @@ def _extract_pdf_text_for_decider(file_data: str) -> str:
             doc.close()
         if text.strip():
             return f"--- PDF Attachment Content ---\n{text.strip()}"
-    except Exception:  # noqa: BLE001
+    except (RuntimeError, ValueError, OSError):
         logger.debug("Could not extract PDF text for search decider")
     return "[PDF document attached]"
 

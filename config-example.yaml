@@ -4,10 +4,12 @@ profile: main  # Options: main, test
 
 main:
   port: 8001
+  host: 0.0.0.0
   bot_token:
 
 test:
   port: 8002
+  host: 0.0.0.0
   bot_token:
 
 client_id: 

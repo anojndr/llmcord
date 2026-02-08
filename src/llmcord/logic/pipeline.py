@@ -1275,8 +1275,65 @@ async def _maybe_run_web_search(
     context.search_metadata = search_metadata
     return search_metadata
 
+def _get_message_limits(
+    config: dict,
+    *,
+    accept_images: bool,
+) -> tuple[int, int, int, int, bool, str | None, str | None]:
+    """Extract message limits from config."""
+    max_text = config.get("max_text", 100000)
+    max_images = config.get("max_images", 5) if accept_images else 0
+    max_messages = config.get("max_messages", 25)
+    max_tweet_replies = config.get("max_tweet_replies", 50)
+    enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
+    youtube_transcript_proxy = config.get(
+        "youtube_transcript_proxy",
+    ) or config.get("proxy_url")
+    reddit_proxy = config.get("reddit_proxy") or config.get("proxy_url")
+    return (
+        max_text,
+        max_images,
+        max_messages,
+        max_tweet_replies,
+        enable_youtube_transcripts,
+        youtube_transcript_proxy,
+        reddit_proxy,
+    )
 
-async def process_message(  # noqa: PLR0915
+
+def _make_retry_callback(
+    new_msg: discord.Message,
+    config: dict,
+    context: ProcessContext,
+) -> object:
+    """Create a retry callback for when the primary model fails."""
+    async def retry_callback() -> None:
+        retry_model = config.get("retry_stable_model")
+        if not isinstance(retry_model, str) or not retry_model.strip():
+            retry_model = "gemini/gemma-3-27b-it"
+
+        retry_context = ProcessContext(
+            discord_bot=context.discord_bot,
+            httpx_client=context.httpx_client,
+            twitter_api=context.twitter_api,
+            msg_nodes=context.msg_nodes,
+            curr_model_lock=context.curr_model_lock,
+            curr_model_ref=context.curr_model_ref,
+            override_provider_slash_model=retry_model,
+            fallback_chain=[
+                (
+                    "mistral",
+                    "mistral-large-latest",
+                    "mistral/mistral-large-latest",
+                ),
+            ],
+        )
+        await process_message(new_msg=new_msg, context=retry_context)
+
+    return retry_callback
+
+
+async def process_message(
     new_msg: discord.Message,
     context: ProcessContext,
 ) -> None:
@@ -1289,7 +1346,6 @@ async def process_message(  # noqa: PLR0915
     curr_model_ref = context.curr_model_ref
     override_provider_slash_model = context.override_provider_slash_model
     fallback_chain = context.fallback_chain
-    # Per-request edit timing to avoid interference between concurrent requests
     last_edit_time = 0
 
     should_process, processing_msg_or_none = await should_process_message(
@@ -1297,13 +1353,11 @@ async def process_message(  # noqa: PLR0915
     )
     if not should_process:
         return
-
-    # should_process guarantees processing_msg is not None if it returns True
     if processing_msg_or_none is None:
         return
     processing_msg = processing_msg_or_none
 
-    config = get_config()  # Now cached, no need for to_thread
+    config = get_config()
     use_plain_responses = config.get("use_plain_responses", False)
 
     try:
@@ -1326,20 +1380,11 @@ async def process_message(  # noqa: PLR0915
             for x in PROVIDERS_SUPPORTING_USERNAMES
         )
 
-        max_text = config.get("max_text", 100000)
-        max_images = config.get("max_images", 5) if accept_images else 0
-        max_messages = config.get("max_messages", 25)
-        max_tweet_replies = config.get("max_tweet_replies", 50)
-        enable_youtube_transcripts = config.get(
-            "enable_youtube_transcripts",
-            True,
-        )
-        youtube_transcript_proxy = config.get(
-            "youtube_transcript_proxy",
-        ) or config.get("proxy_url")
-        reddit_proxy = config.get(
-            "reddit_proxy",
-        ) or config.get("proxy_url")
+        (
+            max_text, max_images, max_messages, max_tweet_replies,
+            enable_youtube_transcripts, youtube_transcript_proxy, reddit_proxy,
+        ) = _get_message_limits(config, accept_images=accept_images)
+
         build_result = await _build_messages(
             context=MessageBuildContext(
                 new_msg=new_msg,
@@ -1362,25 +1407,20 @@ async def process_message(  # noqa: PLR0915
         user_warnings = build_result.user_warnings
 
         logger.info(
-            (
-                "Message received (user ID: %s, attachments: %s, "
-                "conversation length: %s):\n%s"
-            ),
+            "Message received (user ID: %s, attachments: %s, "
+            "conversation length: %s):\n%s",
             new_msg.author.id,
             len(new_msg.attachments),
             len(messages),
             new_msg.content,
         )
 
-        # Handle edge case: no valid messages could be built
         if not messages:
             logger.warning(
                 "No valid messages could be built from the conversation.",
             )
             embed = discord.Embed(
-                description=(
-                    "❌ Could not process your message. Please try again."
-                ),
+                description="❌ Could not process your message. Please try again.",
                 color=EMBED_COLOR_INCOMPLETE,
             )
             await processing_msg.edit(embed=embed)
@@ -1398,16 +1438,12 @@ async def process_message(  # noqa: PLR0915
             apply_system_prompt=apply_system_prompt,
         )
 
-        # Web Search Integration for non-Gemini models and Gemini preview models
-        # Supports both Tavily and Exa MCP as search providers
         tavily_api_keys = ensure_list(config.get("tavily_api_key"))
         exa_mcp_url = config.get("exa_mcp_url", "")
-        web_search_provider, web_search_available = (
-            _resolve_web_search_provider(
-                config,
-                tavily_api_keys,
-                exa_mcp_url,
-            )
+        web_search_provider, web_search_available = _resolve_web_search_provider(
+            config,
+            tavily_api_keys,
+            exa_mcp_url,
         )
         search_metadata = await _resolve_search_metadata(
             SearchResolutionContext(
@@ -1425,31 +1461,8 @@ async def process_message(  # noqa: PLR0915
             ),
         )
 
-        # Continue with response generation
-        async def retry_callback() -> None:
-            retry_model = config.get("retry_stable_model")
-            if not isinstance(retry_model, str) or not retry_model.strip():
-                retry_model = "gemini/gemma-3-27b-it"
+        retry_callback = _make_retry_callback(new_msg, config, context)
 
-            retry_context = ProcessContext(
-                discord_bot=discord_bot,
-                httpx_client=httpx_client,
-                twitter_api=twitter_api,
-                msg_nodes=msg_nodes,
-                curr_model_lock=curr_model_lock,
-                curr_model_ref=curr_model_ref,
-                override_provider_slash_model=retry_model,
-                fallback_chain=[
-                    (
-                        "mistral",
-                        "mistral-large-latest",
-                        "mistral/mistral-large-latest",
-                    ),
-                ],
-            )
-            await process_message(new_msg=new_msg, context=retry_context)
-
-        tavily_metadata = search_metadata
         generation_context = GenerationContext(
             new_msg=new_msg,
             discord_bot=discord_bot,
@@ -1469,7 +1482,7 @@ async def process_message(  # noqa: PLR0915
             system_prompt=system_prompt,
             config=config,
             max_text=max_text,
-            tavily_metadata=tavily_metadata,
+            tavily_metadata=search_metadata,
             last_edit_time=last_edit_time,
             processing_msg=processing_msg,
             retry_callback=retry_callback,
