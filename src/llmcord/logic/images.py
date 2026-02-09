@@ -1,0 +1,227 @@
+"""Image extraction logic for LLM responses."""
+import base64
+import binascii
+import hashlib
+import io
+import logging
+import re
+
+import discord
+
+from llmcord.logic.generation_types import GeneratedImage, GenerationContext, GenerationState
+
+logger = logging.getLogger(__name__)
+
+DATA_URL_PATTERN = re.compile(
+    r"data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)",
+)
+
+
+def _extension_from_mime(mime_type: str) -> str:
+    extension = mime_type.split("/", maxsplit=1)[-1].split(";", maxsplit=1)[0]
+    return extension or "png"
+
+
+def _build_generated_image(data: bytes, mime_type: str) -> GeneratedImage:
+    digest = hashlib.sha256(data).hexdigest()[:12]
+    extension = _extension_from_mime(mime_type)
+    filename = f"gemini-output-{digest}.{extension}"
+    return GeneratedImage(data=data, mime_type=mime_type, filename=filename)
+
+
+def _coerce_payload(obj: object) -> object:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict") and callable(obj.dict):
+        return obj.dict()
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return obj
+
+
+def _extract_images_from_string(text: str) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+    for mime_type, b64_data in DATA_URL_PATTERN.findall(text):
+        try:
+            data = base64.b64decode(b64_data)
+        except (ValueError, binascii.Error):
+            continue
+        images.append(_build_generated_image(data, mime_type))
+    return images
+
+
+def _extract_images_from_inline_data(inline_data: dict) -> list[GeneratedImage]:
+    mime_type = inline_data.get("mime_type") or inline_data.get("mimeType")
+    data = inline_data.get("data")
+    if (
+        not isinstance(mime_type, str)
+        or not mime_type.startswith("image/")
+        or not isinstance(data, str)
+    ):
+        return []
+    try:
+        decoded = base64.b64decode(data)
+    except (ValueError, binascii.Error):
+        return []
+    return [_build_generated_image(decoded, mime_type)]
+
+
+def _extract_images_from_image_url(image_url: object) -> list[GeneratedImage]:
+    if isinstance(image_url, dict):
+        image_url = image_url.get("url")
+    if not isinstance(image_url, str):
+        return []
+    return _extract_images_from_string(image_url)
+
+
+def _extract_images_from_mime_data(
+    data: object,
+    mime_type: object,
+) -> list[GeneratedImage]:
+    if (
+        not isinstance(mime_type, str)
+        or not mime_type.startswith("image/")
+        or not isinstance(data, str)
+    ):
+        return []
+    try:
+        decoded = base64.b64decode(data)
+    except (ValueError, binascii.Error):
+        return []
+    return [_build_generated_image(decoded, mime_type)]
+
+
+def _extract_images_from_dict(obj: dict) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+
+    inline_data = obj.get("inline_data") or obj.get("inlineData")
+    if isinstance(inline_data, dict):
+        images.extend(_extract_images_from_inline_data(inline_data))
+
+    image_url = obj.get("image_url") or obj.get("imageUrl")
+    if image_url:
+        images.extend(_extract_images_from_image_url(image_url))
+
+    images.extend(
+        _extract_images_from_mime_data(obj.get("data"), obj.get("mime_type")),
+    )
+    images.extend(
+        _extract_images_from_mime_data(obj.get("data"), obj.get("mimeType")),
+    )
+    return images
+
+
+def extract_generated_images(value: object) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+    seen_ids: set[int] = set()
+
+    stack: list[object] = [value]
+    while stack:
+        obj = _coerce_payload(stack.pop())
+        if obj is None:
+            continue
+
+        obj_id = id(obj)
+        if obj_id in seen_ids:
+            continue
+        seen_ids.add(obj_id)
+
+        if isinstance(obj, str):
+            images.extend(_extract_images_from_string(obj))
+            continue
+        if isinstance(obj, dict):
+            images.extend(_extract_images_from_dict(obj))
+            stack.extend(obj.values())
+            continue
+        if isinstance(obj, (list, tuple, set)):
+            stack.extend(obj)
+
+    return images
+
+
+def extract_gemini_images_from_chunk(
+    chunk: object,
+    choice: object,
+    delta_content: str,
+) -> list[GeneratedImage]:
+    images: list[GeneratedImage] = []
+    sources = [
+        delta_content,
+        getattr(choice, "delta", None),
+        getattr(choice, "message", None),
+        getattr(chunk, "model_extra", None),
+        getattr(chunk, "_hidden_params", None),
+    ]
+    for source in sources:
+        if source is None:
+            continue
+        images.extend(extract_generated_images(source))
+    return images
+
+
+def append_generated_images(
+    state: GenerationState,
+    images: list[GeneratedImage],
+) -> None:
+    for image in images:
+        digest = hashlib.sha256(image.data).hexdigest()
+        if digest in state.generated_image_hashes:
+            continue
+        state.generated_image_hashes.add(digest)
+        state.generated_images.append(image)
+
+
+async def send_generated_images(
+    *,
+    context: GenerationContext,
+    state: GenerationState,
+) -> None:
+    if not state.generated_images:
+        logger.debug(
+            "No Gemini-generated images to send for message %s",
+            context.new_msg.id,
+        )
+        return
+
+    logger.info(
+        "Sending %s Gemini-generated image(s) for message %s",
+        len(state.generated_images),
+        context.new_msg.id,
+    )
+    reply_target = (
+        state.response_msgs[-1] if state.response_msgs else context.new_msg
+    )
+    batch_size = 10
+    for index in range(0, len(state.generated_images), batch_size):
+        batch = state.generated_images[index : index + batch_size]
+        try:
+            files = [
+                discord.File(io.BytesIO(image.data), filename=image.filename)
+                for image in batch
+            ]
+            total_bytes = sum(len(image.data) for image in batch)
+            logger.debug(
+                "Prepared %s image(s) (%s bytes) for batch %s-%s",
+                len(batch),
+                total_bytes,
+                index,
+                index + len(batch) - 1,
+            )
+            content = "Generated image(s):" if index == 0 else None
+            await reply_target.reply(content=content, files=files)
+            logger.info(
+                "Sent Gemini-generated image batch %s-%s for message %s",
+                index,
+                index + len(batch) - 1,
+                context.new_msg.id,
+            )
+        except Exception:
+            logger.exception(
+                (
+                    "Failed to send Gemini-generated image batch %s-%s for "
+                    "message %s"
+                ),
+                index,
+                index + len(batch) - 1,
+                context.new_msg.id,
+            )

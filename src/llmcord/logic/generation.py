@@ -1,25 +1,15 @@
 """LLM response generation logic."""
 import asyncio
-import base64
-import binascii
-import hashlib
-import io
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
-from datetime import datetime, timezone
 
 import discord
 import litellm
 
 from llmcord.core.config import (
-    EDIT_DELAY_SECONDS,
-    EMBED_COLOR_COMPLETE,
-    EMBED_COLOR_INCOMPLETE,
     MAX_MESSAGE_NODES,
     STREAMING_INDICATOR,
-    ensure_list,
     is_gemini_model,
 )
 from llmcord.core.exceptions import (
@@ -30,20 +20,36 @@ from llmcord.core.exceptions import (
 )
 from llmcord.core.models import MsgNode
 from llmcord.discord.ui import metadata as ui_metadata
-from llmcord.discord.ui import response_view, sources_view
+from llmcord.logic.discord_ui import (
+    maybe_edit_stream_message,
+    render_exhausted_response,
+    render_plain_responses,
+    update_response_view,
+)
+from llmcord.logic.fallbacks import apply_fallback_config, get_next_fallback
+from llmcord.logic.generation_types import (
+    FallbackState,
+    GeneratedImage,
+    GenerationContext,
+    GenerationLoopState,
+    GenerationState,
+    StreamConfig,
+    StreamEditDecision,
+    StreamLoopState,
+)
+from llmcord.logic.images import (
+    append_generated_images,
+    extract_gemini_images_from_chunk,
+    send_generated_images,
+)
 from llmcord.logic.utils import (
     count_conversation_tokens,
-    count_text_tokens,
 )
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 
 logger = logging.getLogger(__name__)
-
-DATA_URL_PATTERN = re.compile(
-    r"data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)",
-)
 
 LITELLM_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     litellm.exceptions.OpenAIError,
@@ -67,118 +73,6 @@ GENERATION_EXCEPTIONS = (
     ValueError,
     *LITELLM_RETRYABLE_ERRORS,
 )
-
-
-@dataclass(slots=True)
-class GenerationContext:
-    """Inputs required to generate an LLM response."""
-
-    new_msg: discord.Message
-    discord_bot: discord.Client
-    msg_nodes: dict[int, MsgNode]
-    messages: list[dict[str, object]]
-    user_warnings: set[str]
-    provider: str
-    model: str
-    actual_model: str
-    provider_slash_model: str
-    base_url: str | None
-    api_keys: list[str]
-    model_parameters: dict[str, object] | None
-    extra_headers: dict[str, str] | None
-    extra_query: dict[str, object] | None
-    extra_body: dict[str, object] | None
-    system_prompt: str | None
-    config: dict[str, object]
-    max_text: int
-    tavily_metadata: dict[str, object] | None
-    last_edit_time: float
-    processing_msg: discord.Message
-    retry_callback: Callable[[], Awaitable[None]]
-    fallback_chain: list[tuple[str, str, str]] | None = None
-
-
-@dataclass(slots=True)
-class GenerationState:
-    """Mutable state for response generation."""
-
-    response_msgs: list[discord.Message]
-    response_contents: list[str]
-    input_tokens: int
-    max_message_length: int
-    embed: discord.Embed | None
-    use_plain_responses: bool
-    grounding_metadata: object | None
-    last_edit_time: float
-    generated_images: list["GeneratedImage"]
-    generated_image_hashes: set[str]
-    display_model: str
-
-
-@dataclass(slots=True)
-class FallbackState:
-    """Track fallback selection state."""
-
-    fallback_level: int
-    fallback_index: int
-    use_custom_fallbacks: bool
-    original_provider: str
-    original_model: str
-
-
-@dataclass(slots=True)
-class StreamConfig:
-    """Configuration for a streaming LLM request."""
-
-    provider: str
-    actual_model: str
-    api_key: str
-    base_url: str | None
-    extra_headers: dict[str, str] | None
-    model_parameters: dict[str, object] | None
-
-
-@dataclass(slots=True)
-class StreamLoopState:
-    """Mutable state for stream processing."""
-
-    curr_content: str | None
-    finish_reason: object | None
-
-
-@dataclass(slots=True)
-class GeneratedImage:
-    """Generated image payload from Gemini responses."""
-
-    data: bytes
-    mime_type: str
-    filename: str
-
-
-@dataclass(slots=True)
-class StreamEditDecision:
-    """Decisions for streaming edits."""
-
-    start_next_msg: bool
-    msg_split_incoming: bool
-    is_final_edit: bool
-    is_good_finish: bool
-
-
-@dataclass(slots=True)
-class GenerationLoopState:
-    """Mutable state for generation loop."""
-
-    provider: str
-    actual_model: str
-    base_url: str | None
-    api_keys: list[str]
-    good_keys: list[str]
-    initial_key_count: int
-    attempt_count: int
-    last_error_msg: str | None
-    fallback_state: FallbackState
-    fallback_chain: list[tuple[str, str, str]]
 
 
 def _get_good_keys(provider: str, api_keys: list[str]) -> list[str]:
@@ -208,285 +102,6 @@ def _format_display_model(provider: str, actual_model: str) -> str:
     if actual_model.startswith(f"{provider}/"):
         return actual_model
     return f"{provider}/{actual_model}"
-
-
-def _get_default_fallback_chain(
-    original_provider: str,
-    original_model: str,
-) -> list[tuple[str, str, str]]:
-    mistral_fallback = (
-        "mistral",
-        "mistral-large-latest",
-        "mistral/mistral-large-latest",
-    )
-    gemini_fallback = (
-        "gemini",
-        "gemma-3-27b-it",
-        "gemini/gemma-3-27b-it",
-    )
-
-    if (
-        original_provider == "mistral"
-        and original_model == "mistral-large-latest"
-    ):
-        return [gemini_fallback]
-    if (
-        original_provider == "gemini"
-        and original_model == "gemma-3-27b-it"
-    ):
-        return [mistral_fallback]
-
-    return [mistral_fallback, gemini_fallback]
-
-
-def _get_next_fallback(
-    *,
-    state: FallbackState,
-    fallback_chain: list[tuple[str, str, str]],
-    provider: str,
-    initial_key_count: int,
-) -> tuple[str, str, str] | None:
-    if state.use_custom_fallbacks:
-        if state.fallback_index < len(fallback_chain):
-            next_fallback = fallback_chain[state.fallback_index]
-            state.fallback_index += 1
-            logger.warning(
-                (
-                    "All %s keys exhausted for provider '%s'. "
-                    "Falling back to %s..."
-                ),
-                initial_key_count,
-                provider,
-                next_fallback[2],
-            )
-            return next_fallback
-        return None
-
-    default_fallbacks = _get_default_fallback_chain(
-        state.original_provider,
-        state.original_model,
-    )
-    if state.fallback_level < len(default_fallbacks):
-        next_fallback = default_fallbacks[state.fallback_level]
-        state.fallback_level += 1
-        if state.fallback_level == 1:
-            logger.warning(
-                (
-                    "All %s keys exhausted for provider '%s'. "
-                    "Falling back to %s..."
-                ),
-                initial_key_count,
-                provider,
-                next_fallback[2],
-            )
-        else:
-            logger.warning(
-                "Fallback also failed. Falling back to %s...",
-                next_fallback[2],
-            )
-        return next_fallback
-
-    return None
-
-
-def _apply_fallback_config(
-    *,
-    next_fallback: tuple[str, str, str],
-    config: dict[str, object],
-) -> tuple[str, str, str, str | None, list[str]]:
-    provider, model, provider_slash_model = next_fallback
-    provider_config = config.get("providers", {}).get(provider, {})
-    base_url = provider_config.get("base_url")
-    api_keys = ensure_list(provider_config.get("api_key"))
-    return provider, model, provider_slash_model, base_url, api_keys
-
-
-async def _render_exhausted_response(
-    *,
-    state: GenerationState,
-    reply_helper: Callable[..., Awaitable[None]],
-    last_error_msg: str | None,
-    fallback_state: FallbackState,
-) -> list[str]:
-    if fallback_state.use_custom_fallbacks:
-        logger.error("All custom fallback options exhausted")
-    else:
-        logger.error("All fallback options exhausted")
-
-    error_text = (
-        "❌ All API keys are currently unavailable. Please try again later."
-    )
-    if last_error_msg:
-        logger.info("Last fallback error summary: %s", last_error_msg)
-
-    if state.embed is None:
-        state.embed = discord.Embed(
-            description=error_text,
-            color=EMBED_COLOR_INCOMPLETE,
-        )
-    else:
-        state.embed.description = error_text
-        state.embed.color = EMBED_COLOR_INCOMPLETE
-
-    if state.response_msgs:
-        await state.response_msgs[-1].edit(embed=state.embed, view=None)
-    else:
-        await reply_helper(embed=state.embed)
-    return [error_text]
-
-
-def _extension_from_mime(mime_type: str) -> str:
-    extension = mime_type.split("/", maxsplit=1)[-1].split(";", maxsplit=1)[0]
-    return extension or "png"
-
-
-def _build_generated_image(data: bytes, mime_type: str) -> GeneratedImage:
-    digest = hashlib.sha256(data).hexdigest()[:12]
-    extension = _extension_from_mime(mime_type)
-    filename = f"gemini-output-{digest}.{extension}"
-    return GeneratedImage(data=data, mime_type=mime_type, filename=filename)
-
-
-def _coerce_payload(obj: object) -> object:
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if hasattr(obj, "dict") and callable(obj.dict):
-        return obj.dict()
-    if hasattr(obj, "__dict__"):
-        return obj.__dict__
-    return obj
-
-
-def _extract_images_from_string(text: str) -> list[GeneratedImage]:
-    images: list[GeneratedImage] = []
-    for mime_type, b64_data in DATA_URL_PATTERN.findall(text):
-        try:
-            data = base64.b64decode(b64_data)
-        except (ValueError, binascii.Error):
-            continue
-        images.append(_build_generated_image(data, mime_type))
-    return images
-
-
-def _extract_images_from_inline_data(inline_data: dict) -> list[GeneratedImage]:
-    mime_type = inline_data.get("mime_type") or inline_data.get("mimeType")
-    data = inline_data.get("data")
-    if (
-        not isinstance(mime_type, str)
-        or not mime_type.startswith("image/")
-        or not isinstance(data, str)
-    ):
-        return []
-    try:
-        decoded = base64.b64decode(data)
-    except (ValueError, binascii.Error):
-        return []
-    return [_build_generated_image(decoded, mime_type)]
-
-
-def _extract_images_from_image_url(image_url: object) -> list[GeneratedImage]:
-    if isinstance(image_url, dict):
-        image_url = image_url.get("url")
-    if not isinstance(image_url, str):
-        return []
-    return _extract_images_from_string(image_url)
-
-
-def _extract_images_from_mime_data(
-    data: object,
-    mime_type: object,
-) -> list[GeneratedImage]:
-    if (
-        not isinstance(mime_type, str)
-        or not mime_type.startswith("image/")
-        or not isinstance(data, str)
-    ):
-        return []
-    try:
-        decoded = base64.b64decode(data)
-    except (ValueError, binascii.Error):
-        return []
-    return [_build_generated_image(decoded, mime_type)]
-
-
-def _extract_images_from_dict(obj: dict) -> list[GeneratedImage]:
-    images: list[GeneratedImage] = []
-
-    inline_data = obj.get("inline_data") or obj.get("inlineData")
-    if isinstance(inline_data, dict):
-        images.extend(_extract_images_from_inline_data(inline_data))
-
-    image_url = obj.get("image_url") or obj.get("imageUrl")
-    if image_url:
-        images.extend(_extract_images_from_image_url(image_url))
-
-    images.extend(
-        _extract_images_from_mime_data(obj.get("data"), obj.get("mime_type")),
-    )
-    images.extend(
-        _extract_images_from_mime_data(obj.get("data"), obj.get("mimeType")),
-    )
-    return images
-
-
-def _extract_generated_images(value: object) -> list[GeneratedImage]:
-    images: list[GeneratedImage] = []
-    seen_ids: set[int] = set()
-
-    stack: list[object] = [value]
-    while stack:
-        obj = _coerce_payload(stack.pop())
-        if obj is None:
-            continue
-
-        obj_id = id(obj)
-        if obj_id in seen_ids:
-            continue
-        seen_ids.add(obj_id)
-
-        if isinstance(obj, str):
-            images.extend(_extract_images_from_string(obj))
-            continue
-        if isinstance(obj, dict):
-            images.extend(_extract_images_from_dict(obj))
-            stack.extend(obj.values())
-            continue
-        if isinstance(obj, (list, tuple, set)):
-            stack.extend(obj)
-
-    return images
-
-
-def _extract_gemini_images_from_chunk(
-    chunk: object,
-    choice: object,
-    delta_content: str,
-) -> list[GeneratedImage]:
-    images: list[GeneratedImage] = []
-    sources = [
-        delta_content,
-        getattr(choice, "delta", None),
-        getattr(choice, "message", None),
-        getattr(chunk, "model_extra", None),
-        getattr(chunk, "_hidden_params", None),
-    ]
-    for source in sources:
-        if source is None:
-            continue
-        images.extend(_extract_generated_images(source))
-    return images
-
-
-def _append_generated_images(
-    state: GenerationState,
-    images: list[GeneratedImage],
-) -> None:
-    for image in images:
-        digest = hashlib.sha256(image.data).hexdigest()
-        if digest in state.generated_image_hashes:
-            continue
-        state.generated_image_hashes.add(digest)
-        state.generated_images.append(image)
 
 
 async def _initialize_generation_state(
@@ -627,100 +242,6 @@ async def _persist_response_payload(
         logger.exception("Failed to persist response data")
 
 
-async def _update_response_view(
-    *,
-    context: GenerationContext,
-    state: GenerationState,
-    full_response: str,
-    grounding_metadata: object | None,
-) -> None:
-    if (
-        state.use_plain_responses
-        or not state.response_msgs
-        or not state.response_contents
-    ):
-        return
-
-    response_view_instance = response_view.ResponseView(
-        full_response,
-        grounding_metadata,
-        context.tavily_metadata,
-        context.retry_callback,
-        context.new_msg.author.id,
-    )
-
-    output_tokens = count_text_tokens(full_response)
-    total_tokens = state.input_tokens + output_tokens
-    last_msg_index = len(state.response_msgs) - 1
-    if last_msg_index < len(state.response_contents) and state.embed:
-        state.embed.description = state.response_contents[last_msg_index]
-        state.embed.color = EMBED_COLOR_COMPLETE
-        footer_text = (
-            f"{state.display_model} | total tokens: {total_tokens:,}"
-        )
-        state.embed.set_footer(text=footer_text)
-        await state.response_msgs[last_msg_index].edit(
-            embed=state.embed,
-            view=response_view_instance,
-        )
-
-
-async def _send_generated_images(
-    *,
-    context: GenerationContext,
-    state: GenerationState,
-) -> None:
-    if not state.generated_images:
-        logger.debug(
-            "No Gemini-generated images to send for message %s",
-            context.new_msg.id,
-        )
-        return
-
-    logger.info(
-        "Sending %s Gemini-generated image(s) for message %s",
-        len(state.generated_images),
-        context.new_msg.id,
-    )
-    reply_target = (
-        state.response_msgs[-1] if state.response_msgs else context.new_msg
-    )
-    batch_size = 10
-    for index in range(0, len(state.generated_images), batch_size):
-        batch = state.generated_images[index : index + batch_size]
-        try:
-            files = [
-                discord.File(io.BytesIO(image.data), filename=image.filename)
-                for image in batch
-            ]
-            total_bytes = sum(len(image.data) for image in batch)
-            logger.debug(
-                "Prepared %s image(s) (%s bytes) for batch %s-%s",
-                len(batch),
-                total_bytes,
-                index,
-                index + len(batch) - 1,
-            )
-            content = "Generated image(s):" if index == 0 else None
-            await reply_target.reply(content=content, files=files)
-            logger.info(
-                "Sent Gemini-generated image batch %s-%s for message %s",
-                index,
-                index + len(batch) - 1,
-                context.new_msg.id,
-            )
-        except Exception:
-            logger.exception(
-                (
-                    "Failed to send Gemini-generated image batch %s-%s for "
-                    "message %s"
-                ),
-                index,
-                index + len(batch) - 1,
-                context.new_msg.id,
-            )
-
-
 async def _trim_message_nodes(context: GenerationContext) -> None:
     if (num_nodes := len(context.msg_nodes)) <= MAX_MESSAGE_NODES:
         return
@@ -751,13 +272,13 @@ async def _finalize_response(
         full_response=full_response,
         grounding_payload=grounding_payload,
     )
-    await _update_response_view(
+    await update_response_view(
         context=context,
         state=state,
         full_response=full_response,
         grounding_metadata=grounding_metadata,
     )
-    await _send_generated_images(context=context, state=state)
+    await send_generated_images(context=context, state=state)
     await _trim_message_nodes(context)
 
 
@@ -794,12 +315,6 @@ def _extract_grounding_metadata(
         grounding_metadata = choice_obj.grounding_metadata
 
     return grounding_metadata
-
-
-def _split_response_content(text: str, max_length: int) -> list[str]:
-    if not text:
-        return []
-    return [text[i : i + max_length] for i in range(0, len(text), max_length)]
 
 
 async def _iter_stream_with_first_chunk(
@@ -860,7 +375,7 @@ async def _get_stream(
         delta_content = choice.delta.content or ""
         chunk_finish_reason = choice.finish_reason
         grounding_metadata = _extract_grounding_metadata(chunk, choice)
-        image_payloads = _extract_gemini_images_from_chunk(
+        image_payloads = extract_gemini_images_from_chunk(
             chunk,
             choice,
             delta_content,
@@ -927,88 +442,6 @@ def _append_stream_content(
         is_final_edit=is_final_edit,
         is_good_finish=is_good_finish,
     )
-
-
-async def _maybe_edit_stream_message(
-    *,
-    state: GenerationState,
-    reply_helper: Callable[..., Awaitable[None]],
-    decision: StreamEditDecision,
-    grounding_metadata: object | None,
-) -> None:
-    response_contents = state.response_contents
-    response_msgs = state.response_msgs
-    embed = state.embed
-    last_edit_time = state.last_edit_time
-
-    if embed is None:
-        return
-
-    time_delta = datetime.now(timezone.utc).timestamp() - last_edit_time
-    ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
-
-    if not (decision.start_next_msg or ready_to_edit or decision.is_final_edit):
-        return
-
-    embed.description = (
-        response_contents[-1]
-        if decision.is_final_edit
-        else (response_contents[-1] + STREAMING_INDICATOR)
-    )
-    embed.color = (
-        EMBED_COLOR_COMPLETE
-        if decision.msg_split_incoming or decision.is_good_finish
-        else EMBED_COLOR_INCOMPLETE
-    )
-
-    view = (
-        sources_view.SourceView(grounding_metadata)
-        if decision.is_final_edit
-        and ui_metadata.has_grounding_data(grounding_metadata)
-        else None
-    )
-
-    msg_index = len(response_contents) - 1
-    if decision.start_next_msg:
-        if msg_index < len(response_msgs):
-            await response_msgs[msg_index].edit(embed=embed, view=view)
-        else:
-            await reply_helper(embed=embed, silent=True, view=view)
-    else:
-        await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
-        await response_msgs[msg_index].edit(embed=embed, view=view)
-    state.last_edit_time = datetime.now(timezone.utc).timestamp()
-
-
-async def _render_plain_responses(
-    *,
-    response_contents: list[str],
-    response_msgs: list[discord.Message],
-    reply_helper: Callable[..., Awaitable[None]],
-    grounding_metadata: object | None,
-    tavily_metadata: dict[str, object] | None,
-) -> None:
-    for i, content in enumerate(response_contents):
-        layout = response_view.LayoutView().add_item(
-            response_view.TextDisplay(content=content),
-        )
-
-        if i == len(response_contents) - 1:
-            if ui_metadata.has_grounding_data(grounding_metadata):
-                layout.add_item(
-                    sources_view.SourceButton(grounding_metadata),
-                )
-            if tavily_metadata and (
-                tavily_metadata.get("urls") or tavily_metadata.get("queries")
-            ):
-                layout.add_item(
-                    sources_view.TavilySourceButton(tavily_metadata),
-                )
-
-        if i < len(response_msgs):
-            await response_msgs[i].edit(view=layout)
-        else:
-            await reply_helper(view=layout)
 
 
 def _handle_generation_exception(
@@ -1180,7 +613,7 @@ async def _handle_exhausted_keys(
     loop_state: GenerationLoopState,
     reply_helper: Callable[..., Awaitable[None]],
 ) -> bool:
-    next_fallback = _get_next_fallback(
+    next_fallback = get_next_fallback(
         state=loop_state.fallback_state,
         fallback_chain=loop_state.fallback_chain,
         provider=loop_state.provider,
@@ -1194,7 +627,7 @@ async def _handle_exhausted_keys(
             _provider_slash_model,
             loop_state.base_url,
             fallback_api_keys,
-        ) = _apply_fallback_config(
+        ) = apply_fallback_config(
             next_fallback=next_fallback,
             config=context.config,
         )
@@ -1220,7 +653,7 @@ async def _handle_exhausted_keys(
         loop_state.good_keys = []
         return True
 
-    state.response_contents = await _render_exhausted_response(
+    state.response_contents = await render_exhausted_response(
         state=state,
         reply_helper=reply_helper,
         last_error_msg=loop_state.last_error_msg,
@@ -1260,7 +693,7 @@ async def _stream_response(
                 )
 
             if image_payloads:
-                _append_generated_images(state, image_payloads)
+                append_generated_images(state, image_payloads)
 
             if loop_state.finish_reason is not None:
                 break
@@ -1282,7 +715,7 @@ async def _stream_response(
             if use_plain_responses:
                 continue
 
-            await _maybe_edit_stream_message(
+            await maybe_edit_stream_message(
                 state=state,
                 reply_helper=reply_helper,
                 decision=decision,
@@ -1293,7 +726,7 @@ async def _stream_response(
         _raise_empty_response()
 
     if use_plain_responses:
-        await _render_plain_responses(
+        await render_plain_responses(
             response_contents=response_contents,
             response_msgs=state.response_msgs,
             reply_helper=reply_helper,

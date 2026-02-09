@@ -1,0 +1,98 @@
+"""Fallback logic for LLM generation."""
+import logging
+
+from llmcord.core.config import ensure_list
+from llmcord.logic.generation_types import FallbackState
+
+logger = logging.getLogger(__name__)
+
+
+def _get_default_fallback_chain(
+    original_provider: str,
+    original_model: str,
+) -> list[tuple[str, str, str]]:
+    mistral_fallback = (
+        "mistral",
+        "mistral-large-latest",
+        "mistral/mistral-large-latest",
+    )
+    gemini_fallback = (
+        "gemini",
+        "gemma-3-27b-it",
+        "gemini/gemma-3-27b-it",
+    )
+
+    if (
+        original_provider == "mistral"
+        and original_model == "mistral-large-latest"
+    ):
+        return [gemini_fallback]
+    if (
+        original_provider == "gemini"
+        and original_model == "gemma-3-27b-it"
+    ):
+        return [mistral_fallback]
+
+    return [mistral_fallback, gemini_fallback]
+
+
+def get_next_fallback(
+    *,
+    state: FallbackState,
+    fallback_chain: list[tuple[str, str, str]],
+    provider: str,
+    initial_key_count: int,
+) -> tuple[str, str, str] | None:
+    if state.use_custom_fallbacks:
+        if state.fallback_index < len(fallback_chain):
+            next_fallback = fallback_chain[state.fallback_index]
+            state.fallback_index += 1
+            logger.warning(
+                (
+                    "All %s keys exhausted for provider '%s'. "
+                    "Falling back to %s..."
+                ),
+                initial_key_count,
+                provider,
+                next_fallback[2],
+            )
+            return next_fallback
+        return None
+
+    default_fallbacks = _get_default_fallback_chain(
+        state.original_provider,
+        state.original_model,
+    )
+    if state.fallback_level < len(default_fallbacks):
+        next_fallback = default_fallbacks[state.fallback_level]
+        state.fallback_level += 1
+        if state.fallback_level == 1:
+            logger.warning(
+                (
+                    "All %s keys exhausted for provider '%s'. "
+                    "Falling back to %s..."
+                ),
+                initial_key_count,
+                provider,
+                next_fallback[2],
+            )
+        else:
+            logger.warning(
+                "Fallback also failed. Falling back to %s...",
+                next_fallback[2],
+            )
+        return next_fallback
+
+    return None
+
+
+def apply_fallback_config(
+    *,
+    next_fallback: tuple[str, str, str],
+    config: dict[str, object],
+) -> tuple[str, str, str, str | None, list[str]]:
+    provider, model, provider_slash_model = next_fallback
+    provider_config = config.get("providers", {}).get(provider, {})
+    base_url = provider_config.get("base_url")
+    api_keys = ensure_list(provider_config.get("api_key"))
+    return provider, model, provider_slash_model, base_url, api_keys
