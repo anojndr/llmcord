@@ -738,7 +738,7 @@ async def extract_reddit_post_json(
                 post_text += f"\nLink: {url}"
 
             return post_text + _format_reddit_comments(
-                comments_listing, max_comments
+                comments_listing, max_comments,
             )
         except httpx.HTTPError as exc:
             # Proxy failed (likely blocked by Reddit) - fallback to direct
@@ -752,7 +752,7 @@ async def extract_reddit_post_json(
     # Direct connection (no proxy) - either as primary or fallback
     try:
         return await _extract_reddit_json_direct(
-            original_url, httpx_client, max_comments
+            original_url, httpx_client, max_comments,
         )
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         logger.debug(
@@ -898,7 +898,7 @@ async def extract_reddit_post(
                     post_url = post_url.split("?")[0]
             except httpx.HTTPError as exc:
                 logger.debug(
-                    "Failed to resolve Reddit share URL %s: %s", post_url, exc
+                    "Failed to resolve Reddit share URL %s: %s", post_url, exc,
                 )
                 return None
 
