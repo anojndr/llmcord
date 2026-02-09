@@ -450,30 +450,27 @@ async def extract_youtube_transcript(
     proxy_url: str | None = None,
 ) -> str | None:
     """Fetch YouTube transcript and metadata."""
-    try:
-        ytt_api = _build_youtube_transcript_api(proxy_url)
+    async def _fetch(
+        client: httpx.AsyncClient,
+        p_url: str | None,
+    ) -> tuple[list[dict], httpx.Response]:
+        ytt_api = _build_youtube_transcript_api(p_url)
         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
-        transcript = transcript_obj.to_raw_data()
+        transcript_data = transcript_obj.to_raw_data()
 
-        response = await request_with_retries(
-            lambda: httpx_client.get(
+        resp = await request_with_retries(
+            lambda: client.get(
                 f"https://www.youtube.com/watch?v={video_id}",
                 follow_redirects=True,
                 timeout=30,
             ),
             log_context=f"YouTube metadata {video_id}",
         )
-        response.raise_for_status()
-        html = response.text
-        title_match = re.search(r'<meta name="title" content="(.*?)">', html)
-        title = title_match.group(1) if title_match else "Unknown Title"
-        channel_match = re.search(
-            r'<link itemprop="name" content="(.*?)">',
-            html,
-        )
-        channel = channel_match.group(1) if channel_match else "Unknown Channel"
+        resp.raise_for_status()
+        return transcript_data, resp
 
-        transcript_text = " ".join(x["text"] for x in transcript)
+    try:
+        transcript, response = await _fetch(httpx_client, proxy_url)
     except (
         YouTubeTranscriptApiException,
         httpx.HTTPError,
@@ -481,19 +478,46 @@ async def extract_youtube_transcript(
         ValueError,
         KeyError,
     ) as exc:
-        logger.debug(
-            "Failed to fetch YouTube transcript for %s: %s",
+        if not proxy_url:
+            logger.debug(
+                "Failed to fetch YouTube transcript for %s: %s",
+                video_id,
+                exc,
+            )
+            return None
+
+        logger.warning(
+            "YouTube proxy connection failed for %s (%s), retrying direct",
             video_id,
             exc,
         )
-        return None
-    else:
-        return (
-            f"YouTube Video ID: {video_id}\n"
-            f"Title: {title}\n"
-            f"Channel: {channel}\n"
-            f"Transcript:\n{transcript_text}"
-        )
+        try:
+            async with httpx.AsyncClient() as direct_client:
+                transcript, response = await _fetch(direct_client, None)
+        except Exception as retry_exc:
+            logger.debug(
+                "Failed to fetch YouTube transcript (retry) for %s: %s",
+                video_id,
+                retry_exc,
+            )
+            return None
+    html = response.text
+    title_match = re.search(r'<meta name="title" content="(.*?)">', html)
+    title = title_match.group(1) if title_match else "Unknown Title"
+    channel_match = re.search(
+        r'<link itemprop="name" content="(.*?)">',
+        html,
+    )
+    channel = channel_match.group(1) if channel_match else "Unknown Channel"
+
+    transcript_text = " ".join(x["text"] for x in transcript)
+
+    return (
+        f"YouTube Video ID: {video_id}\n"
+        f"Title: {title}\n"
+        f"Channel: {channel}\n"
+        f"Transcript:\n{transcript_text}"
+    )
 
 
 async def _resolve_reddit_share_url(
