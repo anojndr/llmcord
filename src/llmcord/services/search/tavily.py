@@ -130,8 +130,6 @@ async def tavily_search(
                 result,
             )
             return {"results": [], "query": query}
-
-        return result
     except httpx.HTTPStatusError as exc:
         logger.exception(
             "Tavily HTTP error for query '%s': %s - %s",
@@ -153,6 +151,8 @@ async def tavily_search(
     except Exception as exc:
         logger.exception("Tavily search error for query '%s'", query)
         return {"error": str(exc), "query": query}
+    else:
+        return result
 
 
 async def tavily_research_create(

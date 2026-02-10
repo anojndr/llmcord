@@ -33,6 +33,7 @@ async def render_exhausted_response(
     last_error_msg: str | None,
     fallback_state: FallbackState,
 ) -> list[str]:
+    """Render a response when all fallbacks are exhausted."""
     if fallback_state.use_custom_fallbacks:
         logger.error("All custom fallback options exhausted")
     else:
@@ -65,6 +66,7 @@ async def update_response_view(
     full_response: str,
     grounding_metadata: object | None,
 ) -> None:
+    """Update the response view with buttons and footer."""
     if (
         state.use_plain_responses
         or not state.response_msgs
@@ -101,6 +103,7 @@ async def maybe_edit_stream_message(
     decision: StreamEditDecision,
     grounding_metadata: object | None,
 ) -> None:
+    """Decide whether to edit the current streaming message."""
     response_contents = state.response_contents
     response_msgs = state.response_msgs
     embed = state.embed
@@ -152,6 +155,7 @@ async def render_plain_responses(
     grounding_metadata: object | None,
     tavily_metadata: dict[str, object] | None,
 ) -> None:
+    """Render multiple response parts as plain messages with layout views."""
     for i, content in enumerate(response_contents):
         layout = response_view.LayoutView().add_item(
             response_view.TextDisplay(content=content),

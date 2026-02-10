@@ -6,7 +6,7 @@ import contextlib
 import functools
 import logging
 import os
-from typing import TYPE_CHECKING, Concatenate, ParamSpec, Protocol, Self, TypeVar
+from typing import TYPE_CHECKING, Concatenate, ParamSpec, Protocol, TypeVar
 
 import libsql  # type: ignore[import-untyped]
 
@@ -36,7 +36,7 @@ def _with_reconnect(
         max_retries = 2
         try:
             return method(self, *args, **kwargs)
-        except (ValueError, LIBSQL_ERROR) as exc: # type: ignore
+        except (ValueError, LIBSQL_ERROR) as exc:  # type: ignore[name-defined, misc]
             error_str = str(exc)
             # Check for Hrana stream errors (stale connection)
             if "stream not found" not in error_str and "Hrana" not in error_str:
@@ -51,7 +51,7 @@ def _with_reconnect(
                 self._reconnect()
             try:
                 return method(self, *args, **kwargs)
-            except (ValueError, LIBSQL_ERROR): # type: ignore
+            except (ValueError, LIBSQL_ERROR):  # type: ignore[name-defined, misc]
                 logger.exception(
                     "Failed to reconnect to Turso after %d attempts",
                     max_retries,
@@ -111,7 +111,7 @@ class DatabaseCore:
                 )
                 # Sync with remote on initial connection
                 if self._conn is not None:
-                    self._conn.sync() # type: ignore
+                    self._conn.sync()  # type: ignore[attr-defined]
                 logger.info("Connected to Turso database: %s", self.db_url)
             else:
                 # Fallback to local-only SQLite if no Turso credentials
@@ -125,6 +125,6 @@ class DatabaseCore:
         """Sync changes with Turso cloud if connected to remote."""
         if self._conn is not None and self.db_url and self.auth_token:
             try:
-                self._conn.sync() # type: ignore
-            except LIBSQL_ERROR as exc: # type: ignore
+                self._conn.sync()  # type: ignore[attr-defined]
+            except LIBSQL_ERROR as exc:  # type: ignore[name-defined]
                 logger.warning("Failed to sync with Turso: %s", exc)

@@ -50,7 +50,7 @@ Or run local models with:
 
 ### And more:
 - **Web Search**: Automatic web search with Tavily or Exa MCP (for non-Gemini models) or native Gemini grounding. Uses an LLM to intelligently decide when search is needed.
-- **"View Response Better" button**: Upload long responses to text.is for easier reading
+- **"View Response Better" button**: Upload long responses to rentry.co for easier reading
 - **"Show Sources" button**: View search queries and source URLs when web search was used
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
 - Supports Reverse Image Search (powered by Yandex) (start your message with "googlelens" and attach an image)

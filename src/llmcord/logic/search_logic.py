@@ -1,8 +1,9 @@
 """Web search and research command orchestration."""
 
 import logging
-from typing import Any, Callable, cast
+from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any, cast
 
 import discord
 
@@ -198,7 +199,7 @@ async def run_research_command(
     for msg in context.messages:
         if msg.get("role") == "user":
             msg["content"] = replace_content_text(
-                cast(str | list[dict[str, object]], msg.get("content", "")),
+                cast("str | list[dict[str, object]]", msg.get("content", "")),
                 context.research_query,
             )
             break
@@ -213,7 +214,7 @@ async def run_research_command(
         for msg in context.messages:
             if msg.get("role") == "user":
                 msg["content"] = append_search_to_content(
-                    cast(str | list[dict[str, object]], msg.get("content", "")),
+                    cast("str | list[dict[str, object]]", msg.get("content", "")),
                     research_results,
                 )
 
@@ -250,12 +251,14 @@ async def maybe_run_web_search(
         db = get_bad_keys_db()
         user_id = str(context.new_msg.author.id)
         user_decider_model = db.get_user_search_decider_model(user_id)
-        default_decider = str(context.config.get(
-            "web_search_decider_model",
-            "gemini/gemini-3-flash-preview",
-        ))
+        default_decider = str(
+            context.config.get(
+                "web_search_decider_model",
+                "gemini/gemini-3-flash-preview",
+            ),
+        )
 
-        models_config = cast(dict[str, Any], context.config.get("models", {}))
+        models_config = cast("dict[str, Any]", context.config.get("models", {}))
         if user_decider_model and user_decider_model in models_config:
             decider_model_str = user_decider_model
         else:
@@ -267,7 +270,10 @@ async def maybe_run_web_search(
             else ("gemini", decider_model_str)
         )
 
-        decider_provider_config = cast(dict[str, Any], context.config.get("providers", {})).get(
+        decider_provider_config = cast(
+            "dict[str, Any]",
+            context.config.get("providers", {}),
+        ).get(
             decider_provider,
             {},
         )
@@ -321,7 +327,7 @@ async def maybe_run_web_search(
                         if msg.get("role") == "user":
                             msg["content"] = append_search_to_content(
                                 cast(
-                                    str | list[dict[str, object]],
+                                    "str | list[dict[str, object]]",
                                     msg.get("content", ""),
                                 ),
                                 search_results,

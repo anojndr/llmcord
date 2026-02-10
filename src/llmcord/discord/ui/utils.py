@@ -19,8 +19,8 @@ from llmcord.services.database import get_bad_keys_db
 
 LOGGER = logging.getLogger(__name__)
 
-# Shared httpx client for text.is uploads - uses factory pattern for DRY
-_textis_client_holder: list[httpx.AsyncClient | None] = []
+# Shared httpx client for rentry.co uploads - uses factory pattern for DRY
+_rentry_client_holder: list[httpx.AsyncClient | None] = []
 
 RetryHandler = Callable[[discord.Interaction, int, int], Awaitable[None]]
 _retry_handler_holder: list[RetryHandler | None] = [None]
@@ -84,99 +84,115 @@ def get_response_data(message_id: int) -> ResponseData:
     )
 
 
-def _get_textis_client() -> httpx.AsyncClient:
-    """Get or create the shared text.is httpx client.
+def _get_rentry_client() -> httpx.AsyncClient:
+    """Get or create the shared rentry.co httpx client.
 
     Uses the DRY factory pattern.
     """
     config = get_config()
     proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
-        _textis_client_holder,
+        _rentry_client_holder,
         options=HttpxClientOptions(
             timeout=30.0,
             connect_timeout=10.0,
             max_connections=10,
             max_keepalive=5,
             proxy_url=proxy_url,
-            follow_redirects=False,  # text.is needs redirect handling
+            follow_redirects=True,  # Now following redirects for robustness
         ),
     )
 
 
-async def upload_to_textis(text: str) -> str | None:
-    """Upload text to text.is and return the paste URL.
+async def _get_csrf_token(
+    client: httpx.AsyncClient,
+) -> tuple[str | None, httpx.Response]:
+    """Fetch the CSRF token from the rentry.co home page."""
+    # Step 1: GET the page. Following redirects is important.
+    response = await client.get("https://rentry.co/", timeout=30)
+
+    # Step 2: Extract CSRF token
+    # We try multiple ways to find the token as sites often change their structure.
+    soup = BeautifulSoup(response.text, "html.parser")
+    csrf_input = (
+        soup.find("input", {"name": "csrfmiddlewaretoken"})
+        or soup.find("input", {"name": "csrf_token"})
+        or soup.find("input", {"name": "csrf"})
+    )
+
+    csrf_token = None
+    if csrf_input:
+        csrf_token = str(csrf_input.get("value", ""))
+
+    # Check cookies as a fallback (Django often sets csrftoken cookie)
+    if not csrf_token:
+        csrf_token = response.cookies.get("csrftoken")
+
+    return csrf_token, response
+
+
+async def upload_to_rentry(text: str) -> str | None:
+    """Upload text to rentry.co and return the paste URL.
 
     Returns None if upload fails.
     """
     try:
-        client = _get_textis_client()
+        client = _get_rentry_client()
+        csrf_token, response = await _get_csrf_token(client)
 
-        # Get the CSRF token from the main page
-        response = await client.get("https://text.is/", timeout=30)
-
-        # Extract CSRF token from the form
-        # lxml is faster than html.parser.
-        soup = BeautifulSoup(response.text, "lxml")
-        csrf_input = soup.find("input", {"name": "csrfmiddlewaretoken"})
-        if not csrf_input:
+        if not csrf_token:
             # Debug: log a snippet of the response to help diagnose
-            LOGGER.error("Could not find CSRF token on text.is")
+            LOGGER.error("Could not find CSRF token on rentry.co")
             LOGGER.debug(
-                "Response status: %s, Content preview: %s",
+                "Response status: %s, Content preview: %s, URL: %s",
                 response.status_code,
                 response.text[:500],
+                response.url,
             )
             return None
 
-        csrf_token = csrf_input.get("value")
-
-        # Get cookies from the response
-        cookies = response.cookies
-
         # POST the text content
+        # Note: We still use 'csrfmiddlewaretoken' as the key.
         form_data = {
             "csrfmiddlewaretoken": csrf_token,
             "text": text,
         }
 
         headers = {
-            "Referer": "https://text.is/",
-            "Origin": "https://text.is",
+            "Referer": str(response.url),
+            "Origin": "https://rentry.co",
         }
 
+        # We allow the client to follow redirects as it's more robust.
         post_response = await client.post(
-            "https://text.is/",
+            "https://rentry.co/",
             data=form_data,
             headers=headers,
-            cookies=cookies,
             timeout=30,
         )
 
-        # The response should be a redirect (302) to the paste URL
+        # Handle various success scenarios
+        # 1. Redirect to the new paste URL
         if post_response.status_code in (301, 302, 303, 307, 308):
             paste_url = post_response.headers.get("Location")
             if paste_url:
-                # Handle relative URLs
                 if paste_url.startswith("/"):
-                    paste_url = f"https://text.is{paste_url}"
+                    paste_url = f"https://rentry.co{paste_url}"
                 return paste_url
 
-        # If we got a 200, the paste might have been created and we're on the
-        # page.
+        # 2. Success with 200 OK (final page after redirect or direct response)
         if post_response.status_code == HTTP_OK:
-            # Check if the URL changed (we might be on the paste page)
             final_url = str(post_response.url)
-            if final_url != "https://text.is/" and "text.is/" in final_url:
+            # Ensure we're not just back on the home page
+            if final_url.rstrip("/") != "https://rentry.co":
                 return final_url
 
         LOGGER.error(
-            "Unexpected response from text.is: %s",
+            "Unexpected response from rentry.co: %s (URL: %s)",
             post_response.status_code,
+            post_response.url,
         )
     except Exception:
-        LOGGER.exception("Error uploading to text.is")
-    else:
-        return None
+        LOGGER.exception("Error uploading to rentry.co")
 
     return None

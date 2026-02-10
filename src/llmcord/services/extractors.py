@@ -151,7 +151,7 @@ _PDF_IMAGE_MIME_MAP: dict[str, str] = {
 
 
 def _extract_single_pdf_image(
-    doc: Any,
+    doc: Any,  # noqa: ANN401
     xref: int,
 ) -> tuple[str, bytes] | None:
     """Extract a single image from a PDF document by xref."""
@@ -393,7 +393,9 @@ async def perform_yandex_lookup(
             )
 
             title = title_el.get_text(strip=True) if title_el else "N/A"
-            link = str(title_el["href"]) if title_el and title_el.has_attr("href") else "#"
+            link = (
+                str(title_el["href"]) if title_el and title_el.has_attr("href") else "#"
+            )
             domain = domain_el.get_text(strip=True) if domain_el else ""
             desc = desc_el.get_text(strip=True) if desc_el else ""
 
@@ -494,7 +496,7 @@ async def extract_youtube_transcript(
         try:
             async with httpx.AsyncClient() as direct_client:
                 transcript, response = await _fetch(direct_client, None)
-        except Exception as retry_exc:
+        except Exception as retry_exc:  # noqa: BLE001
             logger.debug(
                 "Failed to fetch YouTube transcript (retry) for %s: %s",
                 video_id,

@@ -71,8 +71,8 @@ class TavilySourcesView(discord.ui.View):
         self.provider = self.search_metadata.get("provider", "tavily")
 
         # Prepare source entries with defensive defaults
-        self.queries: list[str] = list(self.search_metadata.get("queries") or [])  # type: ignore
-        self.urls: list[dict[str, Any]] = list(self.search_metadata.get("urls") or [])  # type: ignore
+        self.queries: list[str] = list(self.search_metadata.get("queries") or [])  # type: ignore[arg-type, call-overload]
+        self.urls: list[dict[str, Any]] = list(self.search_metadata.get("urls") or [])  # type: ignore[arg-type, call-overload]
         self.sources = self._prepare_sources()
         self.pages = self._paginate_sources()
         self.total_pages = len(self.pages)

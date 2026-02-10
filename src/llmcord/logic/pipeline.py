@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, cast
@@ -72,7 +73,9 @@ def _is_system_prompt_disabled(
     if isinstance(disable_override, bool):
         return disable_override
 
-    disabled_models = ensure_list(cast(Any, config.get("disable_system_prompt_models")))
+    disabled_models = ensure_list(
+        cast("Any", config.get("disable_system_prompt_models")),
+    )
     normalized_targets = {
         provider_settings.provider_slash_model.lower(),
         f"{provider_settings.provider}/{provider_settings.actual_model}".lower(),
@@ -139,8 +142,6 @@ def _get_message_limits(
     )
 
 
-from collections.abc import Awaitable, Callable
-...
 def _make_retry_callback(
     new_msg: discord.Message,
     config: dict,

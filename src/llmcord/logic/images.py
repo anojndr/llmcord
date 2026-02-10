@@ -117,6 +117,7 @@ def _extract_images_from_dict(obj: dict) -> list[GeneratedImage]:
 
 
 def extract_generated_images(value: object) -> list[GeneratedImage]:
+    """Recursively extract generated images from any object payload."""
     images: list[GeneratedImage] = []
     seen_ids: set[int] = set()
 
@@ -149,6 +150,7 @@ def extract_gemini_images_from_chunk(
     choice: object,
     delta_content: str,
 ) -> list[GeneratedImage]:
+    """Extract images from Gemini-specific response chunk fields."""
     images: list[GeneratedImage] = []
     sources = [
         delta_content,
@@ -168,6 +170,7 @@ def append_generated_images(
     state: GenerationState,
     images: list[GeneratedImage],
 ) -> None:
+    """Add unique generated images to the state tracking."""
     for image in images:
         digest = hashlib.sha256(image.data).hexdigest()
         if digest in state.generated_image_hashes:
@@ -181,6 +184,7 @@ async def send_generated_images(
     context: GenerationContext,
     state: GenerationState,
 ) -> None:
+    """Send all tracked generated images as replies in batches."""
     if not state.generated_images:
         logger.debug(
             "No Gemini-generated images to send for message %s",

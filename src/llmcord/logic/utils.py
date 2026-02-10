@@ -246,6 +246,15 @@ def extract_research_command(
     return None, stripped
 
 
+def _count_msg_part_tokens(part: object, enc: tiktoken.Encoding) -> int:
+    """Count tokens in a single message part."""
+    if isinstance(part, dict) and part.get("type") == "text":
+        text = part.get("text", "")
+        if isinstance(text, str):
+            return len(enc.encode(text))
+    return 0
+
+
 def count_conversation_tokens(messages: list[dict[str, object]]) -> int:
     """Count tokens in the entire conversation using tiktoken."""
     try:
@@ -260,10 +269,7 @@ def count_conversation_tokens(messages: list[dict[str, object]]) -> int:
             if isinstance(content, list):
                 # For multimodal content, count tokens in text parts only
                 for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        text = part.get("text", "")
-                        if isinstance(text, str):
-                            total_tokens += len(enc.encode(text))
+                    total_tokens += _count_msg_part_tokens(part, enc)
             elif isinstance(content, str):
                 total_tokens += len(enc.encode(content))
 

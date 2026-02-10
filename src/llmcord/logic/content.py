@@ -100,7 +100,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             )
             if twitter_content:
                 result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(
-                    twitter_content
+                    twitter_content,
                 )
             cleaned_content += result_text
 

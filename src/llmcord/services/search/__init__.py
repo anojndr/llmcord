@@ -14,11 +14,9 @@ from llmcord.services.search.utils import (
     get_current_datetime_strings,
 )
 
-
-from typing import TYPE_CHECKING, Any
-
 if TYPE_CHECKING:
     from collections.abc import Awaitable
+
     from llmcord.services.search.decider import DeciderRunConfig
 
 

@@ -15,18 +15,18 @@ class Ytmp3Service:
     """Download audio files via the ytmp3.as web interface."""
 
     @staticmethod
-    async def _maybe_await(value: Any) -> Any:
+    async def _maybe_await(value: Any) -> Any:  # noqa: ANN401
         if inspect.isawaitable(value):
             return await value
         return value
 
     @staticmethod
     async def _resolve_locator(
-        page: Any,
+        page: Any,  # noqa: ANN401
         method_name: str,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Any:  # noqa: ANN401
         locator_call = getattr(page, method_name)(*args, **kwargs)
         if inspect.isawaitable(locator_call):
             locator = await locator_call

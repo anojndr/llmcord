@@ -35,9 +35,10 @@ class DeciderRunConfig:
     base_url: str | None
 
 
-def _get_decider_runner() -> (
-    Callable[[list[Any], DeciderRunConfig], Awaitable[tuple[dict[str, Any] | None, bool]]]
-):
+def _get_decider_runner() -> Callable[
+    [list[Any], DeciderRunConfig],
+    Awaitable[tuple[dict[str, Any] | None, bool]],
+]:
     search_module = importlib.import_module("llmcord.services.search")
     return search_module.run_decider_once
 

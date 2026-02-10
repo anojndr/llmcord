@@ -4,7 +4,7 @@ import logging
 import re
 from base64 import b64encode
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 
 import discord
 import httpx
@@ -20,7 +20,11 @@ from llmcord.logic.content import (
     extract_pdf_images_for_model,
     get_allowed_attachment_types,
 )
-from llmcord.logic.utils import append_search_to_content, build_node_text_parts
+from llmcord.logic.utils import (
+    TextDisplayComponentProtocol,
+    append_search_to_content,
+    build_node_text_parts,
+)
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import TwitterApiProtocol
 
@@ -83,7 +87,7 @@ async def build_messages(
             )
             if curr_node.search_results and curr_node.role == "user":
                 content = append_search_to_content(
-                    cast(str | list[dict[str, object]], content),
+                    cast("str | list[dict[str, object]]", content),
                     curr_node.search_results,
                 )
 
@@ -152,19 +156,19 @@ async def _populate_node_if_needed(
         processed_attachments=processed_attachments,
     )
 
-    curr_node.images = [
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": (
-                    f"data:{str(att['content_type'])};base64,"
-                    f"{b64encode(att['content'] if isinstance(att['content'], bytes) else b'').decode('utf-8')}"
-                ),
-            },
-        }
-        for att in processed_attachments
-        if att["content_type"] and str(att["content_type"]).startswith("image")
-    ]
+    curr_node.images = []
+    for att in processed_attachments:
+        if att["content_type"] and str(att["content_type"]).startswith("image"):
+            content = att["content"] if isinstance(att["content"], bytes) else b""
+            encoded = b64encode(content).decode("utf-8")
+            curr_node.images.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{att['content_type']!s};base64,{encoded}",
+                    },
+                },
+            )
 
     curr_node.raw_attachments = [
         {"content_type": att["content_type"], "content": att["content"]}
@@ -276,11 +280,10 @@ def _build_initial_text(
     curr_msg: discord.Message,
     processed_attachments: list[dict[str, bytes | str | None]],
 ) -> str:
-    from llmcord.logic.utils import TextDisplayComponentProtocol
     return build_node_text_parts(
         cleaned_content,
         curr_msg.embeds,
-        cast(list[TextDisplayComponentProtocol], curr_msg.components),
+        cast("list[TextDisplayComponentProtocol]", curr_msg.components),
         text_attachments=[
             str(att["text"])
             for att in processed_attachments
@@ -299,11 +302,10 @@ def _build_final_text(
     attachment_responses: list[httpx.Response],
     extra_parts: list[str],
 ) -> str:
-    from llmcord.logic.utils import TextDisplayComponentProtocol
     return build_node_text_parts(
         cleaned_content,
         curr_msg.embeds,
-        cast(list[TextDisplayComponentProtocol], curr_msg.components),
+        cast("list[TextDisplayComponentProtocol]", curr_msg.components),
         text_attachments=[
             str(resp.text)
             for att, resp in zip(
@@ -352,18 +354,14 @@ async def _set_parent_message(
                 discord.MessageType.reply,
             )
             and prev_msg_in_channel.author
-            == (
-                discord_bot.user
-                if (is_dm or is_thread)
-                else curr_msg.author
-            )
+            == (discord_bot.user if (is_dm or is_thread) else curr_msg.author)
         ):
             curr_node.parent_msg = prev_msg_in_channel
             return
 
         parent_is_thread_start = False
         if is_thread and curr_msg.reference is None:
-            thread_channel = cast(discord.Thread, curr_msg.channel)
+            thread_channel = cast("discord.Thread", curr_msg.channel)
             if thread_channel.parent is not None:
                 parent_is_thread_start = True
 
@@ -376,10 +374,10 @@ async def _set_parent_message(
             return
 
         if parent_is_thread_start and is_thread:
-            thread_channel = cast(discord.Thread, curr_msg.channel)
+            thread_channel = cast("discord.Thread", curr_msg.channel)
             curr_node.parent_msg = (
                 thread_channel.starter_message
-                or await thread_channel.parent.fetch_message(parent_msg_id) # type: ignore
+                or await thread_channel.parent.fetch_message(parent_msg_id)  # type: ignore[union-attr]
             )
         elif curr_msg.reference:
             curr_node.parent_msg = (

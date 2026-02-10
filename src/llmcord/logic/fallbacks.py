@@ -1,7 +1,6 @@
 """Fallback logic for LLM generation."""
 
 import logging
-
 from typing import Any
 
 from llmcord.core.config import ensure_list
@@ -40,6 +39,7 @@ def get_next_fallback(
     provider: str,
     initial_key_count: int,
 ) -> tuple[str, str, str] | None:
+    """Determine the next fallback provider and model to try."""
     if state.use_custom_fallbacks:
         if state.fallback_index < len(fallback_chain):
             next_fallback = fallback_chain[state.fallback_index]
@@ -82,6 +82,7 @@ def apply_fallback_config(
     next_fallback: tuple[str, str, str],
     config: dict[str, Any],
 ) -> tuple[str, str, str, str | None, list[str]]:
+    """Extract configuration values for a fallback provider."""
     provider, model, provider_slash_model = next_fallback
     providers = config.get("providers")
     if not isinstance(providers, dict):

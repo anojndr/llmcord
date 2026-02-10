@@ -737,7 +737,7 @@ async def _run_generation_loop(
     loop_state = _initialize_loop_state(context)
     response_msgs = state.response_msgs
 
-    async def reply_helper(**reply_kwargs: Any) -> None:
+    async def reply_helper(**reply_kwargs: Any) -> None:  # noqa: ANN401
         reply_target = context.new_msg if not response_msgs else response_msgs[-1]
         response_msg = await reply_target.reply(**reply_kwargs)
         response_msgs.append(response_msg)
@@ -780,12 +780,12 @@ async def _run_generation_loop(
                 reply_helper=reply_helper,
             )
             break
-        except GENERATION_EXCEPTIONS as exc:  # type: ignore
+        except GENERATION_EXCEPTIONS as exc:  # type: ignore[misc]
             (
                 loop_state.good_keys,
                 loop_state.last_error_msg,
             ) = _handle_generation_exception(
-                error=cast(Exception, exc),
+                error=cast("Exception", exc),
                 provider=loop_state.provider,
                 current_api_key=current_api_key,
                 good_keys=loop_state.good_keys,

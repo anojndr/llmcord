@@ -14,7 +14,7 @@ from llmcord.discord.ui.utils import (
     build_error_embed,
     get_response_data,
     get_retry_handler,
-    upload_to_textis,
+    upload_to_rentry,
 )
 
 
@@ -69,7 +69,11 @@ class RetryButton(discord.ui.Button):
         if not response_data and interaction.message:
             response_data = get_response_data(interaction.message.id)
 
-        if not response_data or not response_data.request_message_id or not response_data.request_user_id:
+        if (
+            not response_data
+            or not response_data.request_message_id
+            or not response_data.request_user_id
+        ):
             await interaction.followup.send(
                 embed=build_error_embed(
                     "Missing retry context for this message.",
@@ -99,7 +103,7 @@ class ViewResponseBetterButton(discord.ui.Button):
         self.full_response = full_response
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        """Upload the response to text.is and share the link."""
+        """Upload the response to rentry.co and share the link."""
         await interaction.response.defer(ephemeral=True)
 
         full_response = self.full_response
@@ -116,7 +120,7 @@ class ViewResponseBetterButton(discord.ui.Button):
             )
             return
 
-        paste_url = await upload_to_textis(full_response)
+        paste_url = await upload_to_rentry(full_response)
 
         if paste_url:
             embed = discord.Embed(
@@ -127,19 +131,19 @@ class ViewResponseBetterButton(discord.ui.Button):
                 ),
                 color=discord.Color.green(),
             )
-            embed.set_footer(text="Powered by text.is")
+            embed.set_footer(text="Powered by rentry.co")
             await interaction.followup.send(embed=embed, ephemeral=True)
         else:
             await interaction.followup.send(
                 embed=build_error_embed(
-                    ("Failed to upload response to text.is. Please try again later."),
+                    ("Failed to upload response to rentry.co. Please try again later."),
                 ),
                 ephemeral=True,
             )
 
 
 class ResponseView(discord.ui.View):
-    """View with a button that uploads responses to text.is."""
+    """View with a button that uploads responses to rentry.co."""
 
     def __init__(
         self,
@@ -197,7 +201,7 @@ class TextDisplay(discord.ui.Button):
         )
         self.content = content
         if hasattr(discord.ComponentType, "text_display"):
-            self._underlying.type = discord.ComponentType.text_display # type: ignore
+            self._underlying.type = discord.ComponentType.text_display  # type: ignore[attr-defined, misc, assignment]
 
 
 class LayoutView(discord.ui.View):
