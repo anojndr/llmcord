@@ -4,11 +4,11 @@ import asyncio
 import logging
 from typing import Any
 
-import asyncpraw
+import asyncpraw  # type: ignore[import-untyped]
 import discord
 import httpx
 from discord.ext import commands
-from twscrape import API
+from twscrape import API  # type: ignore[import-untyped]
 
 from llmcord.core.config import (
     HttpxClientOptions,

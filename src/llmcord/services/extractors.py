@@ -12,7 +12,7 @@ import asyncprawcore  # type: ignore[import-untyped]
 import discord
 import httpx
 import pymupdf4llm  # type: ignore[import-untyped]
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from PIL import Image
 from twscrape import gather  # type: ignore[import-untyped]
 from youtube_transcript_api import (
@@ -412,6 +412,65 @@ async def _fetch_twitter_results(
     return twitter_content
 
 
+def _parse_yandex_sites_item(item: Tag) -> dict[str, str | None]:
+    """Parse a single Yandex site item into a result dict."""
+    title_el = item.select_one(".CbirSites-ItemTitle a")
+    domain_el = item.select_one(".CbirSites-ItemDomain")
+    desc_el = item.select_one(".CbirSites-ItemDescription")
+
+    title = title_el.get_text(strip=True) if title_el else "N/A"
+    link = str(title_el["href"]) if title_el and title_el.has_attr("href") else None
+    domain = domain_el.get_text(strip=True) if domain_el else ""
+    desc = desc_el.get_text(strip=True) if desc_el else ""
+
+    return {
+        "title": title,
+        "link": link,
+        "domain": domain,
+        "desc": desc,
+    }
+
+
+async def _process_yandex_results(
+    sites_items: list[Tag],
+    httpx_client: httpx.AsyncClient,
+    proxy_url: str | None,
+) -> tuple[list[str], list[str]]:
+    """Process Yandex sites items into formatted results and Twitter URLs."""
+    lens_results = []
+    twitter_urls_found = []
+
+    # Limit to the first 10 items as requested.
+    items_to_process = sites_items[:10]
+    parsed_items = [_parse_yandex_sites_item(item) for item in items_to_process]
+
+    extraction_tasks = [
+        extract_url_content(data["link"], httpx_client, proxy_url=proxy_url)
+        if data["link"]
+        else asyncio.sleep(0, result=None)
+        for data in parsed_items
+    ]
+
+    extracted_contents = await asyncio.gather(*extraction_tasks)
+
+    for data, content in zip(parsed_items, extracted_contents, strict=False):
+        link = data["link"] or "#"
+        result_line = f"- [{data['title']}]({link}) ({data['domain']}) - {data['desc']}"
+        if content:
+            result_line += f"\n  Content: {content}"
+        lens_results.append(result_line)
+
+        # Check if the link is a Twitter/X URL and extract for later
+        # processing.
+        if link and re.search(
+            r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
+            link,
+        ):
+            twitter_urls_found.append(link)
+
+    return lens_results, twitter_urls_found
+
+
 async def perform_yandex_lookup(
     image_url: str,
     httpx_client: httpx.AsyncClient,
@@ -427,97 +486,62 @@ async def perform_yandex_lookup(
         "cbir_page": "sites",
     }
 
-    try:
-        yandex_resp = await request_with_optional_proxy(
-            lambda client: client.get(
-                "https://yandex.com/images/search",
-                params=params,
-                headers=BROWSER_HEADERS,
-                follow_redirects=True,
-                timeout=60,
-            ),
-            httpx_client,
-            proxy_url,
-            log_context="Yandex reverse image search",
+    async def fetch_yandex(client: httpx.AsyncClient, base_url: str) -> httpx.Response:
+        resp = await client.get(
+            base_url,
+            params=params,
+            headers=BROWSER_HEADERS,
+            follow_redirects=True,
+            timeout=60,
         )
-    except httpx.HTTPError as exc:
-        logger.warning("Yandex lookup failed for %s: %s", image_url, exc)
+        resp.raise_for_status()
+        if any(
+            phrase in resp.text.lower()
+            for phrase in ["captcha", "not a robot", "confirm that you are not a robot"]
+        ):
+            msg = "Yandex captcha detected"
+            raise httpx.HTTPStatusError(
+                msg,
+                request=resp.request,
+                response=resp,
+            )
+        return resp
+
+    yandex_resp = None
+    sites_items: list[Tag] = []
+    for domain in [
+        "https://yandex.com/images/search",
+        "https://yandex.ru/images/search",
+    ]:
+
+        async def _yandex_req(client: httpx.AsyncClient, d: str = domain) -> httpx.Response:
+            return await fetch_yandex(client, d)
+
+        try:
+            yandex_resp = await request_with_optional_proxy(
+                _yandex_req,
+                httpx_client,
+                proxy_url,
+                log_context=f"Yandex reverse image search ({domain})",
+            )
+
+            soup = BeautifulSoup(yandex_resp.text, "lxml")
+            sites_items = soup.select(".CbirSites-Item, .CbirSitesInfiniteList-Item")
+            if sites_items:
+                break
+            logger.debug("No results found for %s, trying next domain", domain)
+        except httpx.HTTPError as exc:
+            logger.debug("Yandex lookup failed for %s: %s", domain, exc)
+            continue
+
+    if not yandex_resp:
         return [], []
 
-    if yandex_resp.status_code != httpx.codes.OK:
-        logger.warning(
-            "Yandex lookup returned status %s for %s",
-            yandex_resp.status_code,
-            image_url,
-        )
-        return [], []
-    soup = BeautifulSoup(
-        yandex_resp.text,
-        "lxml",
-    )  # lxml is faster than html.parser
-
-    lens_results = []
-    twitter_urls_found = []
-    sites_items = soup.select(".CbirSites-Item")
-
-    if sites_items:
-        # Limit to the first 10 items as requested.
-        items_to_process = sites_items[:10]
-        extraction_tasks = []
-        parsed_items = []
-
-        for item in items_to_process:
-            title_el = item.select_one(".CbirSites-ItemTitle a")
-            domain_el = item.select_one(".CbirSites-ItemDomain")
-            desc_el = item.select_one(".CbirSites-ItemDescription")
-
-            title = title_el.get_text(strip=True) if title_el else "N/A"
-            link = (
-                str(title_el["href"])
-                if title_el and title_el.has_attr("href")
-                else None
-            )
-            domain = domain_el.get_text(strip=True) if domain_el else ""
-            desc = desc_el.get_text(strip=True) if desc_el else ""
-
-            parsed_items.append(
-                {
-                    "title": title,
-                    "link": link,
-                    "domain": domain,
-                    "desc": desc,
-                },
-            )
-
-            if link:
-                extraction_tasks.append(
-                    extract_url_content(
-                        link,
-                        httpx_client,
-                        proxy_url=proxy_url,
-                    ),
-                )
-            else:
-                extraction_tasks.append(asyncio.sleep(0, result=None))
-
-        extracted_contents = await asyncio.gather(*extraction_tasks)
-
-        for data, content in zip(parsed_items, extracted_contents, strict=False):
-            link = data["link"] or "#"
-            result_line = (
-                f"- [{data['title']}]({link}) ({data['domain']}) - {data['desc']}"
-            )
-            if content:
-                result_line += f"\n  Content: {content}"
-            lens_results.append(result_line)
-
-            # Check if the link is a Twitter/X URL and extract for later
-            # processing.
-            if link and re.search(
-                r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
-                link,
-            ):
-                twitter_urls_found.append(link)
+    lens_results, twitter_urls_found = await _process_yandex_results(
+        sites_items,
+        httpx_client,
+        proxy_url,
+    )
 
     twitter_content = await _fetch_twitter_results(
         twitter_urls_found,

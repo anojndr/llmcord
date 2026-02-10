@@ -129,6 +129,47 @@ async def _get_csrf_token(
     return csrf_token, response
 
 
+async def _perform_rentry_upload(
+    client: httpx.AsyncClient,
+    text: str,
+) -> str | None:
+    """Perform the actual upload to rentry.co."""
+    csrf_token, response = await _get_csrf_token(client)
+
+    if not csrf_token:
+        return None
+
+    form_data = {
+        "csrfmiddlewaretoken": csrf_token,
+        "text": text,
+    }
+
+    headers = {
+        "Referer": str(response.url),
+        "Origin": "https://rentry.co",
+    }
+
+    post_response = await client.post(
+        "https://rentry.co/",
+        data=form_data,
+        headers=headers,
+        timeout=30,
+    )
+
+    if post_response.status_code in (301, 302, 303, 307, 308):
+        paste_url = post_response.headers.get("Location")
+        if paste_url:
+            if paste_url.startswith("/"):
+                paste_url = f"https://rentry.co{paste_url}"
+            return paste_url
+
+    if post_response.status_code == HTTP_OK:
+        final_url = str(post_response.url)
+        if final_url.rstrip("/") != "https://rentry.co":
+            return final_url
+    return None
+
+
 async def upload_to_rentry(text: str) -> str | None:
     """Upload text to rentry.co and return the paste URL.
 
@@ -137,53 +178,17 @@ async def upload_to_rentry(text: str) -> str | None:
     config = get_config()
     proxy_url = config.get("proxy_url") or None
 
-    async def _do_upload(client: httpx.AsyncClient) -> str | None:
-        csrf_token, response = await _get_csrf_token(client)
-
-        if not csrf_token:
-            return None
-
-        form_data = {
-            "csrfmiddlewaretoken": csrf_token,
-            "text": text,
-        }
-
-        headers = {
-            "Referer": str(response.url),
-            "Origin": "https://rentry.co",
-        }
-
-        post_response = await client.post(
-            "https://rentry.co/",
-            data=form_data,
-            headers=headers,
-            timeout=30,
-        )
-
-        if post_response.status_code in (301, 302, 303, 307, 308):
-            paste_url = post_response.headers.get("Location")
-            if paste_url:
-                if paste_url.startswith("/"):
-                    paste_url = f"https://rentry.co{paste_url}"
-                return paste_url
-
-        if post_response.status_code == HTTP_OK:
-            final_url = str(post_response.url)
-            if final_url.rstrip("/") != "https://rentry.co":
-                return final_url
-        return None
-
     # Try direct first
     try:
         client = _get_rentry_client()
-        result = await _do_upload(client)
+        result = await _perform_rentry_upload(client, text)
         if result:
             return result
-    except Exception as exc:
+    except (httpx.HTTPError, httpx.RequestError):
         if not proxy_url:
-            LOGGER.error("Direct upload to rentry.co failed: %s", exc)
+            LOGGER.exception("Direct upload to rentry.co failed")
             return None
-        LOGGER.info("Direct upload to rentry.co failed, trying proxy: %s", exc)
+        LOGGER.info("Direct upload to rentry.co failed, trying proxy")
 
     # Fallback to proxy
     if proxy_url:
@@ -193,8 +198,8 @@ async def upload_to_rentry(text: str) -> str | None:
                 timeout=30.0,
                 follow_redirects=True,
             ) as proxy_client:
-                return await _do_upload(proxy_client)
-        except Exception:
+                return await _perform_rentry_upload(proxy_client, text)
+        except (httpx.HTTPError, httpx.RequestError):
             LOGGER.exception("Proxy upload to rentry.co failed")
 
     return None
