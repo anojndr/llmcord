@@ -120,17 +120,18 @@ def _get_message_limits(
     config: dict,
     *,
     accept_images: bool,
-) -> tuple[int, int, int, int, bool, str | None, str | None]:
+) -> tuple[int, int, int, int, bool, str | None, str | None, str | None]:
     """Extract message limits from config."""
     max_text = config.get("max_text", 100000)
     max_images = config.get("max_images", 5) if accept_images else 0
     max_messages = config.get("max_messages", 25)
     max_tweet_replies = config.get("max_tweet_replies", 50)
     enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
+    proxy_url = config.get("proxy_url")
     youtube_transcript_proxy = config.get(
         "youtube_transcript_proxy",
-    ) or config.get("proxy_url")
-    reddit_proxy = config.get("reddit_proxy") or config.get("proxy_url")
+    ) or proxy_url
+    reddit_proxy = config.get("reddit_proxy") or proxy_url
     return (
         max_text,
         max_images,
@@ -139,6 +140,7 @@ def _get_message_limits(
         enable_youtube_transcripts,
         youtube_transcript_proxy,
         reddit_proxy,
+        proxy_url,
     )
 
 
@@ -231,6 +233,7 @@ async def process_message(
             enable_youtube_transcripts,
             youtube_transcript_proxy,
             reddit_proxy,
+            proxy_url,
         ) = _get_message_limits(config, accept_images=accept_images)
 
         build_result = await build_messages(
@@ -249,6 +252,7 @@ async def process_message(
                 enable_youtube_transcripts=enable_youtube_transcripts,
                 youtube_transcript_proxy=youtube_transcript_proxy,
                 reddit_proxy=reddit_proxy,
+                proxy_url=proxy_url,
             ),
         )
         messages = build_result.messages

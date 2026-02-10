@@ -38,6 +38,7 @@ class GoogleLensContext:
     httpx_client: httpx.AsyncClient
     twitter_api: TwitterApiProtocol
     max_tweet_replies: int
+    proxy_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -91,6 +92,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             context.httpx_client,
             context.twitter_api,
             context.max_tweet_replies,
+            proxy_url=context.proxy_url,
         )
 
         if lens_results:
@@ -135,13 +137,18 @@ async def download_and_process_attachments(
     *,
     attachments: list[discord.Attachment],
     httpx_client: httpx.AsyncClient,
+    proxy_url: str | None = None,
 ) -> tuple[
     list[discord.Attachment],
     list[httpx.Response],
     list[dict[str, bytes | str | None]],
 ]:
     """Download and process message attachments."""
-    successful_pairs = await download_attachments(attachments, httpx_client)
+    successful_pairs = await download_attachments(
+        attachments,
+        httpx_client,
+        proxy_url=proxy_url,
+    )
     good_attachments = [pair[0] for pair in successful_pairs]
     attachment_responses = [pair[1] for pair in successful_pairs]
     processed_attachments = await process_attachments(successful_pairs)

@@ -49,7 +49,7 @@ _httpx_client_holder: list[httpx.AsyncClient | None] = []
 proxy_url = config.get("proxy_url") or None
 httpx_client = get_or_create_httpx_client(
     _httpx_client_holder,
-    options=HttpxClientOptions(proxy_url=proxy_url),
+    options=HttpxClientOptions(proxy_url=None),
 )
 twitter_proxy = config.get("twitter_proxy") or proxy_url
 twitter_api = API(proxy=twitter_proxy)

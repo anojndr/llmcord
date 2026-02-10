@@ -14,7 +14,7 @@ from llmcord.core.config import (
     get_or_create_httpx_client,
 )
 from llmcord.services.database import get_bad_keys_db
-from llmcord.services.http import request_with_retries
+from llmcord.services.http import request_with_optional_proxy, request_with_retries
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
 logger = logging.getLogger(__name__)
@@ -29,8 +29,6 @@ def _get_tavily_client() -> httpx.AsyncClient:
 
     Uses the DRY factory pattern.
     """
-    config = get_config()
-    proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
         _tavily_client_holder,
         options=HttpxClientOptions(
@@ -40,7 +38,7 @@ def _get_tavily_client() -> httpx.AsyncClient:
             max_keepalive=10,
             follow_redirects=True,
             headers={},  # Tavily doesn't need browser headers, just defaults
-            proxy_url=proxy_url,
+            proxy_url=None,
         ),
     )
 
@@ -73,6 +71,8 @@ async def tavily_search(
 
     """
     try:
+        config = get_config()
+        proxy_url = config.get("proxy_url") or None
         client = _get_client_from_package()
 
         # Build request payload
@@ -94,8 +94,8 @@ async def tavily_search(
             max_results,
         )
 
-        response = await request_with_retries(
-            lambda: client.post(
+        response = await request_with_optional_proxy(
+            lambda c: c.post(
                 "https://api.tavily.com/search",
                 json=payload,
                 headers={
@@ -104,6 +104,8 @@ async def tavily_search(
                 },
                 timeout=timeout,
             ),
+            client,
+            proxy_url,
             log_context=f"Tavily search '{query}'",
         )
         logger.info("Tavily API response status: %s", response.status_code)
@@ -172,6 +174,8 @@ async def tavily_research_create(
 
     """
     try:
+        config = get_config()
+        proxy_url = config.get("proxy_url") or None
         client = _get_client_from_package()
         payload = {
             "input": input_text,
@@ -179,8 +183,8 @@ async def tavily_research_create(
             "stream": False,
         }
 
-        response = await request_with_retries(
-            lambda: client.post(
+        response = await request_with_optional_proxy(
+            lambda c: c.post(
                 "https://api.tavily.com/research",
                 json=payload,
                 headers={
@@ -189,6 +193,8 @@ async def tavily_research_create(
                 },
                 timeout=30.0,
             ),
+            client,
+            proxy_url,
             log_context="Tavily research create",
         )
     except httpx.TimeoutException as exc:
@@ -232,9 +238,11 @@ async def tavily_research_get(
 
     """
     try:
+        config = get_config()
+        proxy_url = config.get("proxy_url") or None
         client = _get_tavily_client()
-        response = await request_with_retries(
-            lambda: client.get(
+        response = await request_with_optional_proxy(
+            lambda c: c.get(
                 f"https://api.tavily.com/research/{request_id}",
                 headers={
                     "Authorization": f"Bearer {tavily_api_key}",
@@ -242,6 +250,8 @@ async def tavily_research_get(
                 },
                 timeout=30.0,
             ),
+            client,
+            proxy_url,
             log_context=f"Tavily research get '{request_id}'",
         )
     except httpx.TimeoutException as exc:

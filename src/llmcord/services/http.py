@@ -90,3 +90,42 @@ async def request_with_retries(
 
     msg = "request_with_retries exhausted without a response"
     raise RuntimeError(msg)
+
+
+async def request_with_optional_proxy(
+    request_func: Callable[[httpx.AsyncClient], Awaitable[httpx.Response]],
+    direct_client: httpx.AsyncClient,
+    proxy_url: str | None,
+    *,
+    options: RetryOptions | None = None,
+    log_context: str = "",
+) -> httpx.Response:
+    """Try a request without a proxy first, falling back to proxy if provided."""
+    try:
+        # Try direct connection first
+        return await request_with_retries(
+            lambda: request_func(direct_client),
+            options=options,
+            log_context=f"{log_context} (direct)",
+        )
+    except (httpx.HTTPError, httpx.RequestError) as exc:
+        if not proxy_url:
+            raise
+
+        logger.info(
+            "Direct connection failed for %s, retrying with proxy: %s",
+            log_context,
+            exc,
+        )
+
+        async with httpx.AsyncClient(
+            proxy=proxy_url,
+            headers=direct_client.headers,
+            timeout=direct_client.timeout,
+            follow_redirects=direct_client.follow_redirects,
+        ) as proxy_client:
+            return await request_with_retries(
+                lambda: request_func(proxy_client),
+                options=options,
+                log_context=f"{log_context} (proxy)",
+            )

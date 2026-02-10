@@ -24,8 +24,6 @@ def _get_exa_client() -> httpx.AsyncClient:
 
     Uses the DRY factory pattern.
     """
-    config = get_config()
-    proxy_url = config.get("proxy_url") or None
     return get_or_create_httpx_client(
         _exa_client_holder,
         options=HttpxClientOptions(
@@ -35,7 +33,7 @@ def _get_exa_client() -> httpx.AsyncClient:
             max_keepalive=10,
             follow_redirects=True,
             headers={},
-            proxy_url=proxy_url,
+            proxy_url=None,
         ),
     )
 
@@ -339,6 +337,8 @@ async def exa_search(
         max_results: Maximum results to return
 
     """
+    config = get_config()
+    proxy_url = config.get("proxy_url") or None
     client = _get_exa_client()
     payload = _build_exa_payload(query, max_results)
 
@@ -349,63 +349,89 @@ async def exa_search(
     )
 
     retries = 2
-    for attempt in range(retries + 1):
-        try:
-            async with client.stream(
-                "POST",
-                exa_mcp_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                timeout=60.0,
-            ) as response:
-                if (
-                    response.status_code in DEFAULT_RETRYABLE_STATUSES
-                    and attempt < retries
-                ):
-                    logger.warning(
-                        ("Exa MCP transient HTTP %s for query '%s', retrying (%s/%s)"),
-                        response.status_code,
-                        query,
-                        attempt + 1,
-                        retries,
-                    )
-                    await wait_with_backoff(attempt)
-                    continue
 
-                result = await _parse_exa_http_response(response, query)
-                return _extract_exa_results(result, query)
+    async def _do_search(current_client: httpx.AsyncClient) -> httpx.Response:
+        # We need a separate function because client.stream is a context manager
+        # request_with_optional_proxy expects a Callable that returns a Response
+        # But for streaming, it's a bit more complex.
+        # However, exa_search currently has its own retry loop.
+        # Let's refactor it to try direct client first, then fallback.
+        pass
 
-        except httpx.TimeoutException as exc:
-            if attempt < retries:
-                logger.warning(
-                    "Exa MCP timeout for query '%s', retrying (%s/%s): %s",
-                    query,
-                    attempt + 1,
-                    retries,
-                    exc,
-                )
-                await wait_with_backoff(attempt)
-                continue
-            logger.exception("Exa MCP timeout for query '%s'", query)
-            return {"error": f"Timeout: {exc}", "query": query}
-        except httpx.RequestError as exc:
-            if attempt < retries:
-                logger.warning(
-                    ("Exa MCP connection error for query '%s', retrying (%s/%s): %s"),
-                    query,
-                    attempt + 1,
-                    retries,
-                    exc,
-                )
-                await wait_with_backoff(attempt)
-                continue
-            logger.exception("Exa MCP connection error for query '%s'", query)
-            return {"error": f"Connection error: {exc}", "query": query}
-        except Exception as exc:
-            logger.exception("Exa MCP search error for query '%s'", query)
-            return {"error": str(exc), "query": query}
+    # Refactored retry loop with direct first, then proxy fallback
+    clients_to_try = [(client, "direct")]
+    if proxy_url:
+        # Create a temporary proxy client for fallback
+        proxy_client = httpx.AsyncClient(
+            proxy=proxy_url,
+            timeout=client.timeout,
+            headers=client.headers,
+        )
+        clients_to_try.append((proxy_client, "proxy"))
+
+    try:
+        for current_client, client_type in clients_to_try:
+            for attempt in range(retries + 1):
+                try:
+                    async with current_client.stream(
+                        "POST",
+                        exa_mcp_url,
+                        json=payload,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Accept": "application/json, text/event-stream",
+                        },
+                        timeout=60.0,
+                    ) as response:
+                        if (
+                            response.status_code in DEFAULT_RETRYABLE_STATUSES
+                            and attempt < retries
+                        ):
+                            logger.warning(
+                                (
+                                    "Exa MCP transient HTTP %s (%s) for query '%s', "
+                                    "retrying (%s/%s)"
+                                ),
+                                response.status_code,
+                                client_type,
+                                query,
+                                attempt + 1,
+                                retries,
+                            )
+                            await wait_with_backoff(attempt)
+                            continue
+
+                        result = await _parse_exa_http_response(response, query)
+                        return _extract_exa_results(result, query)
+
+                except (httpx.TimeoutException, httpx.RequestError) as exc:
+                    if attempt < retries:
+                        logger.warning(
+                            "Exa MCP %s error (%s) for query '%s', retrying (%s/%s): %s",
+                            type(exc).__name__,
+                            client_type,
+                            query,
+                            attempt + 1,
+                            retries,
+                            exc,
+                        )
+                        await wait_with_backoff(attempt)
+                        continue
+                    
+                    if client_type == "direct" and proxy_url:
+                        logger.info(
+                            "Exa MCP direct search failed, falling back to proxy: %s",
+                            exc,
+                        )
+                        break # Break retry loop to try next client (proxy)
+                    
+                    logger.exception("Exa MCP search error (%s) for query '%s'", client_type, query)
+                    return {"error": f"{type(exc).__name__}: {exc}", "query": query}
+                except Exception as exc:
+                    logger.exception("Exa MCP search error for query '%s'", query)
+                    return {"error": str(exc), "query": query}
+    finally:
+        if proxy_url:
+            await proxy_client.aclose()
 
     return {"error": "Retry attempts exhausted", "query": query}
