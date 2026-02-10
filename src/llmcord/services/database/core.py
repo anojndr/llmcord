@@ -1,4 +1,5 @@
 """Core database functionality for Turso/libSQL."""
+
 from __future__ import annotations
 
 import contextlib
@@ -26,6 +27,7 @@ def _with_reconnect(
     method: Callable[Concatenate[Self, P], T],
 ) -> Callable[Concatenate[Self, P], T]:
     """Handle stale Turso connections by reconnecting and retrying."""
+
     @functools.wraps(method)
     def wrapper(self: Self, *args: P.args, **kwargs: P.kwargs) -> T:
         max_retries = 2
@@ -52,6 +54,7 @@ def _with_reconnect(
                     max_retries,
                 )
                 raise
+
     return wrapper
 
 

@@ -1,4 +1,5 @@
 """Web search decision logic."""
+
 import importlib
 import json
 import logging
@@ -156,15 +157,9 @@ def _get_next_decider_fallback(
         "gemini/gemma-3-27b-it",
     )
 
-    if (
-        original_provider == "mistral"
-        and original_model == "mistral-large-latest"
-    ):
+    if original_provider == "mistral" and original_model == "mistral-large-latest":
         fallback_chain = [gemini_fallback]
-    elif (
-        original_provider == "gemini"
-        and original_model == "gemma-3-27b-it"
-    ):
+    elif original_provider == "gemini" and original_model == "gemma-3-27b-it":
         fallback_chain = [mistral_fallback]
     else:
         fallback_chain = [mistral_fallback, gemini_fallback]
@@ -179,8 +174,7 @@ def _get_next_decider_fallback(
             )
         else:
             log_message = (
-                "Search decider fallback failed. "
-                f"Falling back to {next_fallback[2]}..."
+                f"Search decider fallback failed. Falling back to {next_fallback[2]}..."
             )
         return next_level, next_fallback, log_message
 
@@ -239,10 +233,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
             logger.warning(log_message)
         if not next_fallback:
             logger.error(
-                (
-                    "Search decider fallback options exhausted, skipping web "
-                    "search"
-                ),
+                ("Search decider fallback options exhausted, skipping web search"),
             )
             return default_result
 

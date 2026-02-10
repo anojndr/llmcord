@@ -28,10 +28,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         # Use the channel's locked model (ignore user preference)
         if locked_model not in config_data.get("models", {}):
             logger.error(
-                (
-                    "Channel %s has locked model '%s' but it's not in "
-                    "config.yaml models"
-                ),
+                ("Channel %s has locked model '%s' but it's not in config.yaml models"),
                 channel_id,
                 locked_model,
             )

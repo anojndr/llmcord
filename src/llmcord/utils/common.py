@@ -81,10 +81,7 @@ async def _handle_model_switch(
     if model not in config_data["models"]:
         await interaction.followup.send(
             embed=build_error_embed(
-                (
-                    f"Model `{model}` is not available. "
-                    "Please choose another model."
-                ),
+                (f"Model `{model}` is not available. Please choose another model."),
             ),
             ephemeral=True,
         )

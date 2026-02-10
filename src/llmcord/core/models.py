@@ -1,4 +1,5 @@
 """Data models for llmcord."""
+
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -34,4 +35,3 @@ class MsgNode:
     lens_results: str | None = None
 
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-

@@ -1,4 +1,5 @@
 """Fallback logic for LLM generation."""
+
 import logging
 
 from llmcord.core.config import ensure_list
@@ -22,15 +23,9 @@ def _get_default_fallback_chain(
         "gemini/gemma-3-27b-it",
     )
 
-    if (
-        original_provider == "mistral"
-        and original_model == "mistral-large-latest"
-    ):
+    if original_provider == "mistral" and original_model == "mistral-large-latest":
         return [gemini_fallback]
-    if (
-        original_provider == "gemini"
-        and original_model == "gemma-3-27b-it"
-    ):
+    if original_provider == "gemini" and original_model == "gemma-3-27b-it":
         return [mistral_fallback]
 
     return [mistral_fallback, gemini_fallback]
@@ -48,10 +43,7 @@ def get_next_fallback(
             next_fallback = fallback_chain[state.fallback_index]
             state.fallback_index += 1
             logger.warning(
-                (
-                    "All %s keys exhausted for provider '%s'. "
-                    "Falling back to %s..."
-                ),
+                ("All %s keys exhausted for provider '%s'. Falling back to %s..."),
                 initial_key_count,
                 provider,
                 next_fallback[2],
@@ -68,10 +60,7 @@ def get_next_fallback(
         state.fallback_level += 1
         if state.fallback_level == 1:
             logger.warning(
-                (
-                    "All %s keys exhausted for provider '%s'. "
-                    "Falling back to %s..."
-                ),
+                ("All %s keys exhausted for provider '%s'. Falling back to %s..."),
                 initial_key_count,
                 provider,
                 next_fallback[2],

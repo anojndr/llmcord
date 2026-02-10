@@ -1,4 +1,5 @@
 """Custom exceptions for llmcord logic."""
+
 from typing import NoReturn
 
 EMPTY_RESPONSE_MESSAGE = "Response stream ended with no content"

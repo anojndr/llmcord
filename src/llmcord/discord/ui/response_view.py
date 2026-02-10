@@ -1,4 +1,5 @@
 """Response related views and buttons."""
+
 from collections.abc import Awaitable, Callable, Mapping
 
 import discord
@@ -68,10 +69,7 @@ class RetryButton(discord.ui.Button):
         if not response_data:
             response_data = get_response_data(interaction.message.id)
 
-        if (
-            not response_data.request_message_id
-            or not response_data.request_user_id
-        ):
+        if not response_data.request_message_id or not response_data.request_user_id:
             await interaction.followup.send(
                 embed=build_error_embed(
                     "Missing retry context for this message.",
@@ -134,10 +132,7 @@ class ViewResponseBetterButton(discord.ui.Button):
         else:
             await interaction.followup.send(
                 embed=build_error_embed(
-                    (
-                        "Failed to upload response to text.is. "
-                        "Please try again later."
-                    ),
+                    ("Failed to upload response to text.is. Please try again later."),
                 ),
                 ephemeral=True,
             )

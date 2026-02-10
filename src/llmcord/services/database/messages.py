@@ -1,4 +1,5 @@
 """Message data storage for search results and responses."""
+
 from __future__ import annotations
 
 import contextlib
@@ -185,8 +186,7 @@ class MessageDataMixin:
         except ValueError:
             # Log parameter types to help debug "Unsupported parameter type" errors
             param_types = [
-                (i, type(p).__name__, repr(p)[:100])
-                for i, p in enumerate(params)
+                (i, type(p).__name__, repr(p)[:100]) for i, p in enumerate(params)
             ]
             logger.exception(
                 "libsql parameter type error. Param types: %s",
@@ -221,10 +221,7 @@ class MessageDataMixin:
                 tavily_metadata = json.loads(result[1]) if result[1] else None
             except json.JSONDecodeError:
                 logger.warning(
-                    (
-                        "Failed to decode tavily_metadata for message %s, "
-                        "returning None"
-                    ),
+                    ("Failed to decode tavily_metadata for message %s, returning None"),
                     message_id,
                 )
                 tavily_metadata = None

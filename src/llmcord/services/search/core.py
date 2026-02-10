@@ -84,8 +84,7 @@ async def _run_exa_searches(
 ) -> list[dict]:
     """Execute Exa MCP searches concurrently."""
     search_tasks = [
-        exa_search(query, exa_mcp_url, max_results_per_query)
-        for query in queries
+        exa_search(query, exa_mcp_url, max_results_per_query) for query in queries
     ]
     return await asyncio.gather(*search_tasks)
 

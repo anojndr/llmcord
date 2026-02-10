@@ -1,4 +1,5 @@
 """Database service package."""
+
 from __future__ import annotations
 
 from llmcord.services.database.bad_keys import BadKeysMixin, KeyRotator
@@ -80,6 +81,7 @@ def get_bad_keys_db() -> BadKeysDB:
     if _bad_keys_state["instance"] is None:
         _bad_keys_state["instance"] = BadKeysDB()
     return _bad_keys_state["instance"]
+
 
 __all__ = [
     "BadKeysDB",

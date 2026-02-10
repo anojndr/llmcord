@@ -96,13 +96,11 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
         if lens_results:
             result_text = (
                 "\n\nanswer the user's query based on the yandex "
-                "reverse image results:\n"
-                + "\n".join(lens_results)
+                "reverse image results:\n" + "\n".join(lens_results)
             )
             if twitter_content:
-                result_text += (
-                    "\n\n--- Extracted Twitter/X Content ---"
-                    + "".join(twitter_content)
+                result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(
+                    twitter_content
                 )
             cleaned_content += result_text
 
@@ -160,16 +158,12 @@ async def _extract_pdf_texts(
         return []
 
     pdf_attachments = [
-        att
-        for att in processed_attachments
-        if att["content_type"] == "application/pdf"
+        att for att in processed_attachments if att["content_type"] == "application/pdf"
     ]
     if not pdf_attachments:
         return []
 
-    pdf_extraction_tasks = [
-        extract_pdf_text(att["content"]) for att in pdf_attachments
-    ]
+    pdf_extraction_tasks = [extract_pdf_text(att["content"]) for att in pdf_attachments]
     pdf_results = await asyncio.gather(*pdf_extraction_tasks)
 
     pdf_texts: list[str] = []
@@ -200,16 +194,12 @@ async def extract_pdf_images_for_model(
         return []
 
     pdf_attachments = [
-        att
-        for att in processed_attachments
-        if att["content_type"] == "application/pdf"
+        att for att in processed_attachments if att["content_type"] == "application/pdf"
     ]
     if not pdf_attachments:
         return []
 
-    extraction_tasks = [
-        extract_pdf_images(att["content"]) for att in pdf_attachments
-    ]
+    extraction_tasks = [extract_pdf_images(att["content"]) for att in pdf_attachments]
     all_results = await asyncio.gather(*extraction_tasks)
 
     image_dicts: list[dict[str, object]] = []
@@ -312,9 +302,7 @@ def is_googlelens_query(
 ) -> bool:
     """Check if the message is a Google Lens query."""
     content_for_lens_check = (
-        new_msg.content.lower()
-        .removeprefix(discord_bot.user.mention.lower())
-        .strip()
+        new_msg.content.lower().removeprefix(discord_bot.user.mention.lower()).strip()
     )
     if content_for_lens_check.startswith("at ai"):
         content_for_lens_check = content_for_lens_check[5:].strip()

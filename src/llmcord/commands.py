@@ -1,4 +1,5 @@
 """Compatibility re-exports for command handlers."""
+
 from llmcord.core.config import get_config
 from llmcord.discord.commands import (
     model_autocomplete,

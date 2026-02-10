@@ -1,4 +1,5 @@
 """Source related views and buttons."""
+
 from collections.abc import Mapping
 
 import discord
@@ -87,7 +88,7 @@ class TavilySourcesView(discord.ui.View):
             # Truncate very long URLs
             if len(url) > URL_MAX_LENGTH:
                 url = f"{url[:URL_MAX_LENGTH]}..."
-            sources.append(f"{i+1}. [{title}]({url})")
+            sources.append(f"{i + 1}. [{title}]({url})")
         return sources
 
     def _paginate_sources(self) -> list[list[str]]:

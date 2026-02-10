@@ -1,4 +1,5 @@
 """Discord UI rendering logic for LLM responses."""
+
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
@@ -37,9 +38,7 @@ async def render_exhausted_response(
     else:
         logger.error("All fallback options exhausted")
 
-    error_text = (
-        "❌ All API keys are currently unavailable. Please try again later."
-    )
+    error_text = "❌ All API keys are currently unavailable. Please try again later."
     if last_error_msg:
         logger.info("Last fallback error summary: %s", last_error_msg)
 
@@ -87,9 +86,7 @@ async def update_response_view(
     if last_msg_index < len(state.response_contents) and state.embed:
         state.embed.description = state.response_contents[last_msg_index]
         state.embed.color = EMBED_COLOR_COMPLETE
-        footer_text = (
-            f"{state.display_model} | total tokens: {total_tokens:,}"
-        )
+        footer_text = f"{state.display_model} | total tokens: {total_tokens:,}"
         state.embed.set_footer(text=footer_text)
         await state.response_msgs[last_msg_index].edit(
             embed=state.embed,
@@ -131,8 +128,7 @@ async def maybe_edit_stream_message(
 
     view = (
         sources_view.SourceView(grounding_metadata)
-        if decision.is_final_edit
-        and ui_metadata.has_grounding_data(grounding_metadata)
+        if decision.is_final_edit and ui_metadata.has_grounding_data(grounding_metadata)
         else None
     )
 

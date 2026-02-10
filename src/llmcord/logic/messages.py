@@ -211,9 +211,7 @@ async def _populate_node_if_needed(
         curr_node.text = "Hello"
 
     curr_node.role = (
-        "assistant"
-        if curr_msg.author == context.discord_bot.user
-        else "user"
+        "assistant" if curr_msg.author == context.discord_bot.user else "user"
     )
 
     curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
@@ -258,10 +256,7 @@ def _build_content_payload(
         content.extend(gemini_file_attachments)
         if gemini_file_attachments:
             logger.info(
-                (
-                    "Added %s Gemini file attachment(s) "
-                    "(audio/video/PDF) to message"
-                ),
+                ("Added %s Gemini file attachment(s) (audio/video/PDF) to message"),
                 len(gemini_file_attachments),
             )
         if not content:
@@ -338,20 +333,24 @@ async def _set_parent_message(
             ]
             prev_msg_in_channel = history[0] if history else None
 
-        if prev_msg_in_channel and prev_msg_in_channel.type in (
-            discord.MessageType.default,
-            discord.MessageType.reply,
-        ) and prev_msg_in_channel.author == (
-            discord_bot.user
-            if curr_msg.channel.type == discord.ChannelType.private
-            else curr_msg.author
+        if (
+            prev_msg_in_channel
+            and prev_msg_in_channel.type
+            in (
+                discord.MessageType.default,
+                discord.MessageType.reply,
+            )
+            and prev_msg_in_channel.author
+            == (
+                discord_bot.user
+                if curr_msg.channel.type == discord.ChannelType.private
+                else curr_msg.author
+            )
         ):
             curr_node.parent_msg = prev_msg_in_channel
             return
 
-        is_public_thread = (
-            curr_msg.channel.type == discord.ChannelType.public_thread
-        )
+        is_public_thread = curr_msg.channel.type == discord.ChannelType.public_thread
         parent_is_thread_start = (
             is_public_thread
             and curr_msg.reference is None
@@ -399,10 +398,7 @@ def _load_cached_search_data(
     curr_msg: discord.Message,
     curr_node: MsgNode,
 ) -> None:
-    if (
-        curr_node.search_results is not None
-        and curr_node.lens_results is not None
-    ):
+    if curr_node.search_results is not None and curr_node.lens_results is not None:
         return
 
     (
@@ -442,8 +438,7 @@ def _update_user_warnings(
     if curr_node.has_bad_attachments:
         user_warnings.add("⚠️ Unsupported attachments")
     if curr_node.fetch_parent_failed or (
-        curr_node.parent_msg is not None
-        and messages_len == context.max_messages
+        curr_node.parent_msg is not None and messages_len == context.max_messages
     ):
         user_warnings.add(
             f"⚠️ Only using last {messages_len} message"

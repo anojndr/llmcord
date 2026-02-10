@@ -1,4 +1,5 @@
 """Permissions handling for llmcord."""
+
 import discord
 
 from llmcord.core.config import (

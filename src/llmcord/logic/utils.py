@@ -1,4 +1,5 @@
 """Merged utility functions and patches."""
+
 import json
 import logging
 import re
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Twscrape Patch (formerly logic/utils.py)
 # =============================================================================
+
 
 def script_url(k: str, v: str) -> str:
     """Generate Twitter script URL."""
@@ -157,8 +159,7 @@ def build_node_text_parts(
     parts.extend(
         component.content
         for component in components
-        if component.type == discord.ComponentType.text_display
-        and component.content
+        if component.type == discord.ComponentType.text_display and component.content
     )
 
     # Add text attachments

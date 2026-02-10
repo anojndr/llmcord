@@ -70,9 +70,7 @@ def _normalize_profile_config(config: dict[str, Any]) -> dict[str, Any]:
         return config
 
     if not all(profile in config for profile in PROFILE_NAMES):
-        message = (
-            "Both 'main' and 'test' profiles must be defined in config.yaml."
-        )
+        message = "Both 'main' and 'test' profiles must be defined in config.yaml."
         raise ProfileConfigError(message)
 
     profile_name = config.get("profile") or "main"

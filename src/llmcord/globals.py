@@ -33,9 +33,9 @@ msg_nodes_lock = asyncio.Lock()
 # Initialize clients
 intents = discord.Intents.default()
 intents.message_content = True
-status_message = (
-    config.get("status_message") or "github.com/jakobdylanc/llmcord"
-)[:128]
+status_message = (config.get("status_message") or "github.com/jakobdylanc/llmcord")[
+    :128
+]
 activity = discord.CustomActivity(name=status_message)
 command_prefix = config.get("command_prefix") or "!"
 discord_bot = commands.Bot(
@@ -53,7 +53,6 @@ httpx_client = get_or_create_httpx_client(
 )
 twitter_proxy = config.get("twitter_proxy") or proxy_url
 twitter_api = API(proxy=twitter_proxy)
-
 
 
 if (

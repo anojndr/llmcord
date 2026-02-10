@@ -1,4 +1,5 @@
 """Utility functions for search service."""
+
 import base64
 import binascii
 import logging

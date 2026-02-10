@@ -1,4 +1,5 @@
 """Image extraction logic for LLM responses."""
+
 import base64
 import binascii
 import hashlib
@@ -8,7 +9,11 @@ import re
 
 import discord
 
-from llmcord.logic.generation_types import GeneratedImage, GenerationContext, GenerationState
+from llmcord.logic.generation_types import (
+    GeneratedImage,
+    GenerationContext,
+    GenerationState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +193,7 @@ async def send_generated_images(
         len(state.generated_images),
         context.new_msg.id,
     )
-    reply_target = (
-        state.response_msgs[-1] if state.response_msgs else context.new_msg
-    )
+    reply_target = state.response_msgs[-1] if state.response_msgs else context.new_msg
     batch_size = 10
     for index in range(0, len(state.generated_images), batch_size):
         batch = state.generated_images[index : index + batch_size]
@@ -217,10 +220,7 @@ async def send_generated_images(
             )
         except Exception:
             logger.exception(
-                (
-                    "Failed to send Gemini-generated image batch %s-%s for "
-                    "message %s"
-                ),
+                ("Failed to send Gemini-generated image batch %s-%s for message %s"),
                 index,
                 index + len(batch) - 1,
                 context.new_msg.id,

@@ -1,4 +1,5 @@
 """Asset extraction and handling (PDFs, Tweets, YouTube, Reddit)."""
+
 import asyncio
 import io
 import logging
@@ -266,9 +267,7 @@ async def fetch_tweet_with_replies(
                 for reply in replies:
                     if reply and reply.user:
                         reply_username = reply.user.username or "unknown"
-                        tweet_text += (
-                            f"\n- @{reply_username}: {_get_tweet_text(reply)}"
-                        )
+                        tweet_text += f"\n- @{reply_username}: {_get_tweet_text(reply)}"
     except (asyncio.TimeoutError, RuntimeError, ValueError) as exc:
         logger.debug("Failed to fetch tweet %s: %s", tweet_id, exc)
         return None
@@ -450,6 +449,7 @@ async def extract_youtube_transcript(
     proxy_url: str | None = None,
 ) -> str | None:
     """Fetch YouTube transcript and metadata."""
+
     async def _fetch(
         client: httpx.AsyncClient,
         p_url: str | None,
@@ -762,7 +762,8 @@ async def extract_reddit_post_json(
                 post_text += f"\nLink: {url}"
 
             return post_text + _format_reddit_comments(
-                comments_listing, max_comments,
+                comments_listing,
+                max_comments,
             )
         except httpx.HTTPError as exc:
             # Proxy failed (likely blocked by Reddit) - fallback to direct
@@ -776,7 +777,9 @@ async def extract_reddit_post_json(
     # Direct connection (no proxy) - either as primary or fallback
     try:
         return await _extract_reddit_json_direct(
-            original_url, httpx_client, max_comments,
+            original_url,
+            httpx_client,
+            max_comments,
         )
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
         logger.debug(
@@ -814,13 +817,9 @@ async def extract_reddit_post_praw(
         # Safely access attributes with defaults
         title = getattr(submission, "title", "Untitled")
         subreddit_name = (
-            submission.subreddit.display_name
-            if submission.subreddit
-            else "unknown"
+            submission.subreddit.display_name if submission.subreddit else "unknown"
         )
-        author_name = (
-            submission.author.name if submission.author else "[deleted]"
-        )
+        author_name = submission.author.name if submission.author else "[deleted]"
         selftext = getattr(submission, "selftext", "") or ""
 
         post_text = (
@@ -829,19 +828,17 @@ async def extract_reddit_post_praw(
         )
 
         if not getattr(submission, "is_self", True) and getattr(
-            submission, "url", None,
+            submission,
+            "url",
+            None,
         ):
             post_text += f"\nLink: {submission.url}"
 
         submission.comment_sort = "top"
         await submission.comments()
-        comments_list = (
-            submission.comments.list() if submission.comments else []
-        )
+        comments_list = submission.comments.list() if submission.comments else []
         top_comments = (
-            comments_list
-            if max_comments is None
-            else comments_list[:max_comments]
+            comments_list if max_comments is None else comments_list[:max_comments]
         )
 
         if top_comments:
@@ -849,9 +846,7 @@ async def extract_reddit_post_praw(
             for comment in top_comments:
                 if isinstance(comment, asyncpraw.models.MoreComments):
                     continue
-                comment_author = (
-                    comment.author.name if comment.author else "[deleted]"
-                )
+                comment_author = comment.author.name if comment.author else "[deleted]"
                 comment_body = getattr(comment, "body", "") or ""
                 post_text += f"\n- u/{comment_author}: {comment_body}"
 
@@ -922,7 +917,9 @@ async def extract_reddit_post(
                     post_url = post_url.split("?")[0]
             except httpx.HTTPError as exc:
                 logger.debug(
-                    "Failed to resolve Reddit share URL %s: %s", post_url, exc,
+                    "Failed to resolve Reddit share URL %s: %s",
+                    post_url,
+                    exc,
                 )
                 return None
 
@@ -941,4 +938,3 @@ async def extract_reddit_post(
         proxy_url=proxy_url,
         max_comments=max_comments,
     )
-

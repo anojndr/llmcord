@@ -103,14 +103,11 @@ def _apply_system_prompt(
 
     date_str, time_str = get_current_datetime_strings()
     formatted_prompt = (
-        system_prompt.replace("{date}", date_str)
-        .replace("{time}", time_str)
-        .strip()
+        system_prompt.replace("{date}", date_str).replace("{time}", time_str).strip()
     )
     if accept_usernames:
         formatted_prompt += (
-            "\n\nUser's names are their Discord IDs and should be typed as "
-            "'<@ID>'."
+            "\n\nUser's names are their Discord IDs and should be typed as '<@ID>'."
         )
     messages.append({"role": "system", "content": formatted_prompt})
 

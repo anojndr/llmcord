@@ -1,4 +1,5 @@
 """Data types for generation logic."""
+
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 

@@ -1,4 +1,5 @@
 """User preferences management."""
+
 from __future__ import annotations
 
 import logging
@@ -83,10 +84,7 @@ class UserPreferencesMixin:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            (
-                "SELECT model FROM user_search_decider_preferences "
-                "WHERE user_id = ?"
-            ),
+            ("SELECT model FROM user_search_decider_preferences WHERE user_id = ?"),
             (str(user_id),),
         )
         result = cursor.fetchone()
@@ -144,10 +142,7 @@ class UserPreferencesMixin:
         conn.commit()
         self._sync()
         logger.info(
-            (
-                "Reset all user search decider model preferences "
-                "(%d users affected)"
-            ),
+            ("Reset all user search decider model preferences (%d users affected)"),
             count,
         )
         return count

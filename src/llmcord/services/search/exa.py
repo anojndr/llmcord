@@ -1,4 +1,5 @@
 """Exa MCP search provider integration."""
+
 import json
 import logging
 
@@ -267,9 +268,7 @@ def _extract_exa_results(result: dict, query: str) -> dict:
 
     first_content = content[0]
     first_content_keys = (
-        first_content.keys()
-        if isinstance(first_content, dict)
-        else type(first_content)
+        first_content.keys() if isinstance(first_content, dict) else type(first_content)
     )
     logger.debug("Exa MCP first content item: %s", first_content_keys)
 
@@ -285,10 +284,7 @@ def _extract_exa_results(result: dict, query: str) -> dict:
         search_data = json.loads(text_content) if text_content else {}
     except json.JSONDecodeError:
         logger.info(
-            (
-                "Exa MCP returned text format, parsing structured text for "
-                "query '%s'"
-            ),
+            ("Exa MCP returned text format, parsing structured text for query '%s'"),
             query,
         )
         results = parse_exa_text_format(text_content)
@@ -370,10 +366,7 @@ async def exa_search(
                     and attempt < retries
                 ):
                     logger.warning(
-                        (
-                            "Exa MCP transient HTTP %s for query '%s', "
-                            "retrying (%s/%s)"
-                        ),
+                        ("Exa MCP transient HTTP %s for query '%s', retrying (%s/%s)"),
                         response.status_code,
                         query,
                         attempt + 1,
@@ -401,10 +394,7 @@ async def exa_search(
         except httpx.RequestError as exc:
             if attempt < retries:
                 logger.warning(
-                    (
-                        "Exa MCP connection error for query '%s', "
-                        "retrying (%s/%s): %s"
-                    ),
+                    ("Exa MCP connection error for query '%s', retrying (%s/%s): %s"),
                     query,
                     attempt + 1,
                     retries,

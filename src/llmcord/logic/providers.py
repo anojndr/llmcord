@@ -96,9 +96,7 @@ async def resolve_provider_settings(
     actual_model = override_model or model
     extra_headers = provider_config.get("extra_headers")
     extra_query = provider_config.get("extra_query")
-    extra_body = (provider_config.get("extra_body") or {}) | (
-        model_parameters or {}
-    )
+    extra_body = (provider_config.get("extra_body") or {}) | (model_parameters or {})
     extra_body = extra_body or None
 
     return ProviderSettings(

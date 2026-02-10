@@ -1,4 +1,5 @@
 """Tavily search provider integration."""
+
 import asyncio
 import importlib
 import json
@@ -124,10 +125,7 @@ async def tavily_search(
         )
         if not result.get("results"):
             logger.warning(
-                (
-                    "Tavily returned empty results for query '%s'. "
-                    "Full response: %s"
-                ),
+                ("Tavily returned empty results for query '%s'. Full response: %s"),
                 query,
                 result,
             )

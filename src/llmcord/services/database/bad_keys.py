@@ -1,4 +1,5 @@
 """Bad API keys tracking and rotation logic."""
+
 from __future__ import annotations
 
 import hashlib
@@ -168,9 +169,7 @@ class BadKeysMixin:
         bad_hashes = {row[0] for row in cursor.fetchall()}
 
         # Filter keys locally using the pre-fetched bad hashes
-        return [
-            key for key in all_keys if self._hash_key(key) not in bad_hashes
-        ]
+        return [key for key in all_keys if self._hash_key(key) not in bad_hashes]
 
     @_with_reconnect
     def reset_provider_keys_synced(self, provider: str) -> None:
@@ -359,10 +358,7 @@ class KeyRotator:
         # If all keys are exhausted, try resetting once
         if not self._good_keys and self._attempt_count >= len(self.all_keys):
             logger.warning(
-                (
-                    "All keys exhausted for '%s'. "
-                    "Resetting synced keys for retry..."
-                ),
+                ("All keys exhausted for '%s'. Resetting synced keys for retry..."),
                 self.provider,
             )
             self._db.reset_provider_keys_synced(self.provider)

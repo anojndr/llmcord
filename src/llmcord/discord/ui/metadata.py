@@ -1,4 +1,5 @@
 """Metadata and embedding utilities for UI components."""
+
 from collections.abc import Mapping, Sequence
 
 import discord
@@ -171,9 +172,7 @@ def add_chunked_embed_field(
             current_chunk = item
 
     if current_chunk:
-        field_name = (
-            f"{base_name} ({field_count})" if field_count > 1 else base_name
-        )
+        field_name = f"{base_name} ({field_count})" if field_count > 1 else base_name
         embed.add_field(name=field_name, value=current_chunk, inline=False)
 
 
@@ -203,7 +202,7 @@ def build_grounding_sources_embed(metadata: object) -> discord.Embed:
         sources = []
         for i, chunk in enumerate(chunks):
             if chunk.get("uri"):
-                sources.append(f"{i+1}. [{chunk['title']}]({chunk['uri']})")
+                sources.append(f"{i + 1}. [{chunk['title']}]({chunk['uri']})")
         add_chunked_embed_field(embed, sources, "Search Results")
 
     # Handle edge case where no content was added to the embed

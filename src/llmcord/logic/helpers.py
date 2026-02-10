@@ -1,4 +1,5 @@
 """Compatibility re-exports for logic utilities."""
+
 from llmcord.logic.utils import (
     _strip_trigger_prefix,
     append_search_to_content,

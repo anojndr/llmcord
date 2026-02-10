@@ -1,4 +1,5 @@
 """HTTP helper utilities for resilient requests."""
+
 from __future__ import annotations
 
 import asyncio
@@ -68,10 +69,7 @@ async def request_with_retries(
                 continue
             raise
 
-        if (
-            response.status_code in statuses
-            and attempt < retry_options.retries
-        ):
+        if response.status_code in statuses and attempt < retry_options.retries:
             context_suffix = f" for {log_context}" if log_context else ""
             logger.warning(
                 "Transient HTTP %s%s, retrying (%s/%s)",

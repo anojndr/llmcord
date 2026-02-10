@@ -188,10 +188,7 @@ async def reset_all_preferences_command(
     message_lines = [
         "✅ Successfully reset all user preferences:",
         f"• **Main model preferences**: {model_count} user(s) reset",
-        (
-            "• **Search decider model preferences**: "
-            f"{decider_count} user(s) reset"
-        ),
+        (f"• **Search decider model preferences**: {decider_count} user(s) reset"),
         "",
         "All users will now use the default models.",
     ]

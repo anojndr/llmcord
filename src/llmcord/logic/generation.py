@@ -1,4 +1,5 @@
 """LLM response generation logic."""
+
 import asyncio
 import logging
 import re
@@ -85,10 +86,7 @@ def _get_good_keys(provider: str, api_keys: list[str]) -> list[str]:
 
 def _reset_provider_keys(provider: str, api_keys: list[str]) -> list[str]:
     logger.warning(
-        (
-            "All API keys for provider '%s' (synced) are marked as bad. "
-            "Resetting..."
-        ),
+        ("All API keys for provider '%s' (synced) are marked as bad. Resetting..."),
         provider,
     )
     try:
@@ -167,7 +165,7 @@ async def _prune_response_messages(
     if len(state.response_msgs) <= len(state.response_contents):
         return
 
-    for msg in state.response_msgs[len(state.response_contents):]:
+    for msg in state.response_msgs[len(state.response_contents) :]:
         await msg.delete()
         if msg.id in context.msg_nodes:
             context.msg_nodes[msg.id].lock.release()
@@ -246,9 +244,7 @@ async def _trim_message_nodes(context: GenerationContext) -> None:
     if (num_nodes := len(context.msg_nodes)) <= MAX_MESSAGE_NODES:
         return
 
-    keys_to_remove = sorted(context.msg_nodes.keys())[
-        : num_nodes - MAX_MESSAGE_NODES
-    ]
+    keys_to_remove = sorted(context.msg_nodes.keys())[: num_nodes - MAX_MESSAGE_NODES]
     for msg_id in keys_to_remove:
         node = context.msg_nodes.get(msg_id)
         if node is not None:
@@ -341,9 +337,7 @@ async def _get_stream(
     *,
     context: GenerationContext,
     stream_config: StreamConfig,
-) -> AsyncIterator[
-    tuple[str, object | None, object | None, list[GeneratedImage]]
-]:
+) -> AsyncIterator[tuple[str, object | None, object | None, list[GeneratedImage]]]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
     enable_grounding = not re.search(r"https?://", context.new_msg.content)
 
@@ -382,9 +376,7 @@ async def _get_stream(
         )
 
         if chunk_finish_reason and is_gemini_model(stream_config.actual_model):
-            chunk_attrs = [
-                attr for attr in dir(chunk) if not attr.startswith("_")
-            ]
+            chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
             logger.debug("Gemini chunk finish - attributes: %s", chunk_attrs)
             if hasattr(chunk, "model_extra") and chunk.model_extra:
                 logger.info(
@@ -468,14 +460,12 @@ def _handle_generation_exception(
         )
     elif is_empty_response:
         special_case_message = (
-            "Empty response for provider '%s'; removing key and trying "
-            "remaining keys."
+            "Empty response for provider '%s'; removing key and trying remaining keys."
         )
 
     error_str = str(error).lower()
     is_developer_instruction_error = (
-        "developer instruction" in error_str
-        and "not enabled" in error_str
+        "developer instruction" in error_str and "not enabled" in error_str
     )
     key_error_patterns = [
         "unauthorized",
@@ -746,9 +736,7 @@ async def _run_generation_loop(
     response_msgs = state.response_msgs
 
     async def reply_helper(**reply_kwargs: object) -> None:
-        reply_target = (
-            context.new_msg if not response_msgs else response_msgs[-1]
-        )
+        reply_target = context.new_msg if not response_msgs else response_msgs[-1]
         response_msg = await reply_target.reply(**reply_kwargs)
         response_msgs.append(response_msg)
 
