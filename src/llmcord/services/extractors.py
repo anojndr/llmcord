@@ -345,6 +345,73 @@ async def process_attachments(
     return processed
 
 
+async def extract_url_content(
+    url: str,
+    httpx_client: httpx.AsyncClient,
+    *,
+    proxy_url: str | None = None,
+    max_chars: int = 2000,
+) -> str | None:
+    """Extract text content from a URL."""
+    # Skip specialized domains that we handle elsewhere or that don't scrape well
+    if any(
+        domain in url.lower()
+        for domain in ["twitter.com", "x.com", "youtube.com", "youtu.be"]
+    ):
+        return None
+
+    try:
+        response = await request_with_optional_proxy(
+            lambda client: client.get(
+                url,
+                headers=BROWSER_HEADERS,
+                follow_redirects=True,
+                timeout=20,
+            ),
+            httpx_client,
+            proxy_url,
+            log_context=f"URL content extraction {url}",
+        )
+        if response.status_code != httpx.codes.OK:
+            return None
+
+        soup = BeautifulSoup(response.text, "lxml")
+        for element in soup(["script", "style", "nav", "footer", "header"]):
+            element.decompose()
+
+        text = soup.get_text(separator=" ", strip=True)
+        # Clean up whitespace
+        text = re.sub(r"\s+", " ", text)
+        return text[:max_chars]
+    except (httpx.HTTPError, RuntimeError, ValueError):
+        return None
+
+
+async def _fetch_twitter_results(
+    twitter_urls: list[str],
+    twitter_api: TwitterApiProtocol,
+    max_tweet_replies: int,
+) -> list[str]:
+    """Fetch content for a list of Twitter URLs."""
+    twitter_content = []
+    for twitter_url in twitter_urls:
+        tweet_id_match = re.search(
+            r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
+            twitter_url,
+        )
+        if tweet_id_match:
+            tweet_text = await fetch_tweet_with_replies(
+                twitter_api,
+                int(tweet_id_match.group(1)),
+                max_replies=max_tweet_replies,
+                include_url=True,
+                tweet_url=twitter_url,
+            )
+            if tweet_text:
+                twitter_content.append(tweet_text)
+    return twitter_content
+
+
 async def perform_yandex_lookup(
     image_url: str,
     httpx_client: httpx.AsyncClient,
@@ -357,6 +424,7 @@ async def perform_yandex_lookup(
     params = {
         "rpt": "imageview",
         "url": image_url,
+        "cbir_page": "sites",
     }
 
     try:
@@ -393,23 +461,55 @@ async def perform_yandex_lookup(
     sites_items = soup.select(".CbirSites-Item")
 
     if sites_items:
-        for item in sites_items:
+        # Limit to the first 10 items as requested.
+        items_to_process = sites_items[:10]
+        extraction_tasks = []
+        parsed_items = []
+
+        for item in items_to_process:
             title_el = item.select_one(".CbirSites-ItemTitle a")
             domain_el = item.select_one(".CbirSites-ItemDomain")
-            desc_el = item.select_one(
-                ".CbirSites-ItemDescription",
-            )
+            desc_el = item.select_one(".CbirSites-ItemDescription")
 
             title = title_el.get_text(strip=True) if title_el else "N/A"
             link = (
-                str(title_el["href"]) if title_el and title_el.has_attr("href") else "#"
+                str(title_el["href"])
+                if title_el and title_el.has_attr("href")
+                else None
             )
             domain = domain_el.get_text(strip=True) if domain_el else ""
             desc = desc_el.get_text(strip=True) if desc_el else ""
 
-            lens_results.append(
-                f"- [{title}]({link}) ({domain}) - {desc}",
+            parsed_items.append(
+                {
+                    "title": title,
+                    "link": link,
+                    "domain": domain,
+                    "desc": desc,
+                },
             )
+
+            if link:
+                extraction_tasks.append(
+                    extract_url_content(
+                        link,
+                        httpx_client,
+                        proxy_url=proxy_url,
+                    ),
+                )
+            else:
+                extraction_tasks.append(asyncio.sleep(0, result=None))
+
+        extracted_contents = await asyncio.gather(*extraction_tasks)
+
+        for data, content in zip(parsed_items, extracted_contents, strict=False):
+            link = data["link"] or "#"
+            result_line = (
+                f"- [{data['title']}]({link}) ({data['domain']}) - {data['desc']}"
+            )
+            if content:
+                result_line += f"\n  Content: {content}"
+            lens_results.append(result_line)
 
             # Check if the link is a Twitter/X URL and extract for later
             # processing.
@@ -419,23 +519,11 @@ async def perform_yandex_lookup(
             ):
                 twitter_urls_found.append(link)
 
-    twitter_content = []
-    if twitter_urls_found:
-        for twitter_url in twitter_urls_found:
-            tweet_id_match = re.search(
-                r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/([0-9]+)",
-                twitter_url,
-            )
-            if tweet_id_match:
-                tweet_text = await fetch_tweet_with_replies(
-                    twitter_api,
-                    int(tweet_id_match.group(1)),
-                    max_replies=max_tweet_replies,
-                    include_url=True,
-                    tweet_url=twitter_url,
-                )
-                if tweet_text:
-                    twitter_content.append(tweet_text)
+    twitter_content = await _fetch_twitter_results(
+        twitter_urls_found,
+        twitter_api,
+        max_tweet_replies,
+    )
 
     return lens_results, twitter_content
 

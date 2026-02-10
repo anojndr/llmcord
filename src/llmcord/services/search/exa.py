@@ -417,15 +417,17 @@ async def exa_search(
                         )
                         await wait_with_backoff(attempt)
                         continue
-                    
+
                     if client_type == "direct" and proxy_url:
                         logger.info(
                             "Exa MCP direct search failed, falling back to proxy: %s",
                             exc,
                         )
-                        break # Break retry loop to try next client (proxy)
-                    
-                    logger.exception("Exa MCP search error (%s) for query '%s'", client_type, query)
+                        break  # Break retry loop to try next client (proxy)
+
+                    logger.exception(
+                        "Exa MCP search error (%s) for query '%s'", client_type, query
+                    )
                     return {"error": f"{type(exc).__name__}: {exc}", "query": query}
                 except Exception as exc:
                     logger.exception("Exa MCP search error for query '%s'", query)

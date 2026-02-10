@@ -14,7 +14,7 @@ from llmcord.core.config import (
     get_or_create_httpx_client,
 )
 from llmcord.services.database import get_bad_keys_db
-from llmcord.services.http import request_with_optional_proxy, request_with_retries
+from llmcord.services.http import request_with_optional_proxy
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
 logger = logging.getLogger(__name__)

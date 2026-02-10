@@ -128,9 +128,12 @@ def _get_message_limits(
     max_tweet_replies = config.get("max_tweet_replies", 50)
     enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
     proxy_url = config.get("proxy_url")
-    youtube_transcript_proxy = config.get(
-        "youtube_transcript_proxy",
-    ) or proxy_url
+    youtube_transcript_proxy = (
+        config.get(
+            "youtube_transcript_proxy",
+        )
+        or proxy_url
+    )
     reddit_proxy = config.get("reddit_proxy") or proxy_url
     return (
         max_text,
