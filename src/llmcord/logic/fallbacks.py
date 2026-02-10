@@ -2,6 +2,8 @@
 
 import logging
 
+from typing import Any
+
 from llmcord.core.config import ensure_list
 from llmcord.logic.generation_types import FallbackState
 
@@ -78,10 +80,15 @@ def get_next_fallback(
 def apply_fallback_config(
     *,
     next_fallback: tuple[str, str, str],
-    config: dict[str, object],
+    config: dict[str, Any],
 ) -> tuple[str, str, str, str | None, list[str]]:
     provider, model, provider_slash_model = next_fallback
-    provider_config = config.get("providers", {}).get(provider, {})
+    providers = config.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+    provider_config = providers.get(provider)
+    if not isinstance(provider_config, dict):
+        provider_config = {}
     base_url = provider_config.get("base_url")
     api_keys = ensure_list(provider_config.get("api_key"))
     return provider, model, provider_slash_model, base_url, api_keys

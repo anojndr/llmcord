@@ -33,12 +33,15 @@ logger = logging.getLogger(__name__)
 )
 async def model_command(interaction: discord.Interaction, model: str) -> None:
     """Handle the /model command."""
-    await interaction.response.defer(
-        ephemeral=(interaction.channel.type == discord.ChannelType.private),
-    )
+    ephemeral = False
+    if interaction.channel and interaction.channel.type == discord.ChannelType.private:
+        ephemeral = True
+    await interaction.response.defer(ephemeral=ephemeral)
 
     # Check if this channel has a locked model
     channel_id = interaction.channel_id
+    if channel_id is None:
+        return
     locked_model = get_channel_locked_model(channel_id)
     if locked_model:
         await interaction.followup.send(
@@ -102,9 +105,10 @@ async def search_decider_model_command(
     model: str,
 ) -> None:
     """Handle the /searchdecidermodel command."""
-    await interaction.response.defer(
-        ephemeral=(interaction.channel.type == discord.ChannelType.private),
-    )
+    ephemeral = False
+    if interaction.channel and interaction.channel.type == discord.ChannelType.private:
+        ephemeral = True
+    await interaction.response.defer(ephemeral=ephemeral)
 
     db = get_bad_keys_db()
     config_data = config_module.get_config()

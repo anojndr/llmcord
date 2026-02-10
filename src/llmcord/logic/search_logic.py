@@ -1,7 +1,7 @@
 """Web search and research command orchestration."""
 
 import logging
-from collections.abc import Callable
+from typing import Any, Callable, cast
 from dataclasses import dataclass
 
 import discord
@@ -74,12 +74,12 @@ class SearchResolutionContext:
 
 
 def resolve_web_search_provider(
-    config: dict[str, object],
+    config: dict[str, Any],
     tavily_api_keys: list[str],
     exa_mcp_url: str,
 ) -> tuple[str, bool]:
     """Determine the web search provider and availability."""
-    web_search_provider = config.get("web_search_provider", "tavily")
+    web_search_provider = str(config.get("web_search_provider", "tavily"))
     web_search_available = False
     if (web_search_provider == "tavily" and tavily_api_keys) or (
         web_search_provider == "exa" and exa_mcp_url
@@ -198,7 +198,7 @@ async def run_research_command(
     for msg in context.messages:
         if msg.get("role") == "user":
             msg["content"] = replace_content_text(
-                msg.get("content", ""),
+                cast(str | list[dict[str, object]], msg.get("content", "")),
                 context.research_query,
             )
             break
@@ -213,14 +213,14 @@ async def run_research_command(
         for msg in context.messages:
             if msg.get("role") == "user":
                 msg["content"] = append_search_to_content(
-                    msg.get("content", ""),
+                    cast(str | list[dict[str, object]], msg.get("content", "")),
                     research_results,
                 )
 
                 logger.info("Tavily research results appended to user message")
 
                 get_bad_keys_db().save_message_search_data(
-                    context.new_msg.id,
+                    str(context.new_msg.id),
                     research_results,
                     search_metadata,
                 )
@@ -250,15 +250,13 @@ async def maybe_run_web_search(
         db = get_bad_keys_db()
         user_id = str(context.new_msg.author.id)
         user_decider_model = db.get_user_search_decider_model(user_id)
-        default_decider = context.config.get(
+        default_decider = str(context.config.get(
             "web_search_decider_model",
             "gemini/gemini-3-flash-preview",
-        )
+        ))
 
-        if user_decider_model and user_decider_model in context.config.get(
-            "models",
-            {},
-        ):
+        models_config = cast(dict[str, Any], context.config.get("models", {}))
+        if user_decider_model and user_decider_model in models_config:
             decider_model_str = user_decider_model
         else:
             decider_model_str = default_decider
@@ -269,7 +267,7 @@ async def maybe_run_web_search(
             else ("gemini", decider_model_str)
         )
 
-        decider_provider_config = context.config.get("providers", {}).get(
+        decider_provider_config = cast(dict[str, Any], context.config.get("providers", {})).get(
             decider_provider,
             {},
         )
@@ -298,9 +296,11 @@ async def maybe_run_web_search(
                     queries,
                 )
 
-                search_depth = context.config.get(
-                    "tavily_search_depth",
-                    "advanced",
+                search_depth = str(
+                    context.config.get(
+                        "tavily_search_depth",
+                        "advanced",
+                    ),
                 )
                 effective_exa_mcp_url = context.exa_mcp_url or EXA_MCP_URL
                 search_options = WebSearchOptions(
@@ -320,7 +320,10 @@ async def maybe_run_web_search(
                     for msg in context.messages:
                         if msg.get("role") == "user":
                             msg["content"] = append_search_to_content(
-                                msg.get("content", ""),
+                                cast(
+                                    str | list[dict[str, object]],
+                                    msg.get("content", ""),
+                                ),
                                 search_results,
                             )
 
@@ -329,7 +332,7 @@ async def maybe_run_web_search(
                             )
 
                             get_bad_keys_db().save_message_search_data(
-                                context.new_msg.id,
+                                str(context.new_msg.id),
                                 search_results,
                                 search_metadata,
                             )

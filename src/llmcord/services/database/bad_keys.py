@@ -8,13 +8,16 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
+    from .core import DatabaseProtocol as _Base
+else:
+    _Base = object
 
 from llmcord.services.database.core import _with_reconnect
 
 logger = logging.getLogger(__name__)
 
 
-class BadKeysMixin:
+class BadKeysMixin(_Base):
     """Mixin for bad keys tracking."""
 
     def _init_bad_keys_tables(self) -> None:
@@ -270,9 +273,9 @@ class KeyRotator:
         self.provider = provider
         self.all_keys = all_keys.copy()
         self.max_retries_multiplier = max_retries_multiplier
-        self._current_key = None
+        self._current_key: str | None = None
         self._attempt_count = 0
-        self._good_keys = None
+        self._good_keys: list[str] | None = None
         self._db = db
 
     def _init_good_keys(self) -> None:
@@ -352,11 +355,15 @@ class KeyRotator:
         )
 
         # Remove the bad key from good_keys list for this session
-        if self._current_key in self._good_keys:
+        if self._good_keys is not None and self._current_key in self._good_keys:
             self._good_keys.remove(self._current_key)
 
         # If all keys are exhausted, try resetting once
-        if not self._good_keys and self._attempt_count >= len(self.all_keys):
+        if (
+            self._good_keys is not None
+            and not self._good_keys
+            and self._attempt_count >= len(self.all_keys)
+        ):
             logger.warning(
                 ("All keys exhausted for '%s'. Resetting synced keys for retry..."),
                 self.provider,
@@ -369,7 +376,7 @@ class KeyRotator:
     def get_good_key_count(self) -> int:
         """Get the current count of good keys."""
         self._init_good_keys()
-        return len(self._good_keys)
+        return len(self._good_keys or [])
 
     def get_total_key_count(self) -> int:
         """Get the total count of all keys."""

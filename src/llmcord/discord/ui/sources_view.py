@@ -1,6 +1,7 @@
 """Source related views and buttons."""
 
 from collections.abc import Mapping
+from typing import Any
 
 import discord
 
@@ -31,7 +32,7 @@ class SourceButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         """Show sources in an ephemeral embed."""
         metadata = self.metadata
-        if metadata is None:
+        if metadata is None and interaction.message:
             response_data = get_response_data(interaction.message.id)
             metadata = response_data.grounding_metadata
 
@@ -70,8 +71,8 @@ class TavilySourcesView(discord.ui.View):
         self.provider = self.search_metadata.get("provider", "tavily")
 
         # Prepare source entries with defensive defaults
-        self.queries = self.search_metadata.get("queries") or []
-        self.urls = self.search_metadata.get("urls") or []
+        self.queries: list[str] = list(self.search_metadata.get("queries") or [])  # type: ignore
+        self.urls: list[dict[str, Any]] = list(self.search_metadata.get("urls") or [])  # type: ignore
         self.sources = self._prepare_sources()
         self.pages = self._paginate_sources()
         self.total_pages = len(self.pages)
@@ -96,8 +97,8 @@ class TavilySourcesView(discord.ui.View):
         if not self.sources:
             return [[]]
 
-        pages = []
-        current_page = []
+        pages: list[list[str]] = []
+        current_page: list[str] = []
         current_size = 0
 
         # Account for queries field size (on every page)
@@ -241,7 +242,7 @@ class TavilySourcesView(discord.ui.View):
 class GoToPageModal(discord.ui.Modal, title="Go to Page"):
     """Modal for entering a specific page number."""
 
-    page_input = discord.ui.TextInput(
+    page_input: discord.ui.TextInput = discord.ui.TextInput(
         label="Page Number",
         placeholder="Enter page number...",
         required=True,
@@ -303,7 +304,7 @@ class TavilySourceButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         """Show web-search sources in a paginated embed."""
         search_metadata = self.search_metadata
-        if search_metadata is None:
+        if search_metadata is None and interaction.message:
             response_data = get_response_data(interaction.message.id)
             search_metadata = response_data.tavily_metadata
 
@@ -345,7 +346,7 @@ class SourceView(discord.ui.View):
     ) -> None:
         """Show sources for legacy responses."""
         metadata = self.metadata
-        if metadata is None:
+        if metadata is None and interaction.message:
             response_data = get_response_data(interaction.message.id)
             metadata = response_data.grounding_metadata
 

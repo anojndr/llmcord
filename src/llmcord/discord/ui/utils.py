@@ -20,7 +20,7 @@ from llmcord.services.database import get_bad_keys_db
 LOGGER = logging.getLogger(__name__)
 
 # Shared httpx client for text.is uploads - uses factory pattern for DRY
-_textis_client_holder: list[httpx.AsyncClient] = []
+_textis_client_holder: list[httpx.AsyncClient | None] = []
 
 RetryHandler = Callable[[discord.Interaction, int, int], Awaitable[None]]
 _retry_handler_holder: list[RetryHandler | None] = [None]

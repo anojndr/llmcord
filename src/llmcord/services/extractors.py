@@ -5,16 +5,16 @@ import io
 import logging
 import re
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Any, Protocol
 
-import asyncpraw
-import asyncprawcore
+import asyncpraw  # type: ignore[import-untyped]
+import asyncprawcore  # type: ignore[import-untyped]
 import discord
 import httpx
-import pymupdf4llm
+import pymupdf4llm  # type: ignore[import-untyped]
 from bs4 import BeautifulSoup
 from PIL import Image
-from twscrape import gather
+from twscrape import gather  # type: ignore[import-untyped]
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
     YouTubeTranscriptApiException,
@@ -28,7 +28,7 @@ from llmcord.services.http import request_with_retries
 logger = logging.getLogger(__name__)
 
 try:
-    import fitz  # PyMuPDF
+    import fitz  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - optional dependency
     fitz = None  # type: ignore[assignment]
 
@@ -151,12 +151,12 @@ _PDF_IMAGE_MIME_MAP: dict[str, str] = {
 
 
 def _extract_single_pdf_image(
-    doc: object,
+    doc: Any,
     xref: int,
 ) -> tuple[str, bytes] | None:
     """Extract a single image from a PDF document by xref."""
     try:
-        extracted = doc.extract_image(xref)  # type: ignore[union-attr]
+        extracted = doc.extract_image(xref)
     except (RuntimeError, ValueError):
         return None
     if not extracted or not extracted.get("image"):
@@ -393,7 +393,7 @@ async def perform_yandex_lookup(
             )
 
             title = title_el.get_text(strip=True) if title_el else "N/A"
-            link = title_el["href"] if title_el else "#"
+            link = str(title_el["href"]) if title_el and title_el.has_attr("href") else "#"
             domain = domain_el.get_text(strip=True) if domain_el else ""
             desc = desc_el.get_text(strip=True) if desc_el else ""
 
@@ -403,7 +403,7 @@ async def perform_yandex_lookup(
 
             # Check if the link is a Twitter/X URL and extract for later
             # processing.
-            if re.search(
+            if link and re.search(
                 r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
                 link,
             ):

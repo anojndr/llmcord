@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 @discord_bot.event
 async def on_ready() -> None:
     """Log readiness and sync slash commands."""
+    if not discord_bot.user:
+        return
+
     # Generate bot invite link using the bot's application ID
     client_id = discord_bot.user.id
     invite_url = (

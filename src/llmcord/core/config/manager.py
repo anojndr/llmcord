@@ -1,6 +1,7 @@
 """Configuration manager for loading and caching config."""
 
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -152,25 +153,27 @@ def clear_config_cache() -> None:
     _CONFIG_STATE.check_time = 0
 
 
-def ensure_list(value: str | list[str] | None) -> list[str]:
+def ensure_list(value: str | Iterable[str] | None) -> list[str]:
     """Convert a value to a list if it isn't one already.
 
     This is commonly needed for API keys which may be configured as either
     a single string or a list of strings.
 
     Args:
-        value: A string, list, or None.
+        value: A string, iterable of strings, or None.
 
     Returns:
         - If value is None: empty list.
         - If value is a string: single-element list containing that string.
-        - If value is already a list: return as-is.
+        - If value is already a list or other iterable: return as a list.
 
     Examples:
         >>> ensure_list("key123")
         ['key123']
         >>> ensure_list(["key1", "key2"])
         ['key1', 'key2']
+        >>> ensure_list(("key1",))
+        ['key1']
         >>> ensure_list(None)
         []
 

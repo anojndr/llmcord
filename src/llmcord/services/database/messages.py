@@ -6,9 +6,14 @@ import contextlib
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import libsql
+
+if TYPE_CHECKING:
+    from .core import DatabaseProtocol as _Base
+else:
+    _Base = object
 
 logger = logging.getLogger(__name__)
 LIBSQL_ERROR = getattr(
@@ -29,7 +34,7 @@ class MessageResponsePayload:
     tavily_metadata: dict[str, Any] | None = None
 
 
-class MessageDataMixin:
+class MessageDataMixin(_Base):
     """Mixin for message data storage."""
 
     def _init_message_tables(self) -> None:

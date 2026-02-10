@@ -184,8 +184,8 @@ async def _parse_sse_response(response: httpx.Response, query: str) -> dict:
 
 async def _parse_json_response(response: httpx.Response, query: str) -> dict:
     """Parse JSON response body into a dict."""
-    response_text = await response.aread()
-    response_text = response_text.decode("utf-8")
+    response_bytes = await response.aread()
+    response_text = response_bytes.decode("utf-8")
 
     if not response_text:
         logger.warning(
@@ -212,8 +212,8 @@ async def _parse_exa_http_response(
     logger.info("Exa MCP response status: %s", response.status_code)
 
     if response.status_code != HTTP_OK:
-        error_text = await response.aread()
-        error_text = error_text.decode("utf-8", errors="replace")
+        error_bytes = await response.aread()
+        error_text = error_bytes.decode("utf-8", errors="replace")
         error_text = error_text[:MAX_ERROR_CHARS]
         logger.error(
             "Exa MCP HTTP error for query '%s': %s - %s",

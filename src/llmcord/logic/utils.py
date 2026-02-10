@@ -9,10 +9,10 @@ from typing import Protocol
 
 import discord
 import tiktoken
-from twscrape import xclid
+from twscrape import xclid  # type: ignore[import-untyped]
 
 try:
-    import pymupdf.layout as pymupdf_layout
+    import pymupdf.layout as pymupdf_layout  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - optional dependency
     pymupdf_layout = None  # type: ignore[assignment]
 
@@ -63,6 +63,7 @@ xclid.get_scripts_list = patched_get_scripts_list
 
 # Pre-load tiktoken encoding at module load time to avoid first-message delay
 # This shifts the ~1-2s loading cost from first message to bot startup
+_tiktoken_encoding: tiktoken.Encoding | None
 try:
     _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
 except (KeyError, RuntimeError, ValueError):
@@ -260,12 +261,16 @@ def count_conversation_tokens(messages: list[dict[str, object]]) -> int:
                 # For multimodal content, count tokens in text parts only
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
-                        total_tokens += len(enc.encode(part.get("text", "")))
+                        text = part.get("text", "")
+                        if isinstance(text, str):
+                            total_tokens += len(enc.encode(text))
             elif isinstance(content, str):
                 total_tokens += len(enc.encode(content))
 
             # Count role tokens (approximation)
-            total_tokens += len(enc.encode(msg.get("role", "")))
+            role = msg.get("role", "")
+            if isinstance(role, str):
+                total_tokens += len(enc.encode(role))
     except (AttributeError, RuntimeError, TypeError, ValueError):
         return 0
     else:

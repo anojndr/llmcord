@@ -219,15 +219,14 @@ async def perform_web_search(
         return "", {}
 
     opts = options or WebSearchOptions()
-
-    if opts.web_search_provider == "tavily" and not api_keys:
-        logger.warning("Tavily requires API keys but none provided")
-        return "", {}
-
     db = get_bad_keys_db()
     provider_name = opts.web_search_provider.capitalize()
 
     if opts.web_search_provider == "tavily":
+        if not api_keys:
+            logger.warning("Tavily requires API keys but none provided")
+            return "", {}
+
         results = await _run_tavily_searches(
             queries,
             api_keys,

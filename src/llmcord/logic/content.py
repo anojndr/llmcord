@@ -63,7 +63,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
 
     cleaned_content = cleaned_content[10:].strip()
     _, _, cached_lens_results = get_bad_keys_db().get_message_search_data(
-        context.curr_msg.id,
+        str(context.curr_msg.id),
     )
     if cached_lens_results:
         cleaned_content = cleaned_content + cached_lens_results
@@ -106,7 +106,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
 
             context.curr_node.lens_results = result_text
             get_bad_keys_db().save_message_search_data(
-                context.curr_msg.id,
+                str(context.curr_msg.id),
                 lens_results=result_text,
             )
             logger.info(
@@ -163,7 +163,11 @@ async def _extract_pdf_texts(
     if not pdf_attachments:
         return []
 
-    pdf_extraction_tasks = [extract_pdf_text(att["content"]) for att in pdf_attachments]
+    pdf_extraction_tasks = [
+        extract_pdf_text(att["content"])
+        for att in pdf_attachments
+        if isinstance(att["content"], bytes)
+    ]
     pdf_results = await asyncio.gather(*pdf_extraction_tasks)
 
     pdf_texts: list[str] = []
@@ -199,7 +203,11 @@ async def extract_pdf_images_for_model(
     if not pdf_attachments:
         return []
 
-    extraction_tasks = [extract_pdf_images(att["content"]) for att in pdf_attachments]
+    extraction_tasks = [
+        extract_pdf_images(att["content"])
+        for att in pdf_attachments
+        if isinstance(att["content"], bytes)
+    ]
     all_results = await asyncio.gather(*extraction_tasks)
 
     image_dicts: list[dict[str, object]] = []
@@ -301,6 +309,8 @@ def is_googlelens_query(
     discord_bot: discord.Client,
 ) -> bool:
     """Check if the message is a Google Lens query."""
+    if not discord_bot.user:
+        return False
     content_for_lens_check = (
         new_msg.content.lower().removeprefix(discord_bot.user.mention.lower()).strip()
     )

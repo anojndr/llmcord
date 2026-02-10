@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .core import DatabaseProtocol as _Base
+else:
+    _Base = object
 
 logger = logging.getLogger(__name__)
 
 
-class UserPreferencesMixin:
+class UserPreferencesMixin(_Base):
     """Mixin for user preference storage."""
 
     def _init_user_tables(self) -> None:

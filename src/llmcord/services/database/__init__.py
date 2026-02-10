@@ -69,18 +69,21 @@ def init_bad_keys_db(
     auth_token: str | None = None,
 ) -> BadKeysDB:
     """Initialize the global bad keys database instance."""
-    _bad_keys_state["instance"] = BadKeysDB(
+    instance = BadKeysDB(
         db_url=db_url,
         auth_token=auth_token,
     )
-    return _bad_keys_state["instance"]
+    _bad_keys_state["instance"] = instance
+    return instance
 
 
 def get_bad_keys_db() -> BadKeysDB:
     """Get the global bad keys database instance, initializing if needed."""
-    if _bad_keys_state["instance"] is None:
-        _bad_keys_state["instance"] = BadKeysDB()
-    return _bad_keys_state["instance"]
+    instance = _bad_keys_state["instance"]
+    if instance is None:
+        instance = BadKeysDB()
+        _bad_keys_state["instance"] = instance
+    return instance
 
 
 __all__ = [

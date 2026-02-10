@@ -4,6 +4,7 @@ import logging
 import re
 from base64 import b64encode
 from dataclasses import dataclass
+from typing import Any, cast
 
 import discord
 import httpx
@@ -61,7 +62,7 @@ async def build_messages(
     """Build the list of messages for the LLM."""
     messages: list[dict[str, object]] = []
     user_warnings: set[str] = set()
-    curr_msg = context.new_msg
+    curr_msg: discord.Message | None = context.new_msg
 
     while curr_msg is not None and len(messages) < context.max_messages:
         curr_node = context.msg_nodes.setdefault(curr_msg.id, MsgNode())
@@ -82,7 +83,7 @@ async def build_messages(
             )
             if curr_node.search_results and curr_node.role == "user":
                 content = append_search_to_content(
-                    content,
+                    cast(str | list[dict[str, object]], content),
                     curr_node.search_results,
                 )
 
@@ -156,13 +157,13 @@ async def _populate_node_if_needed(
             "type": "image_url",
             "image_url": {
                 "url": (
-                    f"data:{att['content_type']};base64,"
-                    f"{b64encode(att['content']).decode('utf-8')}"
+                    f"data:{str(att['content_type'])};base64,"
+                    f"{b64encode(att['content'] if isinstance(att['content'], bytes) else b'').decode('utf-8')}"
                 ),
             },
         }
         for att in processed_attachments
-        if att["content_type"] and att["content_type"].startswith("image")
+        if att["content_type"] and str(att["content_type"]).startswith("image")
     ]
 
     curr_node.raw_attachments = [
@@ -236,10 +237,13 @@ def _build_content_payload(
     gemini_file_attachments: list[dict[str, object]] = []
     if is_gemini_model(actual_model) and curr_node.raw_attachments:
         for att in curr_node.raw_attachments:
-            if att["content_type"].startswith(("audio", "video")) or (
+            if str(att["content_type"]).startswith(("audio", "video")) or (
                 att["content_type"] == "application/pdf"
             ):
-                encoded_data = b64encode(att["content"]).decode("utf-8")
+                content_bytes = att["content"]
+                if not isinstance(content_bytes, bytes):
+                    continue
+                encoded_data = b64encode(content_bytes).decode("utf-8")
                 file_data = f"data:{att['content_type']};base64,{encoded_data}"
                 gemini_file_attachments.append(
                     {"type": "file", "file": {"file_data": file_data}},
@@ -250,8 +254,8 @@ def _build_content_payload(
 
     if has_images or has_gemini_files:
         content: list[dict[str, object]] = []
-        if curr_node.text[:max_text]:
-            content.append({"type": "text", "text": curr_node.text[:max_text]})
+        if (curr_node.text or "")[:max_text]:
+            content.append({"type": "text", "text": (curr_node.text or "")[:max_text]})
         content.extend(curr_node.images[:max_images])
         content.extend(gemini_file_attachments)
         if gemini_file_attachments:
@@ -263,7 +267,7 @@ def _build_content_payload(
             return [{"type": "text", "text": "What is in this file?"}]
         return content
 
-    return curr_node.text[:max_text]
+    return (curr_node.text or "")[:max_text]
 
 
 def _build_initial_text(
@@ -272,15 +276,16 @@ def _build_initial_text(
     curr_msg: discord.Message,
     processed_attachments: list[dict[str, bytes | str | None]],
 ) -> str:
+    from llmcord.logic.utils import TextDisplayComponentProtocol
     return build_node_text_parts(
         cleaned_content,
         curr_msg.embeds,
-        curr_msg.components,
+        cast(list[TextDisplayComponentProtocol], curr_msg.components),
         text_attachments=[
-            att["text"]
+            str(att["text"])
             for att in processed_attachments
             if att["content_type"]
-            and att["content_type"].startswith("text")
+            and str(att["content_type"]).startswith("text")
             and att["text"]
         ],
     )
@@ -294,18 +299,19 @@ def _build_final_text(
     attachment_responses: list[httpx.Response],
     extra_parts: list[str],
 ) -> str:
+    from llmcord.logic.utils import TextDisplayComponentProtocol
     return build_node_text_parts(
         cleaned_content,
         curr_msg.embeds,
-        curr_msg.components,
+        cast(list[TextDisplayComponentProtocol], curr_msg.components),
         text_attachments=[
-            resp.text
+            str(resp.text)
             for att, resp in zip(
                 good_attachments,
                 attachment_responses,
                 strict=False,
             )
-            if att.content_type.startswith("text") and resp.text
+            if att.content_type and att.content_type.startswith("text") and resp.text
         ],
         extra_parts=extra_parts,
     )
@@ -318,6 +324,8 @@ async def _set_parent_message(
     discord_bot: discord.Client,
 ) -> None:
     try:
+        if not discord_bot.user:
+            return
         prev_msg_in_channel = None
         if (
             curr_msg.reference is None
@@ -333,6 +341,9 @@ async def _set_parent_message(
             ]
             prev_msg_in_channel = history[0] if history else None
 
+        is_dm = curr_msg.channel.type == discord.ChannelType.private
+        is_thread = isinstance(curr_msg.channel, discord.Thread)
+
         if (
             prev_msg_in_channel
             and prev_msg_in_channel.type
@@ -343,19 +354,19 @@ async def _set_parent_message(
             and prev_msg_in_channel.author
             == (
                 discord_bot.user
-                if curr_msg.channel.type == discord.ChannelType.private
+                if (is_dm or is_thread)
                 else curr_msg.author
             )
         ):
             curr_node.parent_msg = prev_msg_in_channel
             return
 
-        is_public_thread = curr_msg.channel.type == discord.ChannelType.public_thread
-        parent_is_thread_start = (
-            is_public_thread
-            and curr_msg.reference is None
-            and curr_msg.channel.parent.type == discord.ChannelType.text
-        )
+        parent_is_thread_start = False
+        if is_thread and curr_msg.reference is None:
+            thread_channel = cast(discord.Thread, curr_msg.channel)
+            if thread_channel.parent is not None:
+                parent_is_thread_start = True
+
         parent_msg_id = (
             curr_msg.channel.id
             if parent_is_thread_start
@@ -364,12 +375,13 @@ async def _set_parent_message(
         if not parent_msg_id:
             return
 
-        if parent_is_thread_start:
+        if parent_is_thread_start and is_thread:
+            thread_channel = cast(discord.Thread, curr_msg.channel)
             curr_node.parent_msg = (
-                curr_msg.channel.starter_message
-                or await curr_msg.channel.parent.fetch_message(parent_msg_id)
+                thread_channel.starter_message
+                or await thread_channel.parent.fetch_message(parent_msg_id) # type: ignore
             )
-        else:
+        elif curr_msg.reference:
             curr_node.parent_msg = (
                 curr_msg.reference.cached_message
                 or await curr_msg.channel.fetch_message(parent_msg_id)
@@ -383,6 +395,8 @@ def _clean_message_content(
     curr_msg: discord.Message,
     discord_bot: discord.Client,
 ) -> str:
+    if not discord_bot.user:
+        return curr_msg.content
     cleaned_content = curr_msg.content.removeprefix(
         discord_bot.user.mention,
     ).lstrip()
@@ -405,7 +419,7 @@ def _load_cached_search_data(
         stored_search_results,
         stored_tavily_metadata,
         stored_lens_results,
-    ) = get_bad_keys_db().get_message_search_data(curr_msg.id)
+    ) = get_bad_keys_db().get_message_search_data(str(curr_msg.id))
     if stored_search_results and curr_node.search_results is None:
         curr_node.search_results = stored_search_results
         curr_node.tavily_metadata = stored_tavily_metadata

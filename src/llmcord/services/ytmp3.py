@@ -4,6 +4,7 @@ import inspect
 import logging
 import uuid
 from pathlib import Path
+from typing import Any
 
 from playwright.async_api import async_playwright
 
@@ -14,18 +15,18 @@ class Ytmp3Service:
     """Download audio files via the ytmp3.as web interface."""
 
     @staticmethod
-    async def _maybe_await(value: object) -> object:
+    async def _maybe_await(value: Any) -> Any:
         if inspect.isawaitable(value):
             return await value
         return value
 
     @staticmethod
     async def _resolve_locator(
-        page: object,
+        page: Any,
         method_name: str,
-        *args: object,
-        **kwargs: object,
-    ) -> object:
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
         locator_call = getattr(page, method_name)(*args, **kwargs)
         if inspect.isawaitable(locator_call):
             locator = await locator_call

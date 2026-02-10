@@ -131,7 +131,7 @@ def parse_provider_slash_model(
     provider_slash_model: str,
 ) -> tuple[str, str] | None:
     """Parse 'provider/model' string."""
-    try:
-        return provider_slash_model.removesuffix(":vision").split("/", 1)
-    except ValueError:
-        return None
+    parts = provider_slash_model.removesuffix(":vision").split("/", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return None

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, cast
 
 import discord
 import litellm
@@ -112,7 +113,7 @@ async def _initialize_generation_state(
     await context.msg_nodes[processing_msg_id].lock.acquire()
 
     input_tokens = count_conversation_tokens(context.messages)
-    use_plain_responses = context.config.get("use_plain_responses", False)
+    use_plain_responses = bool(context.config.get("use_plain_responses", False))
 
     if use_plain_responses:
         max_message_length = 4000
@@ -362,12 +363,13 @@ async def _get_stream(
         stream,
         timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
     ):
-        if not chunk.choices:
+        choices = getattr(chunk, "choices", None)
+        if not choices:
             continue
 
-        choice = chunk.choices[0]
-        delta_content = choice.delta.content or ""
-        chunk_finish_reason = choice.finish_reason
+        choice = choices[0]
+        delta_content = getattr(choice.delta, "content", "") or ""
+        chunk_finish_reason = getattr(choice, "finish_reason", None)
         grounding_metadata = _extract_grounding_metadata(chunk, choice)
         image_payloads = extract_gemini_images_from_chunk(
             chunk,
@@ -735,7 +737,7 @@ async def _run_generation_loop(
     loop_state = _initialize_loop_state(context)
     response_msgs = state.response_msgs
 
-    async def reply_helper(**reply_kwargs: object) -> None:
+    async def reply_helper(**reply_kwargs: Any) -> None:
         reply_target = context.new_msg if not response_msgs else response_msgs[-1]
         response_msg = await reply_target.reply(**reply_kwargs)
         response_msgs.append(response_msg)
@@ -778,12 +780,12 @@ async def _run_generation_loop(
                 reply_helper=reply_helper,
             )
             break
-        except GENERATION_EXCEPTIONS as exc:
+        except GENERATION_EXCEPTIONS as exc:  # type: ignore
             (
                 loop_state.good_keys,
                 loop_state.last_error_msg,
             ) = _handle_generation_exception(
-                error=exc,
+                error=cast(Exception, exc),
                 provider=loop_state.provider,
                 current_api_key=current_api_key,
                 good_keys=loop_state.good_keys,

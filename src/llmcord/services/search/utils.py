@@ -5,9 +5,10 @@ import binascii
 import logging
 import re
 from datetime import datetime
+from typing import Any
 
 try:
-    import fitz
+    import fitz  # type: ignore[import-untyped]
 except ImportError:
     fitz = None  # type: ignore[assignment]
 
@@ -166,7 +167,7 @@ def convert_messages_to_openai_format(
         List of OpenAI-compatible message dicts
 
     """
-    openai_messages = []
+    openai_messages: list[dict[str, Any]] = []
 
     if system_prompt:
         openai_messages.append({"role": "system", "content": system_prompt})

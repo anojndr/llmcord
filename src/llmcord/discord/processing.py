@@ -24,6 +24,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
     channel_id = new_msg.channel.id
     locked_model = get_channel_locked_model(channel_id)
 
+    user_model: str | None
     if locked_model:
         # Use the channel's locked model (ignore user preference)
         if locked_model not in config_data.get("models", {}):
@@ -42,7 +43,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
 
         # Fall back to default model if user hasn't set a preference
         # or if their saved model is no longer valid.
-        default_model = next(iter(config_data.get("models", {})), None)
+        default_model = next(iter(config_data.get("models", {})), "")
         if not default_model:
             logger.error("No models configured in config.yaml")
             return
