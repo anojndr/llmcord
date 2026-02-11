@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 import asyncpraw  # type: ignore[import-untyped]
 import asyncprawcore  # type: ignore[import-untyped]
+import brotli  # type: ignore[import-untyped]
 import discord
 import httpx
 import pymupdf4llm  # type: ignore[import-untyped]
@@ -31,6 +32,35 @@ try:
     import fitz  # type: ignore[import-untyped]
 except ImportError:  # pragma: no cover - optional dependency
     fitz = None  # type: ignore[assignment]
+
+
+def _decode_brotli_if_needed(
+    response: httpx.Response,
+    content: bytes,
+) -> bytes:
+    encoding_header = response.headers.get("content-encoding", "").lower()
+    if "br" not in encoding_header:
+        return content
+    try:
+        return brotli.decompress(content)
+    except brotli.error as exc:
+        logger.debug(
+            "Failed to decompress Brotli response for %s: %s",
+            response.request.url if response.request else "response",
+            exc,
+        )
+        return content
+
+
+def _decode_text_content(
+    content: bytes,
+    response: httpx.Response,
+) -> str:
+    encoding = response.encoding or "utf-8"
+    try:
+        return content.decode(encoding, errors="replace")
+    except LookupError:
+        return content.decode("utf-8", errors="replace")
 
 
 async def extract_pdf_text(pdf_content: bytes) -> str | None:
@@ -318,7 +348,7 @@ async def process_attachments(
     """Process downloaded attachments (handle GIFs, extract text)."""
     processed = []
     for att, resp in successful_pairs:
-        content = resp.content
+        content = _decode_brotli_if_needed(resp, resp.content)
         content_type = att.content_type
 
         if content_type == "image/gif":
@@ -331,15 +361,15 @@ async def process_attachments(
             except OSError:
                 logger.exception("Error converting GIF to PNG")
 
+        text_content = None
+        if content_type and content_type.startswith("text"):
+            text_content = _decode_text_content(content, resp)
+
         processed.append(
             {
                 "content_type": content_type,
                 "content": content,
-                "text": (
-                    resp.text
-                    if content_type and content_type.startswith("text")
-                    else None
-                ),
+                "text": text_content,
             },
         )
     return processed
@@ -514,7 +544,10 @@ async def perform_yandex_lookup(
         "https://yandex.ru/images/search",
     ]:
 
-        async def _yandex_req(client: httpx.AsyncClient, d: str = domain) -> httpx.Response:
+        async def _yandex_req(
+            client: httpx.AsyncClient,
+            d: str = domain,
+        ) -> httpx.Response:
             return await fetch_yandex(client, d)
 
         try:

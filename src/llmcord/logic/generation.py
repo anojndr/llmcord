@@ -359,10 +359,13 @@ async def _get_stream(
 
     litellm_kwargs["timeout"] = LITELLM_TIMEOUT_SECONDS
 
-    print("\n--- LLM REQUEST ---")
-    print(f"Model: {litellm_kwargs.get('model')}")
-    print(f"Messages:\n{json.dumps(litellm_kwargs.get('messages'), indent=2)}")
-    print("-------------------\n")
+    logger.debug("\n--- LLM REQUEST ---")
+    logger.debug("Model: %s", litellm_kwargs.get("model"))
+    logger.debug(
+        "Messages:\n%s",
+        json.dumps(litellm_kwargs.get("messages"), indent=2),
+    )
+    logger.debug("-------------------\n")
 
     stream = await litellm.acompletion(**litellm_kwargs)
 

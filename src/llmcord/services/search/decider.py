@@ -96,10 +96,13 @@ async def _run_decider_once(
             )
 
             # Make the LiteLLM call
-            print("\n--- SEARCH DECIDER REQUEST ---")
-            print(f"Model: {litellm_kwargs.get('model')}")
-            print(f"Messages:\n{json.dumps(litellm_kwargs.get('messages'), indent=2)}")
-            print("------------------------------\n")
+            logger.debug("\n--- SEARCH DECIDER REQUEST ---")
+            logger.debug("Model: %s", litellm_kwargs.get("model"))
+            logger.debug(
+                "Messages:\n%s",
+                json.dumps(litellm_kwargs.get("messages"), indent=2),
+            )
+            logger.debug("------------------------------\n")
 
             response = await litellm.acompletion(**litellm_kwargs)
 
