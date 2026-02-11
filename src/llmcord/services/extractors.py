@@ -1,21 +1,24 @@
 """Asset extraction and handling (PDFs, Tweets, YouTube, Reddit)."""
 
 import asyncio
+import importlib
 import io
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, Protocol
 
-import asyncpraw  # type: ignore[import-untyped]
-import asyncprawcore  # type: ignore[import-untyped]
-import brotli  # type: ignore[import-not-found]
+import asyncpraw
+import asyncprawcore
+import brotli
 import discord
 import httpx
-import pymupdf4llm  # type: ignore[import-untyped]
+import pymupdf4llm
+from asyncpraw import exceptions as asyncpraw_exceptions
+from asyncpraw import models as asyncpraw_models
 from bs4 import BeautifulSoup, Tag
 from PIL import Image
-from twscrape import gather  # type: ignore[import-untyped]
+from twscrape import gather
 from youtube_transcript_api import (
     YouTubeTranscriptApi,
     YouTubeTranscriptApiException,
@@ -28,10 +31,12 @@ from llmcord.services.http import request_with_optional_proxy, request_with_retr
 
 logger = logging.getLogger(__name__)
 
+fitz_module: Any
 try:
-    import fitz  # type: ignore[import-untyped]
+    fitz_module = importlib.import_module("fitz")
 except ImportError:  # pragma: no cover - optional dependency
-    fitz = None  # type: ignore[assignment]
+    fitz_module = None
+fitz: Any = fitz_module
 
 
 def _decode_brotli_if_needed(
@@ -246,6 +251,15 @@ def _get_tweet_text(tweet: TweetProtocol) -> str:
     return raw_content or ""
 
 
+async def _iter_tweet_replies(
+    twitter_api: TwitterApiProtocol,
+    tweet_id: int,
+    max_replies: int,
+) -> AsyncGenerator[TweetProtocol, None]:
+    async for reply in twitter_api.tweet_replies(tweet_id, limit=max_replies):
+        yield reply
+
+
 async def fetch_tweet_with_replies(
     twitter_api: TwitterApiProtocol,
     tweet_id: int,
@@ -289,7 +303,7 @@ async def fetch_tweet_with_replies(
 
         if max_replies > 0:
             replies = await asyncio.wait_for(
-                gather(twitter_api.tweet_replies(tweet_id, limit=max_replies)),
+                gather(_iter_tweet_replies(twitter_api, tweet_id, max_replies)),
                 timeout=10,
             )
             if replies:
@@ -993,7 +1007,7 @@ async def extract_reddit_post_praw(
         if top_comments:
             post_text += "\n\nTop Comments:"
             for comment in top_comments:
-                if isinstance(comment, asyncpraw.models.MoreComments):
+                if isinstance(comment, asyncpraw_models.MoreComments):
                     continue
                 comment_author = comment.author.name if comment.author else "[deleted]"
                 comment_body = getattr(comment, "body", "") or ""
@@ -1001,7 +1015,7 @@ async def extract_reddit_post_praw(
 
     except (
         asyncprawcore.exceptions.AsyncPrawcoreException,
-        asyncpraw.exceptions.RedditAPIException,
+        asyncpraw_exceptions.RedditAPIException,
         AttributeError,
         ValueError,
     ) as exc:

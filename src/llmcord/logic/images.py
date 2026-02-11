@@ -6,6 +6,8 @@ import hashlib
 import io
 import logging
 import re
+from collections.abc import Mapping
+from typing import cast
 
 import discord
 
@@ -35,10 +37,12 @@ def _build_generated_image(data: bytes, mime_type: str) -> GeneratedImage:
 
 
 def _coerce_payload(obj: object) -> object:
-    if hasattr(obj, "model_dump"):
-        return obj.model_dump()
-    if hasattr(obj, "dict") and callable(obj.dict):
-        return obj.dict()
+    model_dump = getattr(obj, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    dict_method = getattr(obj, "dict", None)
+    if callable(dict_method):
+        return dict_method()
     if hasattr(obj, "__dict__"):
         return obj.__dict__
     return obj
@@ -72,8 +76,9 @@ def _extract_images_from_inline_data(inline_data: dict) -> list[GeneratedImage]:
 
 
 def _extract_images_from_image_url(image_url: object) -> list[GeneratedImage]:
-    if isinstance(image_url, dict):
-        image_url = image_url.get("url")
+    if isinstance(image_url, Mapping):
+        mapping = cast("Mapping[str, object]", image_url)
+        image_url = mapping.get("url")
     if not isinstance(image_url, str):
         return []
     return _extract_images_from_string(image_url)

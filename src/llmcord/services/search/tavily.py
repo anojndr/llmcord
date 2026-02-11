@@ -5,6 +5,8 @@ import importlib
 import json
 import logging
 import time
+from collections.abc import Mapping
+from typing import cast
 
 import httpx
 
@@ -46,7 +48,7 @@ def _get_tavily_client() -> httpx.AsyncClient:
 def _get_client_from_package() -> httpx.AsyncClient:
     search_module = importlib.import_module("llmcord.services.search")
     get_client = search_module.get_tavily_client
-    return get_client()
+    return cast("httpx.AsyncClient", get_client())
 
 
 async def tavily_search(
@@ -294,13 +296,17 @@ def _extract_research_urls(sources: list[object]) -> list[dict[str, str]]:
     """Extract normalized URL metadata from Tavily research sources."""
     urls: list[dict[str, str]] = []
     for source in sources:
-        if not isinstance(source, dict) or not source.get("url"):
+        if not isinstance(source, Mapping):
+            continue
+        mapping = cast("Mapping[str, object]", source)
+        url = mapping.get("url")
+        if not url:
             continue
         urls.append(
             {
-                "title": source.get("title", "No title"),
-                "url": source.get("url", ""),
-                "favicon": source.get("favicon", ""),
+                "title": str(mapping.get("title", "No title")),
+                "url": str(url),
+                "favicon": str(mapping.get("favicon", "")),
             },
         )
     return urls

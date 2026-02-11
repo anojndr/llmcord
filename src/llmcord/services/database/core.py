@@ -6,25 +6,27 @@ import contextlib
 import functools
 import logging
 import os
-from typing import TYPE_CHECKING, Concatenate, Protocol
+from typing import TYPE_CHECKING, Any, Concatenate, Protocol, cast
 
-import libsql  # type: ignore[import-untyped]
+import libsql as libsql_module
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-LIBSQL_ERROR = getattr(
-    libsql,
-    "LibsqlError",
-    getattr(libsql, "Error", Exception),
+libsql: Any = libsql_module
+LibsqlConnection = Any
+
+LIBSQL_ERROR = cast(
+    "type[BaseException]",
+    getattr(libsql, "LibsqlError", getattr(libsql, "Error", Exception)),
 )
 
 
 class DatabaseProtocol(Protocol):
     """Protocol for database connection management."""
 
-    def _get_connection(self) -> libsql.Connection: ...
+    def _get_connection(self) -> LibsqlConnection: ...
     def _sync(self) -> None: ...
 
 
@@ -38,7 +40,7 @@ def _with_reconnect[T_Database: DatabaseProtocol, **P, T](
         max_retries = 2
         try:
             return method(self, *args, **kwargs)
-        except (ValueError, LIBSQL_ERROR) as exc:  # type: ignore[name-defined, misc]
+        except (ValueError, LIBSQL_ERROR) as exc:
             error_str = str(exc)
             # Check for Hrana stream errors (stale connection)
             if "stream not found" not in error_str and "Hrana" not in error_str:
@@ -53,7 +55,7 @@ def _with_reconnect[T_Database: DatabaseProtocol, **P, T](
                 self._reconnect()
             try:
                 return method(self, *args, **kwargs)
-            except (ValueError, LIBSQL_ERROR):  # type: ignore[name-defined, misc]
+            except (ValueError, LIBSQL_ERROR):
                 logger.exception(
                     "Failed to reconnect to Turso after %d attempts",
                     max_retries,
@@ -94,7 +96,7 @@ class DatabaseCore:
             self._conn = None
         self._get_connection()
 
-    def _get_connection(self) -> libsql.Connection:
+    def _get_connection(self) -> LibsqlConnection:
         """Get or create the database connection."""
         if self._conn is None:
             if self.db_url and self.auth_token:
@@ -106,7 +108,7 @@ class DatabaseCore:
                 )
                 # Sync with remote on initial connection
                 if self._conn is not None:
-                    self._conn.sync()  # type: ignore[attr-defined]
+                    self._conn.sync()
                 logger.info("Connected to Turso database: %s", self.db_url)
             else:
                 # Fallback to local-only SQLite if no Turso credentials
@@ -120,6 +122,6 @@ class DatabaseCore:
         """Sync changes with Turso cloud if connected to remote."""
         if self._conn is not None and self.db_url and self.auth_token:
             try:
-                self._conn.sync()  # type: ignore[attr-defined]
-            except LIBSQL_ERROR as exc:  # type: ignore[name-defined]
+                self._conn.sync()
+            except LIBSQL_ERROR as exc:
                 logger.warning("Failed to sync with Turso: %s", exc)

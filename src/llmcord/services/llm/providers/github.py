@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 HTTP_STATUS_OK = 200
 logger = logging.getLogger(__name__)

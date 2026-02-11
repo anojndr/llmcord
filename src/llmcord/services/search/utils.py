@@ -2,15 +2,18 @@
 
 import base64
 import binascii
+import importlib
 import logging
 import re
 from datetime import datetime
 from typing import Any
 
+fitz_module: Any
 try:
-    import fitz  # type: ignore[import-untyped]
+    fitz_module = importlib.import_module("fitz")
 except ImportError:
-    fitz = None  # type: ignore[assignment]
+    fitz_module = None
+fitz: Any = fitz_module
 
 logger = logging.getLogger(__name__)
 

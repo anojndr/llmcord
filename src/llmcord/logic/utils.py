@@ -4,17 +4,17 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Iterable, Iterator
-from typing import Protocol
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from typing import Protocol, cast
 
 import discord
 import tiktoken
-from twscrape import xclid  # type: ignore[import-untyped]
+from twscrape import xclid
 
 try:
-    import pymupdf.layout as pymupdf_layout  # type: ignore[import-untyped]
+    import pymupdf.layout as pymupdf_layout  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - optional dependency
-    pymupdf_layout = None  # type: ignore[assignment]
+    pymupdf_layout = None
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,11 @@ def patched_get_scripts_list(text: str) -> Iterator[str]:
 
 
 # Apply the patch
-xclid.get_scripts_list = patched_get_scripts_list
+setattr(  # noqa: B010
+    xclid,
+    "get_scripts_list",
+    cast("Callable[[str], Iterator[str]]", patched_get_scripts_list),
+)
 
 
 # =============================================================================
@@ -248,8 +252,11 @@ def extract_research_command(
 
 def _count_msg_part_tokens(part: object, enc: tiktoken.Encoding) -> int:
     """Count tokens in a single message part."""
-    if isinstance(part, dict) and part.get("type") == "text":
-        text = part.get("text", "")
+    if isinstance(part, Mapping):
+        mapping = cast("Mapping[str, object]", part)
+        if mapping.get("type") != "text":
+            return 0
+        text = mapping.get("text", "")
         if isinstance(text, str):
             return len(enc.encode(text))
     return 0

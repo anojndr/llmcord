@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
 import discord
@@ -286,19 +286,20 @@ def _extract_grounding_metadata(
 ) -> object | None:
     grounding_metadata = None
 
-    if hasattr(response_obj, "model_extra") and response_obj.model_extra:
+    model_extra = getattr(response_obj, "model_extra", None)
+    if isinstance(model_extra, Mapping) and model_extra:
         grounding_metadata = (
-            response_obj.model_extra.get("vertex_ai_grounding_metadata")
-            or response_obj.model_extra.get("google_grounding_metadata")
-            or response_obj.model_extra.get("grounding_metadata")
-            or response_obj.model_extra.get("groundingMetadata")
+            model_extra.get("vertex_ai_grounding_metadata")
+            or model_extra.get("google_grounding_metadata")
+            or model_extra.get("grounding_metadata")
+            or model_extra.get("groundingMetadata")
         )
 
     if not grounding_metadata and hasattr(response_obj, "grounding_metadata"):
         grounding_metadata = response_obj.grounding_metadata
 
     hidden_params = getattr(response_obj, "_hidden_params", None)
-    if not grounding_metadata and hidden_params:
+    if not grounding_metadata and isinstance(hidden_params, Mapping):
         grounding_metadata = (
             hidden_params.get("grounding_metadata")
             or hidden_params.get("google_grounding_metadata")
@@ -390,13 +391,14 @@ async def _get_stream(
         if chunk_finish_reason and is_gemini_model(stream_config.actual_model):
             chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
             logger.debug("Gemini chunk finish - attributes: %s", chunk_attrs)
-            if hasattr(chunk, "model_extra") and chunk.model_extra:
+            chunk_model_extra = getattr(chunk, "model_extra", None)
+            if isinstance(chunk_model_extra, Mapping) and chunk_model_extra:
                 logger.info(
                     "Gemini chunk model_extra keys: %s",
-                    list(chunk.model_extra.keys()),
+                    list(chunk_model_extra.keys()),
                 )
             hidden_params = getattr(chunk, "_hidden_params", None)
-            if hidden_params:
+            if isinstance(hidden_params, Mapping):
                 logger.info(
                     "Gemini chunk _hidden_params keys: %s",
                     list(hidden_params.keys()),
@@ -790,7 +792,7 @@ async def _run_generation_loop(
                 reply_helper=reply_helper,
             )
             break
-        except GENERATION_EXCEPTIONS as exc:  # type: ignore[misc]
+        except GENERATION_EXCEPTIONS as exc:
             (
                 loop_state.good_keys,
                 loop_state.last_error_msg,

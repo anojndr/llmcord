@@ -1,6 +1,7 @@
 """Metadata and embedding utilities for UI components."""
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import discord
 
@@ -35,12 +36,14 @@ def get_grounding_queries(metadata: object | None) -> list[str]:
         queries = []
         for item in metadata:
             if isinstance(item, Mapping):
-                queries.extend(_extract_queries_from_mapping(item))
+                queries.extend(
+                    _extract_queries_from_mapping(cast("Mapping[str, object]", item)),
+                )
         return queries
 
     # Handle dict format (LiteLLM)
     if isinstance(metadata, Mapping):
-        return _extract_queries_from_mapping(metadata)
+        return _extract_queries_from_mapping(cast("Mapping[str, object]", metadata))
 
     # Handle object format (GenAI GroundingMetadata)
     if hasattr(metadata, "web_search_queries"):
@@ -61,14 +64,16 @@ def _extract_chunks_from_mapping(mapping: Mapping[str, object]) -> list[object]:
 
 def _normalize_chunk(chunk: object) -> dict[str, str] | None:
     if isinstance(chunk, Mapping):
-        web = chunk.get("web")
+        mapping = cast("Mapping[str, object]", chunk)
+        web = mapping.get("web")
         if isinstance(web, Mapping):
-            title = str(web.get("title") or "")
-            uri = str(web.get("uri") or "")
+            web_mapping = cast("Mapping[str, object]", web)
+            title = str(web_mapping.get("title") or "")
+            uri = str(web_mapping.get("uri") or "")
             if title or uri:
                 return {"title": title, "uri": uri}
-        title = str(chunk.get("title") or "")
-        uri = str(chunk.get("uri") or "")
+        title = str(mapping.get("title") or "")
+        uri = str(mapping.get("uri") or "")
         if title or uri:
             return {"title": title, "uri": uri}
         return None
@@ -106,18 +111,22 @@ def get_grounding_chunks(metadata: object | None) -> list[dict[str, str]]:
         result: list[dict[str, str]] = []
         for item in metadata:
             if isinstance(item, Mapping):
-                chunks = _extract_chunks_from_mapping(item)
+                chunks = _extract_chunks_from_mapping(
+                    cast("Mapping[str, object]", item),
+                )
                 result.extend(_normalize_chunks(chunks))
         return result
 
     # Handle dict format (LiteLLM)
     if isinstance(metadata, Mapping):
-        chunks = _extract_chunks_from_mapping(metadata)
+        chunks = _extract_chunks_from_mapping(cast("Mapping[str, object]", metadata))
         return _normalize_chunks(chunks)
 
     # Handle object format (GenAI GroundingMetadata)
     if hasattr(metadata, "grounding_chunks"):
         chunks = getattr(metadata, "grounding_chunks", []) or []
+        if not isinstance(chunks, Sequence) or isinstance(chunks, (str, bytes)):
+            return []
         return _normalize_chunks(chunks)
 
     return []

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+from typing import Any
+
 from llmcord.services.database.bad_keys import BadKeysMixin, KeyRotator
 from llmcord.services.database.core import DatabaseCore
 from llmcord.services.database.messages import MessageDataMixin
@@ -12,8 +15,9 @@ class LibsqlUnavailableError(RuntimeError):
     """libsql is not available."""
 
 
+libsql_module: Any
 try:
-    import libsql as _libsql
+    libsql_module = importlib.import_module("libsql")
 except ImportError:
 
     class _LibsqlStub:
@@ -22,9 +26,9 @@ except ImportError:
         def connect(self, *_args: object, **_kwargs: object) -> None:
             raise LibsqlUnavailableError
 
-    _libsql = _LibsqlStub()
+    libsql_module = _LibsqlStub()
 
-libsql = _libsql
+libsql: Any = libsql_module
 
 
 class BadKeysDB(

@@ -1,6 +1,6 @@
 """Gemini provider implementation."""
 
-from typing import Any
+from typing import Any, cast
 
 DEFAULT_SAFETY_SETTINGS = [
     {
@@ -113,9 +113,13 @@ def _merge_tools(
     new_tools: object | None,
 ) -> list[dict[str, object]]:
     if isinstance(new_tools, list):
-        return [*existing_tools, *new_tools]
+        filtered = [tool for tool in new_tools if isinstance(tool, dict)]
+        return [
+            *existing_tools,
+            *[cast("dict[str, object]", tool) for tool in filtered],
+        ]
     if isinstance(new_tools, dict):
-        return [*existing_tools, new_tools]
+        return [*existing_tools, cast("dict[str, object]", new_tools)]
     return existing_tools
 
 

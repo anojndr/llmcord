@@ -8,7 +8,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import libsql
+import libsql as libsql_module
+
+libsql: Any = libsql_module
+LibsqlCursor = Any
+LibsqlConnection = Any
 
 if TYPE_CHECKING:
     from .core import DatabaseProtocol as _Base
@@ -73,8 +77,8 @@ class MessageDataMixin(_Base):
 
     def _run_message_migrations(
         self,
-        cursor: libsql.Cursor,
-        conn: libsql.Connection,
+        cursor: LibsqlCursor,
+        conn: LibsqlConnection,
     ) -> None:
         """Run migrations for message tables."""
         # Migration: ensure message_response_data has the expected schema.

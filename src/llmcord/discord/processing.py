@@ -3,6 +3,7 @@
 import importlib
 import logging
 from contextlib import suppress
+from typing import TYPE_CHECKING, cast
 
 import discord
 
@@ -12,6 +13,9 @@ from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.pipeline import ProcessContext
 from llmcord.services.database import get_bad_keys_db
 from llmcord.utils.common import get_channel_locked_model
+
+if TYPE_CHECKING:
+    from llmcord.services.extractors import TwitterApiProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +65,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         context = ProcessContext(
             discord_bot=app_globals.discord_bot,
             httpx_client=app_globals.httpx_client,
-            twitter_api=app_globals.twitter_api,
+            twitter_api=cast("TwitterApiProtocol", app_globals.twitter_api),
             msg_nodes=app_globals.msg_nodes,
             curr_model_lock=app_globals.curr_model_lock,
             curr_model_ref=curr_model_ref,
@@ -97,7 +101,8 @@ async def _handle_retry_request(
         return
 
     channel = interaction.channel
-    if channel is None or not hasattr(channel, "fetch_message"):
+    fetch_message = getattr(channel, "fetch_message", None) if channel else None
+    if not callable(fetch_message):
         await interaction.followup.send(
             embed=build_error_embed(
                 "Unable to locate the original channel for this message.",
@@ -107,7 +112,7 @@ async def _handle_retry_request(
         return
 
     try:
-        request_msg = await channel.fetch_message(request_message_id)
+        request_msg = await fetch_message(request_message_id)
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         await interaction.followup.send(
             embed=build_error_embed(

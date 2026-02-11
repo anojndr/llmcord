@@ -1,7 +1,6 @@
 """Source related views and buttons."""
 
 from collections.abc import Mapping
-from typing import Any
 
 import discord
 
@@ -71,8 +70,19 @@ class TavilySourcesView(discord.ui.View):
         self.provider = self.search_metadata.get("provider", "tavily")
 
         # Prepare source entries with defensive defaults
-        self.queries: list[str] = list(self.search_metadata.get("queries") or [])  # type: ignore[arg-type, call-overload]
-        self.urls: list[dict[str, Any]] = list(self.search_metadata.get("urls") or [])  # type: ignore[arg-type, call-overload]
+        raw_queries = self.search_metadata.get("queries")
+        if isinstance(raw_queries, list):
+            self.queries = [str(query) for query in raw_queries if query]
+        else:
+            self.queries = []
+
+        raw_urls = self.search_metadata.get("urls")
+        if isinstance(raw_urls, list):
+            self.urls = [
+                dict(url_info) for url_info in raw_urls if isinstance(url_info, dict)
+            ]
+        else:
+            self.urls = []
         self.sources = self._prepare_sources()
         self.pages = self._paginate_sources()
         self.total_pages = len(self.pages)
