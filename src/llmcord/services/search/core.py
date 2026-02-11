@@ -89,6 +89,16 @@ async def _run_exa_searches(
     return await asyncio.gather(*search_tasks)
 
 
+def _count_total_results(results: list[dict]) -> int:
+    """Count total result items across all query responses."""
+    total = 0
+    for result in results:
+        items = result.get("results", []) if isinstance(result, dict) else []
+        if isinstance(items, list):
+            total += len(items)
+    return total
+
+
 def _format_result_item(
     item: dict,
     min_score: float,
@@ -240,6 +250,39 @@ async def perform_web_search(
             opts.exa_mcp_url,
             opts.max_results_per_query,
         )
+        total_results = _count_total_results(results)
+        retries_remaining = 3
+        while total_results == 0 and retries_remaining > 0:
+            logger.info(
+                "Exa returned 0 results; retrying (%s remaining)",
+                retries_remaining,
+            )
+            results = await _run_exa_searches(
+                queries,
+                opts.exa_mcp_url,
+                opts.max_results_per_query,
+            )
+            total_results = _count_total_results(results)
+            retries_remaining -= 1
+
+        if total_results == 0 and api_keys:
+            logger.info("Exa still returned 0 results; falling back to Tavily")
+            provider_name = "Tavily"
+            results = await _run_tavily_searches(
+                queries,
+                api_keys,
+                opts.search_depth,
+                opts.max_results_per_query,
+                db,
+            )
+            opts = WebSearchOptions(
+                max_results_per_query=opts.max_results_per_query,
+                max_chars_per_url=opts.max_chars_per_url,
+                min_score=opts.min_score,
+                search_depth=opts.search_depth,
+                web_search_provider="tavily",
+                exa_mcp_url=opts.exa_mcp_url,
+            )
 
     formatted_results, all_urls = _format_search_results(
         results,
