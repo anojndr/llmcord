@@ -327,7 +327,7 @@ async def _iter_stream_with_first_chunk(
         )
     except StopAsyncIteration:
         return
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         raise FirstTokenTimeoutError from exc
 
     yield first_chunk

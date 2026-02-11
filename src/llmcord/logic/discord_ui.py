@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import discord
 
@@ -112,7 +112,7 @@ async def maybe_edit_stream_message(
     if embed is None:
         return
 
-    time_delta = datetime.now(timezone.utc).timestamp() - last_edit_time
+    time_delta = datetime.now(UTC).timestamp() - last_edit_time
     ready_to_edit = time_delta >= EDIT_DELAY_SECONDS
 
     if not (decision.start_next_msg or ready_to_edit or decision.is_final_edit):
@@ -144,7 +144,7 @@ async def maybe_edit_stream_message(
     else:
         await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
         await response_msgs[msg_index].edit(embed=embed, view=view)
-    state.last_edit_time = datetime.now(timezone.utc).timestamp()
+    state.last_edit_time = datetime.now(UTC).timestamp()
 
 
 async def render_plain_responses(

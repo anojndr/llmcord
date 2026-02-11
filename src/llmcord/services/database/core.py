@@ -6,7 +6,7 @@ import contextlib
 import functools
 import logging
 import os
-from typing import TYPE_CHECKING, Concatenate, ParamSpec, Protocol, TypeVar
+from typing import TYPE_CHECKING, Concatenate, Protocol
 
 import libsql  # type: ignore[import-untyped]
 
@@ -14,8 +14,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-P = ParamSpec("P")
-T = TypeVar("T")
 LIBSQL_ERROR = getattr(
     libsql,
     "LibsqlError",
@@ -23,10 +21,14 @@ LIBSQL_ERROR = getattr(
 )
 
 
-T_Database = TypeVar("T_Database", bound="DatabaseProtocol")
+class DatabaseProtocol(Protocol):
+    """Protocol for database connection management."""
+
+    def _get_connection(self) -> libsql.Connection: ...
+    def _sync(self) -> None: ...
 
 
-def _with_reconnect(
+def _with_reconnect[T_Database: DatabaseProtocol, **P, T](
     method: Callable[Concatenate[T_Database, P], T],
 ) -> Callable[Concatenate[T_Database, P], T]:
     """Handle stale Turso connections by reconnecting and retrying."""
@@ -59,13 +61,6 @@ def _with_reconnect(
                 raise
 
     return wrapper
-
-
-class DatabaseProtocol(Protocol):
-    """Protocol for database connection management."""
-
-    def _get_connection(self) -> libsql.Connection: ...
-    def _sync(self) -> None: ...
 
 
 class DatabaseCore:

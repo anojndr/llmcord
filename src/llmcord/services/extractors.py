@@ -9,7 +9,7 @@ from typing import Any, Protocol
 
 import asyncpraw  # type: ignore[import-untyped]
 import asyncprawcore  # type: ignore[import-untyped]
-import brotli  # type: ignore[import-untyped]
+import brotli  # type: ignore[import-not-found]
 import discord
 import httpx
 import pymupdf4llm  # type: ignore[import-untyped]
@@ -104,7 +104,7 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
             asyncio.to_thread(_extract),
             timeout=30,  # 30 second timeout for large PDFs
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("PDF extraction timed out")
         return None
     except (RuntimeError, ValueError, OSError) as exc:
@@ -160,7 +160,7 @@ async def extract_pdf_images(
             asyncio.to_thread(_extract),
             timeout=30,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("PDF image extraction timed out")
         return []
     except (RuntimeError, ValueError, OSError) as exc:
@@ -298,7 +298,7 @@ async def fetch_tweet_with_replies(
                     if reply and reply.user:
                         reply_username = reply.user.username or "unknown"
                         tweet_text += f"\n- @{reply_username}: {_get_tweet_text(reply)}"
-    except (asyncio.TimeoutError, RuntimeError, ValueError) as exc:
+    except (TimeoutError, RuntimeError, ValueError) as exc:
         logger.debug("Failed to fetch tweet %s: %s", tweet_id, exc)
         return None
 
