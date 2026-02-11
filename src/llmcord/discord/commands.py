@@ -1,7 +1,6 @@
 """Discord slash commands for llmcord."""
 
 import logging
-from pathlib import Path
 
 import discord
 from discord.app_commands import Choice
@@ -10,7 +9,6 @@ from llmcord import config as config_module
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.globals import discord_bot
 from llmcord.services.database import get_bad_keys_db
-from llmcord.services.ytmp3 import Ytmp3Service
 from llmcord.utils.common import (
     ModelAutocompleteHandlers,
     ModelSwitchHandlers,
@@ -203,50 +201,3 @@ async def reset_all_preferences_command(
         model_count,
         decider_count,
     )
-
-
-@discord_bot.tree.command(
-    name="ytmp3",
-    description="Convert a YouTube video to MP3",
-)
-async def ytmp3_command(interaction: discord.Interaction, url: str) -> None:
-    """Handle the /ytmp3 command."""
-    await interaction.response.defer(ephemeral=False)
-
-    # Basic URL validation
-    if "youtube.com" not in url and "youtu.be" not in url:
-        await interaction.followup.send(
-            embed=build_error_embed("Please provide a valid YouTube URL."),
-        )
-        return
-
-    try:
-        file_path = await Ytmp3Service.download_audio(url)
-
-        if file_path:
-            await interaction.followup.send(
-                content=f"✅ Converted: {url}",
-                file=discord.File(file_path),
-            )
-            # Clean up the file after sending
-            try:
-                Path(file_path).unlink()
-            except OSError:
-                logger.exception("Failed to remove temp file %s", file_path)
-        else:
-            await interaction.followup.send(
-                embed=build_error_embed(
-                    "Could not convert the video. Please try again later.",
-                ),
-            )
-
-    except (OSError, RuntimeError, ValueError):
-        logger.exception("Error in /ytmp3 command")
-        await interaction.followup.send(
-            embed=build_error_embed(
-                (
-                    "An error occurred while converting the video. "
-                    "Please try again later."
-                ),
-            ),
-        )
