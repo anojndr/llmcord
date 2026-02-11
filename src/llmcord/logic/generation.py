@@ -1,6 +1,7 @@
 """LLM response generation logic."""
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -357,6 +358,12 @@ async def _get_stream(
     )
 
     litellm_kwargs["timeout"] = LITELLM_TIMEOUT_SECONDS
+
+    print("\n--- LLM REQUEST ---")
+    print(f"Model: {litellm_kwargs.get('model')}")
+    print(f"Messages:\n{json.dumps(litellm_kwargs.get('messages'), indent=2)}")
+    print("-------------------\n")
+
     stream = await litellm.acompletion(**litellm_kwargs)
 
     async for chunk in _iter_stream_with_first_chunk(
