@@ -89,6 +89,8 @@ def _normalize_result_url(url: str) -> str:
 def _merge_reverse_image_results(
     yandex_results: list[str],
     google_results: list[str],
+    *,
+    prefer_overlapping_matches: bool = False,
 ) -> list[str]:
     interleaved: list[str] = []
     max_len = max(len(yandex_results), len(google_results))
@@ -109,7 +111,30 @@ def _merge_reverse_image_results(
         if dedupe_key not in deduped:
             deduped[dedupe_key] = line
 
-    return list(deduped.values())
+    if not prefer_overlapping_matches:
+        return list(deduped.values())
+
+    yandex_keys = {
+        _normalize_result_url(url)
+        for line in yandex_results
+        if (url := _extract_result_url(line))
+    }
+    google_keys = {
+        _normalize_result_url(url)
+        for line in google_results
+        if (url := _extract_result_url(line))
+    }
+    overlap_keys = yandex_keys & google_keys
+
+    overlap_lines: list[str] = []
+    single_lines: list[str] = []
+    for key, line in deduped.items():
+        if key in overlap_keys:
+            overlap_lines.append(line)
+        else:
+            single_lines.append(line)
+
+    return [*overlap_lines, *single_lines]
 
 
 async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[str]:
@@ -271,6 +296,9 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
     try:
         config = get_config()
         serpapi_api_key = str(config.get("serpapi_api_key") or "").strip()
+        prefer_overlapping_matches = bool(
+            config.get("googlelens_prefer_overlapping_matches", True),
+        )
 
         yandex_task = perform_yandex_lookup(
             image_url,
@@ -291,7 +319,11 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             (yandex_results, yandex_twitter),
             (google_results, google_twitter),
         ) = await asyncio.gather(yandex_task, google_lens_task)
-        lens_results = _merge_reverse_image_results(yandex_results, google_results)
+        lens_results = _merge_reverse_image_results(
+            yandex_results,
+            google_results,
+            prefer_overlapping_matches=prefer_overlapping_matches,
+        )
         twitter_content = list(
             OrderedDict.fromkeys([*yandex_twitter, *google_twitter]),
         )

@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from llmcord.logic.content import _merge_reverse_image_results
 from llmcord.logic.messages import MessageBuildContext, build_messages
 
 from ._fakes import DummyTwitterApi, FakeAttachment, FakeMessage, FakeUser
@@ -20,6 +21,26 @@ class _FakeDB:
 class _DummyBot:
     def __init__(self, user_id: int = 999) -> None:
         self.user = FakeUser(user_id)
+
+
+def test_googlelens_overlap_weighting_prioritizes_shared_urls() -> None:
+    yandex_results = [
+        "- [Yandex Unique](https://example.com/yandex-only) (example.com)",
+        "- [Shared](https://example.com/shared) (example.com)",
+    ]
+    google_results = [
+        "- [Google Unique](https://example.com/google-only) (example.com)",
+        "- [Shared Match](https://example.com/shared) (example.com)",
+    ]
+
+    merged = _merge_reverse_image_results(
+        yandex_results,
+        google_results,
+        prefer_overlapping_matches=True,
+    )
+
+    assert merged
+    assert "shared" in merged[0].lower()
 
 
 @pytest.mark.asyncio

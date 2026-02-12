@@ -62,6 +62,7 @@ web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if we
 # Integrations:
 
 serpapi_api_key:  # Optional. Enables Google Lens reverse image results via SerpApi for googlelens queries.
+googlelens_prefer_overlapping_matches: true  # Optional. If true, matches found by both Google Lens and Yandex are ranked first.
 
 reddit_client_id: 
 reddit_client_secret: 

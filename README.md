@@ -145,6 +145,7 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
 | **web_search_provider** | Which web search provider to use: `tavily`, `exa`, or `auto`. Auto prefers Tavily if keys are available, otherwise falls back to Exa. (Default: `tavily`) |
 | **web_search_decider_model** | The model used to decide if a query needs web search. Format: `provider/model`. (Default: `gemini/gemini-3-flash-preview`) |
 | **serpapi_api_key** | Optional. SerpApi key used to fetch Google Lens reverse image matches for `googlelens` queries. When set, results are combined with Yandex for better accuracy. |
+| **googlelens_prefer_overlapping_matches** | Optional. When `true`, reverse image matches that appear in both Google Lens and Yandex are ranked ahead of single-source matches. (Default: `true`) |
 | **reddit_client_id** | Optional. Reddit API client ID for expanding Reddit links. |
 | **reddit_client_secret** | Optional. Reddit API client secret. |
 | **reddit_user_agent** | Optional. User agent string for Reddit API requests. |
