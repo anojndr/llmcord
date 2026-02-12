@@ -26,6 +26,10 @@ If web search IS needed (e.g., current events, recent news, product
 specs, prices, real-time info):
 {"needs_search": true, "queries": ["query1", "query2", ...]}
 
+If the user explicitly says not to use web search (e.g., "don't search
+the net", "do not search the web", "no web search"), ALWAYS return:
+{"needs_search": false}
+
 RULES for generating queries:
 1. Keep queries concise—under 400 characters. Think of it as a query
 for an agent performing web search, not long-form prompts.

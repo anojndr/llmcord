@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from llmcord.logic.messages import MessageBuildContext, build_messages
+from llmcord.services.tiktok import DownloadedTikTokVideo
 
 from ._fakes import DummyTwitterApi, FakeAttachment, FakeMessage, FakeUser
 
@@ -239,3 +240,145 @@ async def test_image_attachment_included(
 
     payload = url_obj.split(",", 1)[1]
     assert base64.b64decode(payload)
+
+
+@pytest.mark.asyncio
+async def test_tiktok_query_adds_video_file_for_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _fake_maybe_download_tiktok_video(**kwargs: object):
+        return DownloadedTikTokVideo(
+            content=b"fake-mp4-bytes",
+            content_type="video/mp4",
+        )
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_tiktok_video",
+        _fake_maybe_download_tiktok_video,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=33,
+        content=(
+            "summarize https://www.tiktok.com/@contraryian/video/7602846033332292894"
+        ),
+        author=FakeUser(1234),
+        attachments=[],
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gemini-2.0-flash",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=5,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_proxy=None,
+            reddit_proxy=None,
+            proxy_url=None,
+        ),
+    )
+
+    content = result.messages[0]["content"]
+    assert isinstance(content, list)
+    parts = cast("list[dict[str, object]]", content)
+
+    text_part = next((p for p in parts if p.get("type") == "text"), None)
+    assert text_part is not None
+    assert "summarize https://www.tiktok.com/" in str(text_part.get("text"))
+
+    file_part = next((p for p in parts if p.get("type") == "file"), None)
+    assert file_part is not None
+    file_obj = file_part.get("file")
+    assert isinstance(file_obj, dict)
+    file_data = cast("dict[str, object]", file_obj).get("file_data")
+    assert isinstance(file_data, str)
+    assert file_data.startswith("data:video/mp4;base64,")
+
+
+@pytest.mark.asyncio
+async def test_tiktok_download_not_used_for_non_gemini(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _failing_tiktok_download(**kwargs: object):
+        message = "TikTok downloader should not run for non-Gemini"
+        raise AssertionError(message)
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_tiktok_video",
+        _failing_tiktok_download,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=34,
+        content=(
+            "summarize https://www.tiktok.com/@contraryian/video/7602846033332292894"
+        ),
+        author=FakeUser(1234),
+        attachments=[],
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-4o",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=5,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_proxy=None,
+            reddit_proxy=None,
+            proxy_url=None,
+        ),
+    )
+
+    assert isinstance(result.messages[0]["content"], str)

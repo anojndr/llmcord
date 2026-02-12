@@ -91,7 +91,6 @@ async def _run_decider_once(
                 api_key=current_api_key,
                 options=LiteLLMOptions(
                     base_url=run_config.base_url,
-                    temperature=0.1,
                 ),
             )
 

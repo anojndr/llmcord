@@ -27,6 +27,7 @@ from llmcord.logic.utils import (
 )
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import TwitterApiProtocol
+from llmcord.services.tiktok import maybe_download_tiktok_video
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +153,25 @@ async def _populate_node_if_needed(
         httpx_client=context.httpx_client,
         proxy_url=context.proxy_url,
     )
+
+    if is_gemini_model(context.actual_model):
+        tiktok_video = await maybe_download_tiktok_video(
+            cleaned_content=cleaned_content,
+            actual_model=context.actual_model,
+            httpx_client=context.httpx_client,
+            proxy_url=context.proxy_url,
+        )
+        if tiktok_video is not None:
+            processed_attachments.append(
+                {
+                    "content_type": tiktok_video.content_type,
+                    "content": tiktok_video.content,
+                    "text": None,
+                },
+            )
+            logger.info(
+                "Added downloaded TikTok video attachment for Gemini processing",
+            )
 
     curr_node.text = _build_initial_text(
         cleaned_content=cleaned_content,

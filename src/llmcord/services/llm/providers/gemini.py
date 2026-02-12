@@ -175,6 +175,7 @@ def configure_gemini_kwargs(
     model_parameters: dict | None = None,
     *,
     enable_grounding: bool = False,
+    contains_audio_or_video_input: bool = False,
 ) -> None:
     """Configure Gemini-specific kwargs."""
     clean_model, suffix_level = _extract_thinking_level_suffix(model)
@@ -197,14 +198,17 @@ def configure_gemini_kwargs(
         suffix_level=suffix_level,
     )
 
-    tools = _build_gemini_tools(
-        kwargs=kwargs,
-        model_parameters=model_parameters,
-        enable_grounding=enable_grounding,
-        is_preview=is_preview,
-    )
-    if tools:
-        kwargs["tools"] = tools
+    if contains_audio_or_video_input:
+        kwargs.pop("tools", None)
+    else:
+        tools = _build_gemini_tools(
+            kwargs=kwargs,
+            model_parameters=model_parameters,
+            enable_grounding=enable_grounding,
+            is_preview=is_preview,
+        )
+        if tools:
+            kwargs["tools"] = tools
 
     _apply_temperature_config(
         kwargs,
