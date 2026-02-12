@@ -107,10 +107,7 @@ async def _fetch_snaptik_download_url(
     *,
     tiktok_url: str,
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None,
 ) -> str | None:
-    _ = proxy_url
-
     page_response = await httpx_client.get("https://snaptik.app/en2")
     page_response.raise_for_status()
 
@@ -151,10 +148,7 @@ async def _download_video_payload(
     *,
     download_url: str,
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None,
 ) -> DownloadedTikTokVideo | None:
-    _ = proxy_url
-
     request_headers = {"user-agent": "TelegramBot (like TwitterBot)"}
     video_response = await httpx_client.get(
         download_url,
@@ -181,7 +175,6 @@ async def maybe_download_tiktok_video(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None = None,
 ) -> DownloadedTikTokVideo | None:
     """Download TikTok video via Snaptik for Gemini requests when URL is present."""
     if not is_gemini_model(actual_model):
@@ -195,7 +188,6 @@ async def maybe_download_tiktok_video(
         download_url = await _fetch_snaptik_download_url(
             tiktok_url=tiktok_url,
             httpx_client=httpx_client,
-            proxy_url=proxy_url,
         )
         if not download_url:
             return None
@@ -203,7 +195,6 @@ async def maybe_download_tiktok_video(
         return await _download_video_payload(
             download_url=download_url,
             httpx_client=httpx_client,
-            proxy_url=proxy_url,
         )
     except (httpx.HTTPError, ValueError):
         logger.exception("Failed to download TikTok video for Gemini request")

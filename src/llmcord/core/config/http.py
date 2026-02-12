@@ -15,7 +15,6 @@ class HttpxClientOptions:
     max_connections: int = 20
     max_keepalive: int = 10
     headers: dict[str, str] | None = None
-    proxy_url: str | None = None
     follow_redirects: bool = True
 
 
@@ -90,7 +89,6 @@ def get_or_create_httpx_client(
             max_keepalive_connections=effective_options.max_keepalive,
         ),
         headers=final_headers,
-        proxy=effective_options.proxy_url,
         follow_redirects=effective_options.follow_redirects,
     )
 

@@ -48,9 +48,6 @@ class MessageBuildContext:
     max_messages: int
     max_tweet_replies: int
     enable_youtube_transcripts: bool
-    youtube_transcript_proxy: str | None
-    reddit_proxy: str | None
-    proxy_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -132,7 +129,6 @@ async def _populate_node_if_needed(
             httpx_client=context.httpx_client,
             twitter_api=context.twitter_api,
             max_tweet_replies=context.max_tweet_replies,
-            proxy_url=context.proxy_url,
         ),
     )
 
@@ -151,7 +147,6 @@ async def _populate_node_if_needed(
     ) = await download_and_process_attachments(
         attachments=good_attachments,
         httpx_client=context.httpx_client,
-        proxy_url=context.proxy_url,
     )
 
     if is_gemini_model(context.actual_model):
@@ -159,7 +154,6 @@ async def _populate_node_if_needed(
             cleaned_content=cleaned_content,
             actual_model=context.actual_model,
             httpx_client=context.httpx_client,
-            proxy_url=context.proxy_url,
         )
         if tiktok_video is not None:
             processed_attachments.append(
@@ -207,9 +201,6 @@ async def _populate_node_if_needed(
             processed_attachments=processed_attachments,
             actual_model=context.actual_model,
             enable_youtube_transcripts=context.enable_youtube_transcripts,
-            youtube_transcript_proxy=context.youtube_transcript_proxy,
-            reddit_proxy=context.reddit_proxy,
-            proxy_url=context.proxy_url,
         ),
     )
 

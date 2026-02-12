@@ -150,9 +150,7 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
 | **reddit_client_secret** | Optional. Reddit API client secret. |
 | **reddit_user_agent** | Optional. User agent string for Reddit API requests. |
 | **twitter_accounts** | Optional. A list of Twitter/X accounts to use for tweet extraction. Each account requires a `username`, `password`, `email`, `email_password`, and `cookies` entry. |
-| **twitter_proxy** | Optional. A proxy URL (e.g., `http://user:pass@host:port`) to use for Twitter/X requests. |
 | **enable_youtube_transcripts** | Enable or disable YouTube transcript extraction. Useful when running on blocked cloud IPs.<br /><br />Default: `true` |
-| **youtube_transcript_proxy** | Optional. A proxy URL (e.g., `http://user:pass@host:port`) to use for YouTube transcript requests. |
 | **max_tweet_replies** | The maximum number of tweet replies to fetch when a Twitter/X link is detected.<br /><br />Default: `50` |
 | **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br /><br />Default: `100,000` |
 | **max_images** | The maximum number of image attachments allowed in a single message.<br /><br />Default: `5`<br /><br />**Only applicable when using a vision model.** |

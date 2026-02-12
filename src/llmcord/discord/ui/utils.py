@@ -11,7 +11,6 @@ from bs4 import BeautifulSoup
 from llmcord.core.config import (
     EMBED_COLOR_INCOMPLETE,
     HttpxClientOptions,
-    get_config,
     get_or_create_httpx_client,
 )
 from llmcord.discord.ui.constants import HTTP_OK
@@ -96,7 +95,6 @@ def _get_rentry_client() -> httpx.AsyncClient:
             connect_timeout=10.0,
             max_connections=10,
             max_keepalive=5,
-            proxy_url=None,
             follow_redirects=True,  # Now following redirects for robustness
         ),
     )
@@ -171,35 +169,13 @@ async def _perform_rentry_upload(
 
 
 async def upload_to_rentry(text: str) -> str | None:
-    """Upload text to rentry.co and return the paste URL.
-
-    Tries without proxy first, falling back to proxy if configured.
-    """
-    config = get_config()
-    proxy_url = config.get("proxy_url") or None
-
-    # Try direct first
+    """Upload text to rentry.co and return the paste URL."""
     try:
         client = _get_rentry_client()
         result = await _perform_rentry_upload(client, text)
         if result:
             return result
     except (httpx.HTTPError, httpx.RequestError):
-        if not proxy_url:
-            LOGGER.exception("Direct upload to rentry.co failed")
-            return None
-        LOGGER.info("Direct upload to rentry.co failed, trying proxy")
-
-    # Fallback to proxy
-    if proxy_url:
-        try:
-            async with httpx.AsyncClient(
-                proxy=proxy_url,
-                timeout=30.0,
-                follow_redirects=True,
-            ) as proxy_client:
-                return await _perform_rentry_upload(proxy_client, text)
-        except (httpx.HTTPError, httpx.RequestError):
-            LOGGER.exception("Proxy upload to rentry.co failed")
+        LOGGER.exception("Upload to rentry.co failed")
 
     return None

@@ -147,7 +147,6 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
             extract_youtube_transcript(
                 vid,
                 context.httpx_client,
-                proxy_url=context.youtube_transcript_proxy,
             )
             for vid in video_ids
         ],
@@ -176,7 +175,6 @@ async def _collect_reddit_posts(context: ExternalContentContext) -> list[str]:
             post_url,
             context.httpx_client,
             reddit_client,
-            proxy_url=context.reddit_proxy,
         )
         if post_text:
             reddit_posts.append(post_text)
@@ -220,7 +218,6 @@ async def _collect_generic_url_contents(context: ExternalContentContext) -> list
             extract_url_content(
                 url,
                 context.httpx_client,
-                proxy_url=context.proxy_url,
                 max_chars=2000,
             )
             for url in urls
@@ -244,7 +241,6 @@ class GoogleLensContext:
     httpx_client: httpx.AsyncClient
     twitter_api: TwitterApiProtocol
     max_tweet_replies: int
-    proxy_url: str | None = None
 
 
 @dataclass(slots=True)
@@ -258,9 +254,6 @@ class ExternalContentContext:
     processed_attachments: list[dict[str, bytes | str | None]]
     actual_model: str
     enable_youtube_transcripts: bool
-    youtube_transcript_proxy: str | None
-    reddit_proxy: str | None
-    proxy_url: str | None = None
 
 
 async def apply_googlelens(context: GoogleLensContext) -> str:
@@ -305,7 +298,6 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             context.httpx_client,
             context.twitter_api,
             context.max_tweet_replies,
-            proxy_url=context.proxy_url,
         )
         google_lens_task = perform_google_lens_lookup(
             image_url,
@@ -313,7 +305,6 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             context.httpx_client,
             context.twitter_api,
             context.max_tweet_replies,
-            proxy_url=context.proxy_url,
         )
         (
             (yandex_results, yandex_twitter),
@@ -370,7 +361,6 @@ async def download_and_process_attachments(
     *,
     attachments: list[discord.Attachment],
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None = None,
 ) -> tuple[
     list[discord.Attachment],
     list[httpx.Response],
@@ -380,7 +370,6 @@ async def download_and_process_attachments(
     successful_pairs = await download_attachments(
         attachments,
         httpx_client,
-        proxy_url=proxy_url,
     )
     good_attachments = [pair[0] for pair in successful_pairs]
     attachment_responses = [pair[1] for pair in successful_pairs]

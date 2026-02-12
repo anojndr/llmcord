@@ -7,7 +7,6 @@ import httpx
 
 from llmcord.core.config import (
     HttpxClientOptions,
-    get_config,
     get_or_create_httpx_client,
 )
 from llmcord.services.http import DEFAULT_RETRYABLE_STATUSES, wait_before_retry
@@ -33,7 +32,6 @@ def _get_exa_client() -> httpx.AsyncClient:
             max_keepalive=10,
             follow_redirects=True,
             headers={},
-            proxy_url=None,
         ),
     )
 
@@ -376,68 +374,6 @@ async def _do_exa_request(
     return None
 
 
-async def _exa_search_with_fallback(
-    query: str,
-    exa_mcp_url: str,
-    payload: dict,
-    client: httpx.AsyncClient,
-    proxy_url: str | None,
-) -> dict:
-    """Execute Exa search with fallback to proxy if necessary."""
-    proxy_client = None
-    final_result: dict | None = None
-    try:
-        try:
-            final_result = await _do_exa_request(
-                client,
-                "direct",
-                exa_mcp_url,
-                payload,
-                query,
-            )
-        except (httpx.TimeoutException, httpx.RequestError) as exc:
-            if not proxy_url:
-                logger.exception("Exa MCP search error (direct) for query '%s'", query)
-                final_result = {"error": f"{type(exc).__name__}: {exc}", "query": query}
-            else:
-                logger.info(
-                    "Exa MCP direct search failed, falling back to proxy: %s",
-                    exc,
-                )
-        except Exception as exc:
-            logger.exception("Exa MCP search error for query '%s'", query)
-            final_result = {"error": str(exc), "query": query}
-
-        if final_result:
-            return final_result
-
-        if proxy_url:
-            proxy_client = httpx.AsyncClient(
-                proxy=proxy_url,
-                timeout=client.timeout,
-                headers=client.headers,
-            )
-            try:
-                final_result = await _do_exa_request(
-                    proxy_client,
-                    "proxy",
-                    exa_mcp_url,
-                    payload,
-                    query,
-                )
-            except (httpx.TimeoutException, httpx.RequestError) as exc:
-                logger.exception("Exa MCP search error (proxy) for query '%s'", query)
-                final_result = {"error": f"{type(exc).__name__}: {exc}", "query": query}
-            except Exception as exc:
-                logger.exception("Exa MCP search error for query '%s'", query)
-                final_result = {"error": str(exc), "query": query}
-    finally:
-        if proxy_client:
-            await proxy_client.aclose()
-
-    return final_result or {"error": "Retry attempts exhausted", "query": query}
-
-
 async def exa_search(
     query: str,
     exa_mcp_url: str = EXA_MCP_URL,
@@ -455,8 +391,6 @@ async def exa_search(
         max_results: Maximum results to return
 
     """
-    config = get_config()
-    proxy_url = config.get("proxy_url") or None
     client = _get_exa_client()
     payload = _build_exa_payload(query, max_results)
 
@@ -466,10 +400,19 @@ async def exa_search(
         max_results,
     )
 
-    return await _exa_search_with_fallback(
-        query,
-        exa_mcp_url,
-        payload,
-        client,
-        proxy_url,
-    )
+    try:
+        result = await _do_exa_request(
+            client,
+            "direct",
+            exa_mcp_url,
+            payload,
+            query,
+        )
+    except (httpx.TimeoutException, httpx.RequestError) as exc:
+        logger.exception("Exa MCP search error (direct) for query '%s'", query)
+        return {"error": f"{type(exc).__name__}: {exc}", "query": query}
+    except Exception as exc:
+        logger.exception("Exa MCP search error for query '%s'", query)
+        return {"error": str(exc), "query": query}
+
+    return result or {"error": "Retry attempts exhausted", "query": query}

@@ -74,9 +74,6 @@ async def test_x_url_extraction_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
-            youtube_transcript_proxy=None,
-            reddit_proxy=None,
-            proxy_url=None,
         ),
     )
 
@@ -146,9 +143,6 @@ async def test_reddit_url_extraction_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
-            youtube_transcript_proxy=None,
-            reddit_proxy=None,
-            proxy_url=None,
         ),
     )
 
@@ -211,9 +205,6 @@ async def test_youtube_url_extraction_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
-            youtube_transcript_proxy=None,
-            reddit_proxy=None,
-            proxy_url=None,
         ),
     )
 
@@ -281,9 +272,6 @@ async def test_general_url_extraction_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
-            youtube_transcript_proxy=None,
-            reddit_proxy=None,
-            proxy_url=None,
         ),
     )
 

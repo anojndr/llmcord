@@ -46,13 +46,11 @@ discord_bot = commands.Bot(
 )
 
 _httpx_client_holder: list[httpx.AsyncClient | None] = []
-proxy_url = config.get("proxy_url") or None
 httpx_client = get_or_create_httpx_client(
     _httpx_client_holder,
-    options=HttpxClientOptions(proxy_url=None),
+    options=HttpxClientOptions(),
 )
-twitter_proxy = config.get("twitter_proxy") or proxy_url
-twitter_api = API(proxy=twitter_proxy)
+twitter_api = API()
 
 
 if (

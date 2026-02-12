@@ -24,11 +24,10 @@ from youtube_transcript_api import (
     YouTubeTranscriptApi,
     YouTubeTranscriptApiException,
 )
-from youtube_transcript_api.proxies import GenericProxyConfig
 
 from llmcord.core.config import BROWSER_HEADERS
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
-from llmcord.services.http import request_with_optional_proxy, request_with_retries
+from llmcord.services.http import request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -323,8 +322,6 @@ async def fetch_tweet_with_replies(
 async def download_attachments(
     attachments: list[discord.Attachment],
     httpx_client: httpx.AsyncClient,
-    *,
-    proxy_url: str | None = None,
 ) -> list[tuple[discord.Attachment, httpx.Response]]:
     """Download attachments with timeout."""
 
@@ -332,10 +329,8 @@ async def download_attachments(
         att: discord.Attachment,
     ) -> httpx.Response | None:
         try:
-            return await request_with_optional_proxy(
-                lambda client: client.get(att.url, timeout=60),
-                httpx_client,
-                proxy_url,
+            return await request_with_retries(
+                lambda: httpx_client.get(att.url, timeout=60),
                 log_context=f"attachment {att.filename}",
             )
         except httpx.HTTPError as exc:
@@ -394,7 +389,6 @@ async def extract_url_content(
     url: str,
     httpx_client: httpx.AsyncClient,
     *,
-    proxy_url: str | None = None,
     max_chars: int = 2000,
 ) -> str | None:
     """Extract text content from a URL."""
@@ -406,15 +400,13 @@ async def extract_url_content(
         return None
 
     try:
-        response = await request_with_optional_proxy(
-            lambda client: client.get(
+        response = await request_with_retries(
+            lambda: httpx_client.get(
                 url,
                 headers=BROWSER_HEADERS,
                 follow_redirects=True,
                 timeout=20,
             ),
-            httpx_client,
-            proxy_url,
             log_context=f"URL content extraction {url}",
         )
         if response.status_code != httpx.codes.OK:
@@ -509,7 +501,6 @@ def _parse_google_lens_item(item: dict[str, Any]) -> dict[str, str | None]:
 async def _process_yandex_results(
     sites_items: list[Tag],
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None,
 ) -> tuple[list[str], list[str]]:
     """Process Yandex sites items into formatted results and Twitter URLs."""
     lens_results = []
@@ -520,7 +511,7 @@ async def _process_yandex_results(
     parsed_items = [_parse_yandex_sites_item(item) for item in items_to_process]
 
     extraction_tasks = [
-        extract_url_content(data["link"], httpx_client, proxy_url=proxy_url)
+        extract_url_content(data["link"], httpx_client)
         if data["link"]
         else asyncio.sleep(0, result=None)
         for data in parsed_items
@@ -549,7 +540,6 @@ async def _process_yandex_results(
 async def _process_google_lens_results(
     visual_matches: list[dict[str, Any]],
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None,
 ) -> tuple[list[str], list[str]]:
     lens_results = []
     twitter_urls_found = []
@@ -558,7 +548,7 @@ async def _process_google_lens_results(
     parsed_items = [_parse_google_lens_item(item) for item in items_to_process]
 
     extraction_tasks = [
-        extract_url_content(data["link"], httpx_client, proxy_url=proxy_url)
+        extract_url_content(data["link"], httpx_client)
         if data["link"]
         else asyncio.sleep(0, result=None)
         for data in parsed_items
@@ -588,8 +578,6 @@ async def perform_yandex_lookup(
     httpx_client: httpx.AsyncClient,
     twitter_api: TwitterApiProtocol,
     max_tweet_replies: int,
-    *,
-    proxy_url: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Perform Yandex reverse image search and extract results."""
     params = {
@@ -633,10 +621,8 @@ async def perform_yandex_lookup(
             return await fetch_yandex(client, d)
 
         try:
-            yandex_resp = await request_with_optional_proxy(
-                _yandex_req,
-                httpx_client,
-                proxy_url,
+            yandex_resp = await request_with_retries(
+                lambda: _yandex_req(httpx_client),
                 log_context=f"Yandex reverse image search ({domain})",
             )
 
@@ -655,7 +641,6 @@ async def perform_yandex_lookup(
     lens_results, twitter_urls_found = await _process_yandex_results(
         sites_items,
         httpx_client,
-        proxy_url,
     )
 
     twitter_content = await _fetch_twitter_results(
@@ -667,14 +652,12 @@ async def perform_yandex_lookup(
     return lens_results, twitter_content
 
 
-async def perform_google_lens_lookup(  # noqa: PLR0913
+async def perform_google_lens_lookup(
     image_url: str,
     serpapi_api_key: str,
     httpx_client: httpx.AsyncClient,
     twitter_api: TwitterApiProtocol,
     max_tweet_replies: int,
-    *,
-    proxy_url: str | None = None,
 ) -> tuple[list[str], list[str]]:
     """Perform Google Lens reverse image search via SerpApi and extract results."""
     if not serpapi_api_key:
@@ -697,10 +680,8 @@ async def perform_google_lens_lookup(  # noqa: PLR0913
         return resp
 
     try:
-        response = await request_with_optional_proxy(
-            fetch_google_lens,
-            httpx_client,
-            proxy_url,
+        response = await request_with_retries(
+            lambda: fetch_google_lens(httpx_client),
             log_context="Google Lens reverse image search",
         )
     except httpx.HTTPError as exc:
@@ -715,7 +696,6 @@ async def perform_google_lens_lookup(  # noqa: PLR0913
     lens_results, twitter_urls_found = await _process_google_lens_results(
         visual_matches,
         httpx_client,
-        proxy_url,
     )
     twitter_content = await _fetch_twitter_results(
         twitter_urls_found,
@@ -725,31 +705,20 @@ async def perform_google_lens_lookup(  # noqa: PLR0913
     return lens_results, twitter_content
 
 
-def _build_youtube_transcript_api(
-    proxy_url: str | None,
-) -> YouTubeTranscriptApi:
-    if proxy_url:
-        proxy_config = GenericProxyConfig(
-            http_url=proxy_url,
-            https_url=proxy_url,
-        )
-        return YouTubeTranscriptApi(proxy_config=proxy_config)
+def _build_youtube_transcript_api() -> YouTubeTranscriptApi:
     return YouTubeTranscriptApi()
 
 
 async def extract_youtube_transcript(
     video_id: str,
     httpx_client: httpx.AsyncClient,
-    *,
-    proxy_url: str | None = None,
 ) -> str | None:
     """Fetch YouTube transcript and metadata."""
 
     async def _fetch(
         client: httpx.AsyncClient,
-        p_url: str | None,
     ) -> tuple[list[dict], httpx.Response]:
-        ytt_api = _build_youtube_transcript_api(p_url)
+        ytt_api = _build_youtube_transcript_api()
         transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
         transcript_data = transcript_obj.to_raw_data()
 
@@ -765,8 +734,7 @@ async def extract_youtube_transcript(
         return transcript_data, resp
 
     try:
-        # Try direct connection first
-        transcript, response = await _fetch(httpx_client, None)
+        transcript, response = await _fetch(httpx_client)
     except (
         YouTubeTranscriptApiException,
         httpx.HTTPError,
@@ -774,28 +742,12 @@ async def extract_youtube_transcript(
         ValueError,
         KeyError,
     ) as exc:
-        if not proxy_url:
-            logger.debug(
-                "Failed to fetch YouTube transcript for %s: %s",
-                video_id,
-                exc,
-            )
-            return None
-
-        logger.info(
-            "YouTube direct connection failed for %s (%s), retrying with proxy",
+        logger.debug(
+            "Failed to fetch YouTube transcript for %s: %s",
             video_id,
             exc,
         )
-        try:
-            transcript, response = await _fetch(httpx_client, proxy_url)
-        except Exception as retry_exc:  # noqa: BLE001
-            logger.debug(
-                "Failed to fetch YouTube transcript (proxy fallback) for %s: %s",
-                video_id,
-                retry_exc,
-            )
-            return None
+        return None
     html = response.text
     title_match = re.search(r'<meta name="title" content="(.*?)">', html)
     title = title_match.group(1) if title_match else "Unknown Title"
@@ -818,22 +770,19 @@ async def extract_youtube_transcript(
 async def _resolve_reddit_share_url(
     post_url: str,
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None,
 ) -> str:
     """Resolve Reddit share URL to canonical URL."""
     if not re.search(r"/r/\w+/s/", post_url):
         return post_url
 
     try:
-        resolve_resp = await request_with_optional_proxy(
-            lambda client: client.head(
+        resolve_resp = await request_with_retries(
+            lambda: httpx_client.head(
                 post_url,
                 headers=BROWSER_HEADERS,
                 timeout=30,
                 follow_redirects=True,
             ),
-            httpx_client,
-            proxy_url,
             log_context=f"Reddit share URL resolution {post_url}",
         )
         resolved_url = str(resolve_resp.url)
@@ -860,7 +809,6 @@ def _build_reddit_json_url(post_url: str) -> str:
 async def _fetch_reddit_json(
     json_url: str,
     httpx_client: httpx.AsyncClient,
-    proxy_url: str | None,
 ) -> tuple[dict, str]:
     """Fetch Reddit JSON data from the given URL.
 
@@ -869,15 +817,13 @@ async def _fetch_reddit_json(
         after following redirects (useful for share URL resolution).
 
     """
-    response = await request_with_optional_proxy(
-        lambda client: client.get(
+    response = await request_with_retries(
+        lambda: httpx_client.get(
             json_url,
             headers=BROWSER_HEADERS,
             timeout=30,
             follow_redirects=True,
         ),
-        httpx_client,
-        proxy_url,
         log_context=f"Reddit JSON fetch {json_url}",
     )
     response.raise_for_status()
@@ -912,10 +858,7 @@ async def _extract_reddit_json_direct(
     httpx_client: httpx.AsyncClient,  # noqa: ARG001 - unused, kept for signature
     max_comments: int | None,
 ) -> str:
-    """Extract Reddit post using direct connection (no proxy).
-
-    Note: Creates its own client to ensure no proxy is used, even if the
-    passed httpx_client has proxy configured.
+    """Extract Reddit post using a dedicated direct connection.
 
     Args:
         post_url: The Reddit post URL (may be share URL)
@@ -930,7 +873,7 @@ async def _extract_reddit_json_direct(
         KeyError, TypeError, ValueError: If parsing fails
 
     """
-    # Create a fresh client with NO proxy to ensure direct connection
+    # Create a fresh client for direct Reddit JSON access
     async with httpx.AsyncClient(follow_redirects=True) as client:
         # Resolve share URLs first if needed
         if re.search(r"/r/\w+/s/", post_url):
@@ -978,19 +921,13 @@ async def extract_reddit_post_json(
     post_url: str,
     httpx_client: httpx.AsyncClient,
     *,
-    proxy_url: str | None = None,
     max_comments: int | None = None,
 ) -> str | None:
     """Extract Reddit post content using JSON endpoints.
 
-    Tries without proxy first. If it fails and a proxy is configured,
-    falls back to proxy. Reddit's public JSON endpoints don't usually
-    require proxying but can sometimes block direct access.
-
     Args:
         post_url: The Reddit post URL to extract content from
         httpx_client: The HTTP client to use for requests
-        proxy_url: Optional proxy URL to use for requests
         max_comments: Maximum number of comments to extract. None = unlimited.
 
     Returns:
@@ -1007,72 +944,8 @@ async def extract_reddit_post_json(
             max_comments,
         )
     except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
-        if not proxy_url:
-            logger.debug(
-                "Failed to fetch Reddit content (JSON) for %s: %s",
-                original_url,
-                exc,
-            )
-            return None
-
-        # Direct failed - fallback to proxy if configured
-        logger.info(
-            "Direct Reddit request failed for %s (%s), falling back to proxy",
-            original_url,
-            exc,
-        )
-
-    # Fallback to proxy
-    try:
-        async with httpx.AsyncClient(
-            proxy=proxy_url,
-            follow_redirects=True,
-        ) as client:
-            # Resolve share URLs first if needed
-            if re.search(r"/r/\w+/s/", post_url):
-                resolve_resp = await client.head(
-                    post_url,
-                    headers=BROWSER_HEADERS,
-                    timeout=30,
-                )
-                post_url = str(resolve_resp.url)
-                if "?" in post_url:
-                    post_url = post_url.split("?")[0]
-
-            json_url = _build_reddit_json_url(post_url)
-            response = await client.get(
-                json_url,
-                headers=BROWSER_HEADERS,
-                timeout=30,
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        post_listing = data[0]["data"]["children"][0]["data"]
-        comments_listing = data[1]["data"]["children"]
-
-        title = post_listing.get("title", "Untitled")
-        subreddit_name = post_listing.get("subreddit", "unknown")
-        author_name = post_listing.get("author", "unknown")
-        selftext = post_listing.get("selftext", "")
-        url = post_listing.get("url", "")
-        is_self = post_listing.get("is_self", True)
-
-        post_text = (
-            f"Reddit Post: {title}\nSubreddit: r/{subreddit_name}\n"
-            f"Author: u/{author_name}\n\n{selftext}"
-        )
-
-        if not is_self and url:
-            post_text += f"\nLink: {url}"
-
-        return post_text + _format_reddit_comments(
-            comments_listing,
-            max_comments,
-        )
-    except Exception as exc:  # noqa: BLE001
         logger.debug(
-            "Failed to fetch Reddit content (JSON proxy fallback) for %s: %s",
+            "Failed to fetch Reddit content (JSON) for %s: %s",
             original_url,
             exc,
         )
@@ -1160,7 +1033,6 @@ async def extract_reddit_post(
     httpx_client: httpx.AsyncClient,
     reddit_client: asyncpraw.Reddit | None = None,
     *,
-    proxy_url: str | None = None,
     max_comments: int | None = None,
 ) -> str | None:
     """Extract Reddit post content using the configured method.
@@ -1169,7 +1041,6 @@ async def extract_reddit_post(
         post_url: The Reddit post URL to extract content from
         httpx_client: The HTTP client to use for requests
         reddit_client: Optional AsyncPRAW Reddit client instance
-        proxy_url: Optional proxy URL to use for requests
         max_comments: Maximum number of comments to extract. None = unlimited.
 
     Returns:
@@ -1184,7 +1055,6 @@ async def extract_reddit_post(
             post_url = await _resolve_reddit_share_url(
                 post_url,
                 httpx_client,
-                proxy_url,
             )
 
         return await extract_reddit_post_praw(
@@ -1194,11 +1064,9 @@ async def extract_reddit_post(
         )
 
     # For JSON extraction, share URL resolution is handled automatically
-    # via follow_redirects during the GET request, avoiding extra HEAD
-    # requests that can fail with rotating proxies.
+    # via follow_redirects during the GET request.
     return await extract_reddit_post_json(
         post_url,
         httpx_client,
-        proxy_url=proxy_url,
         max_comments=max_comments,
     )

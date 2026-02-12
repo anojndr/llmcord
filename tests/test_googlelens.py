@@ -116,9 +116,6 @@ async def test_googlelens_results_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
-            youtube_transcript_proxy=None,
-            reddit_proxy=None,
-            proxy_url=None,
         ),
     )
 
