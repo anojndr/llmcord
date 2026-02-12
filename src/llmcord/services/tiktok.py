@@ -14,7 +14,11 @@ from llmcord.core.config import is_gemini_model
 logger = logging.getLogger(__name__)
 
 _TIKTOK_URL_RE = re.compile(
-    r"https?://(?:www\.)?(?:tiktok\.com|vm\.tiktok\.com|m\.tiktok\.com)/[^\s<>()\[\]{}]+",
+    (
+        r"https?://(?:www\.)?(?:"
+        r"tiktok\.com|vm\.tiktok\.com|m\.tiktok\.com|vt\.tiktok\.com"
+        r")/[^\s<>()\[\]{}]+"
+    ),
     re.IGNORECASE,
 )
 
