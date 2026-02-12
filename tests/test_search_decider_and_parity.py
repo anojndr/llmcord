@@ -83,7 +83,9 @@ async def test_web_search_decider_appends_results(
     )
 
     assert search_metadata == {"provider": "mock"}
-    assert "Search Results" in str(messages[0]["content"])
+    assert messages[0]["content"] == (
+        "latest news\n\n--- Search Results ---\nHeadline: Example"
+    )
 
 
 def test_decider_message_format_preserves_or_describes_files() -> None:

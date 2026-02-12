@@ -82,6 +82,9 @@ async def test_x_url_extraction_appended(
 
     assert result.messages, "Expected at least one built message"
     user_content = str(result.messages[0]["content"])
+    assert user_content.startswith(
+        "summarize https://x.com/cb_doge/status/2019995898894520711",
+    )
     assert "Grok 4.20 just dominated the Alpha Arena leaderboard" in user_content
     assert "It's competing against GPT 5.1 and Claude 4.5 Sonnet" in user_content
     assert "what is this arena? And what you dominated?" in user_content
@@ -150,6 +153,9 @@ async def test_reddit_url_extraction_appended(
     )
 
     user_content = str(result.messages[0]["content"])
+    assert user_content.startswith(
+        "summarize https://www.reddit.com/r/ClaudeAI/s/WdtZ84wM3m",
+    )
     assert "We use and love both Claude Code and Codex CLI agents" in user_content
     assert "The verdict is a hard split" in user_content
     assert "Glad to see I'm not the only Gemini Pro hater" in user_content
@@ -212,6 +218,9 @@ async def test_youtube_url_extraction_appended(
     )
 
     user_content = str(result.messages[0]["content"])
+    assert user_content.startswith(
+        "what age won https://www.youtube.com/watch?v=9WEQts7b8Pw",
+    )
     assert "Age 28" in user_content
 
 
@@ -279,5 +288,10 @@ async def test_general_url_extraction_appended(
     )
 
     user_content = str(result.messages[0]["content"])
+    assert user_content.startswith("summarize https://en.wikipedia.org/wiki/Elephant")
+    assert (
+        "--- URL Content: https://en.wikipedia.org/wiki/Elephant ---\n"
+        "Elephants are large mammals of the family Elephantidae."
+    ) in user_content
     assert "Elephants are large mammals" in user_content
     assert calls == ["https://en.wikipedia.org/wiki/Elephant"]
