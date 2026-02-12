@@ -38,6 +38,7 @@ llmcord supports remote models from:
 - [Google Gemini API](https://ai.google.dev/gemini-api/docs/models)
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
+- [OpenRouter](https://openrouter.ai/models)
 
 Or run local models with:
 - [Ollama](https://ollama.com)

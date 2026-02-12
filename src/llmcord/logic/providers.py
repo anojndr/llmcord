@@ -90,7 +90,11 @@ async def resolve_provider_settings(
             or model_parameters.get("modelName")
         )
 
-    if isinstance(override_model, str) and "/" in override_model:
+    if (
+        isinstance(override_model, str)
+        and "/" in override_model
+        and provider != "openrouter"
+    ):
         _, override_model = override_model.split("/", 1)
 
     actual_model = override_model or model

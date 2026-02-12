@@ -89,6 +89,10 @@ providers:
   gemini:
     api_key: 
 
+  openrouter:
+    api_key:
+    base_url: https://openrouter.ai/api/v1
+
   mistral:
     base_url: https://api.mistral.ai/v1
     api_key: 
@@ -117,6 +121,8 @@ models:
         threshold: BLOCK_NONE
       - category: HARM_CATEGORY_DANGEROUS_CONTENT
         threshold: BLOCK_NONE
+
+  openrouter/openrouter/free:
 
   mistral/mistral-large-latest:
 
