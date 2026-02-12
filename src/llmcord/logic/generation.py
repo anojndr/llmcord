@@ -345,6 +345,16 @@ async def _get_stream(
     """Yield stream chunks from LiteLLM with grounding metadata."""
     enable_grounding = not re.search(r"https?://", context.new_msg.content)
 
+    if not is_gemini_model(stream_config.actual_model):
+        removed_audio_video_files = _remove_audio_video_file_parts_from_messages(
+            context.messages,
+        )
+        if removed_audio_video_files:
+            logger.info(
+                "Removed audio/video file parts from messages for non-Gemini model %s",
+                stream_config.actual_model,
+            )
+
     litellm_kwargs = prepare_litellm_kwargs(
         provider=stream_config.provider,
         model=stream_config.actual_model,
@@ -497,6 +507,62 @@ def _remove_images_from_messages(messages: list[dict[str, object]]) -> bool:
         ]
 
     return images_removed
+
+
+def _is_audio_or_video_file_part(part: dict[str, object]) -> bool:
+    if part.get("type") != "file":
+        return False
+
+    file_info_obj = part.get("file")
+    if not isinstance(file_info_obj, dict):
+        return False
+    file_info = cast("dict[str, object]", file_info_obj)
+
+    file_data = file_info.get("file_data")
+    if not isinstance(file_data, str):
+        return False
+
+    return file_data.startswith(("data:audio/", "data:video/"))
+
+
+def _remove_audio_video_file_parts_from_messages(
+    messages: list[dict[str, object]],
+) -> bool:
+    removed_any = False
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        filtered_content: list[object] = []
+        for part in content:
+            if not isinstance(part, dict):
+                filtered_content.append(part)
+                continue
+
+            part_dict = cast("dict[str, object]", part)
+            if _is_audio_or_video_file_part(part_dict):
+                removed_any = True
+                continue
+
+            filtered_content.append(part_dict)
+
+        if filtered_content:
+            message["content"] = filtered_content
+            continue
+
+        message["content"] = [
+            {
+                "type": "text",
+                "text": (
+                    "Audio/video attachment omitted because this model does not "
+                    "support native file input."
+                ),
+            },
+        ]
+
+    return removed_any
 
 
 def _handle_generation_exception(
