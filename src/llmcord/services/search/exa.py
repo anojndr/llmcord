@@ -10,7 +10,7 @@ from llmcord.core.config import (
     get_config,
     get_or_create_httpx_client,
 )
-from llmcord.services.http import DEFAULT_RETRYABLE_STATUSES, wait_with_backoff
+from llmcord.services.http import DEFAULT_RETRYABLE_STATUSES, wait_before_retry
 from llmcord.services.search.config import EXA_MCP_URL, HTTP_OK, MAX_ERROR_CHARS
 
 logger = logging.getLogger(__name__)
@@ -354,7 +354,7 @@ async def _do_exa_request(
                         attempt + 1,
                         retries,
                     )
-                    await wait_with_backoff(attempt)
+                    await wait_before_retry(attempt)
                     continue
 
                 result = await _parse_exa_http_response(response, query)
@@ -370,7 +370,7 @@ async def _do_exa_request(
                     attempt + 1,
                     retries,
                 )
-                await wait_with_backoff(attempt)
+                await wait_before_retry(attempt)
                 continue
             raise
     return None

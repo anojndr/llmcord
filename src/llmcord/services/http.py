@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -17,24 +16,30 @@ logger = logging.getLogger(__name__)
 DEFAULT_RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
-async def wait_with_backoff(
+async def wait_before_retry(
     attempt: int,
     *,
-    base_delay: float = 0.5,
-    max_delay: float = 4.0,
+    unused_delay_1: float = 0.0,
+    unused_delay_2: float = 0.0,
 ) -> None:
-    """Wait with exponential backoff based on the retry attempt."""
-    delay = min(max_delay, base_delay * (2**attempt))
-    await asyncio.sleep(delay)
+    """Retry immediately without delay.
+
+    Delay parameters are unused and retained for legacy compatibility.
+    """
+    _ = (attempt, unused_delay_1, unused_delay_2)
 
 
 @dataclass(frozen=True, slots=True)
 class RetryOptions:
-    """Configuration for HTTP retry behavior."""
+    """Configuration for HTTP retry behavior.
+
+    All retries are immediate.
+    Delay options are retained for legacy compatibility but unused.
+    """
 
     retries: int = 2
-    base_delay: float = 0.5
-    max_delay: float = 4.0
+    unused_delay_1: float = 0.0
+    unused_delay_2: float = 0.0
     retryable_statuses: set[int] | frozenset[int] | None = None
 
 
@@ -61,10 +66,10 @@ async def request_with_retries(
                     retry_options.retries,
                     exc,
                 )
-                await wait_with_backoff(
+                await wait_before_retry(
                     attempt,
-                    base_delay=retry_options.base_delay,
-                    max_delay=retry_options.max_delay,
+                    unused_delay_1=retry_options.unused_delay_1,
+                    unused_delay_2=retry_options.unused_delay_2,
                 )
                 continue
             raise
@@ -79,10 +84,10 @@ async def request_with_retries(
                 retry_options.retries,
             )
             await response.aclose()
-            await wait_with_backoff(
+            await wait_before_retry(
                 attempt,
-                base_delay=retry_options.base_delay,
-                max_delay=retry_options.max_delay,
+                unused_delay_1=retry_options.unused_delay_1,
+                unused_delay_2=retry_options.unused_delay_2,
             )
             continue
 
