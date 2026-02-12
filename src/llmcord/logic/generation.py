@@ -450,6 +450,54 @@ def _append_stream_content(
     )
 
 
+def _is_image_input_error(error: Exception) -> bool:
+    error_str = str(error).lower()
+    image_error_patterns = (
+        "image input",
+        "support image",
+        "no endpoints found",
+        "image_url",
+        "unsupported image",
+    )
+    return any(pattern in error_str for pattern in image_error_patterns)
+
+
+def _remove_images_from_messages(messages: list[dict[str, object]]) -> bool:
+    images_removed = False
+
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+
+        filtered_content: list[object] = []
+        for part in content:
+            if not isinstance(part, dict):
+                filtered_content.append(part)
+                continue
+
+            part_dict = cast("dict[str, object]", part)
+
+            if part_dict.get("type") == "image_url":
+                images_removed = True
+                continue
+
+            filtered_content.append(part_dict)
+
+        if filtered_content:
+            message["content"] = filtered_content
+            continue
+
+        message["content"] = [
+            {
+                "type": "text",
+                "text": "Image input was removed due to provider error.",
+            },
+        ]
+
+    return images_removed
+
+
 def _handle_generation_exception(
     *,
     error: Exception,
@@ -735,8 +783,15 @@ async def _stream_response(
         _raise_empty_response()
 
     if use_plain_responses:
+        rendered_contents = response_contents
+        if state.image_removal_warning and rendered_contents:
+            rendered_contents = rendered_contents.copy()
+            rendered_contents[-1] = (
+                f"{rendered_contents[-1]}\n\n{state.image_removal_warning}"
+            )
+
         await render_plain_responses(
-            response_contents=response_contents,
+            response_contents=rendered_contents,
             response_msgs=state.response_msgs,
             reply_helper=reply_helper,
             grounding_metadata=grounding_metadata,
@@ -798,6 +853,23 @@ async def _run_generation_loop(
             )
             break
         except GENERATION_EXCEPTIONS as exc:
+            if (
+                not loop_state.image_input_removed
+                and _is_image_input_error(cast("Exception", exc))
+                and _remove_images_from_messages(context.messages)
+            ):
+                loop_state.image_input_removed = True
+                loop_state.last_error_msg = str(exc)
+                state.image_removal_warning = (
+                    "⚠️ Image removed from input due to provider error."
+                )
+                loop_state.attempt_count -= 1
+                logger.warning(
+                    "Retrying without image input after provider error: %s",
+                    exc,
+                )
+                continue
+
             (
                 loop_state.good_keys,
                 loop_state.last_error_msg,

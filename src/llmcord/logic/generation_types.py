@@ -53,6 +53,7 @@ class GenerationState:
     generated_image_hashes: set[str]
     display_model: str
     fallback_warning: str | None = None
+    image_removal_warning: str | None = None
 
 
 @dataclass(slots=True)
@@ -119,3 +120,4 @@ class GenerationLoopState:
     last_error_msg: str | None
     fallback_state: FallbackState
     fallback_chain: list[tuple[str, str, str]]
+    image_input_removed: bool = False

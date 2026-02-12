@@ -26,6 +26,15 @@ from llmcord.logic.utils import count_text_tokens
 logger = logging.getLogger(__name__)
 
 
+def _build_footer_text(*, state: GenerationState, total_tokens: int) -> str:
+    footer_lines = [f"{state.display_model} | total tokens: {total_tokens:,}"]
+    if state.fallback_warning:
+        footer_lines.append(state.fallback_warning)
+    if state.image_removal_warning:
+        footer_lines.append(state.image_removal_warning)
+    return "\n".join(footer_lines)
+
+
 async def render_exhausted_response(
     *,
     state: GenerationState,
@@ -88,10 +97,10 @@ async def update_response_view(
     if last_msg_index < len(state.response_contents) and state.embed:
         state.embed.description = state.response_contents[last_msg_index]
         state.embed.color = EMBED_COLOR_COMPLETE
-        footer_lines = [f"{state.display_model} | total tokens: {total_tokens:,}"]
-        if state.fallback_warning:
-            footer_lines.append(state.fallback_warning)
-        footer_text = "\n".join(footer_lines)
+        footer_text = _build_footer_text(
+            state=state,
+            total_tokens=total_tokens,
+        )
         state.embed.set_footer(text=footer_text)
         await state.response_msgs[last_msg_index].edit(
             embed=state.embed,
