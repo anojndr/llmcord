@@ -625,6 +625,7 @@ async def _handle_exhausted_keys(
     )
 
     if next_fallback:
+        previous_display_model = state.display_model
         (
             loop_state.provider,
             loop_state.actual_model,
@@ -640,6 +641,10 @@ async def _handle_exhausted_keys(
             loop_state.provider,
             loop_state.actual_model,
         )
+        if state.display_model != previous_display_model:
+            state.fallback_warning = (
+                f"⚠️ Switched to {state.display_model} because of errors"
+            )
         if state.embed is not None:
             state.embed.set_footer(text=state.display_model)
 

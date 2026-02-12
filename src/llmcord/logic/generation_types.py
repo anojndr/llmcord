@@ -52,6 +52,7 @@ class GenerationState:
     generated_images: list["GeneratedImage"]
     generated_image_hashes: set[str]
     display_model: str
+    fallback_warning: str | None = None
 
 
 @dataclass(slots=True)
