@@ -1,16 +1,15 @@
 """Content extraction and attachment processing logic."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import re
 from base64 import b64encode
 from dataclasses import dataclass
-
-import discord
-import httpx
+from typing import TYPE_CHECKING
 
 from llmcord.core.config import is_gemini_model
-from llmcord.core.models import MsgNode
 from llmcord.globals import reddit_client
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import (
@@ -19,6 +18,7 @@ from llmcord.services.extractors import (
     extract_pdf_images,
     extract_pdf_text,
     extract_reddit_post,
+    extract_url_content,
     extract_youtube_transcript,
     fetch_tweet_with_replies,
     perform_yandex_lookup,
@@ -26,6 +26,133 @@ from llmcord.services.extractors import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+if TYPE_CHECKING:
+    import discord
+    import httpx
+
+    from llmcord.core.models import MsgNode
+
+
+_YOUTUBE_ID_RE = re.compile(
+    (
+        r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?"
+        r"(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})"
+    ),
+)
+_TWEET_ID_RE = re.compile(
+    (
+        r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?"
+        r"(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)"
+    ),
+)
+_REDDIT_URL_RE = re.compile(
+    (
+        r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?"
+        r"(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/(?:comments|s)\/"
+        r"[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)"
+        r"|redd\.it\/[a-zA-Z0-9_]+))"
+    ),
+)
+_GENERIC_URL_RE = re.compile(r"https?://[^\s<>()\[\]{}]+")
+
+
+async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[str]:
+    video_ids = _YOUTUBE_ID_RE.findall(context.cleaned_content)
+    if not video_ids or not context.enable_youtube_transcripts:
+        return []
+
+    results = await asyncio.gather(
+        *[
+            extract_youtube_transcript(
+                vid,
+                context.httpx_client,
+                proxy_url=context.youtube_transcript_proxy,
+            )
+            for vid in video_ids
+        ],
+    )
+    return [t for t in results if t is not None]
+
+
+async def _collect_tweets(context: ExternalContentContext) -> list[str]:
+    tweets: list[str] = []
+    for tweet_id in _TWEET_ID_RE.findall(context.cleaned_content):
+        tweet_text = await fetch_tweet_with_replies(
+            context.twitter_api,
+            int(tweet_id),
+            max_replies=context.max_tweet_replies,
+            include_url=False,
+        )
+        if tweet_text:
+            tweets.append(tweet_text)
+    return tweets
+
+
+async def _collect_reddit_posts(context: ExternalContentContext) -> list[str]:
+    reddit_posts: list[str] = []
+    for post_url in _REDDIT_URL_RE.findall(context.cleaned_content):
+        post_text = await extract_reddit_post(
+            post_url,
+            context.httpx_client,
+            reddit_client,
+            proxy_url=context.reddit_proxy,
+        )
+        if post_text:
+            reddit_posts.append(post_text)
+    return reddit_posts
+
+
+def _normalize_generic_urls(text: str) -> list[str]:
+    generic_urls = _GENERIC_URL_RE.findall(text)
+    normalized: list[str] = []
+    for raw_url in generic_urls:
+        cleaned_url = raw_url.rstrip('.,;:!?)"')
+        if not cleaned_url:
+            continue
+
+        lowered = cleaned_url.lower()
+        if any(
+            domain in lowered
+            for domain in [
+                "twitter.com",
+                "x.com",
+                "youtube.com",
+                "youtu.be",
+                "reddit.com",
+                "redd.it",
+            ]
+        ):
+            continue
+
+        if cleaned_url not in normalized:
+            normalized.append(cleaned_url)
+    return normalized
+
+
+async def _collect_generic_url_contents(context: ExternalContentContext) -> list[str]:
+    urls = _normalize_generic_urls(context.cleaned_content)
+    if not urls:
+        return []
+
+    extracted = await asyncio.gather(
+        *[
+            extract_url_content(
+                url,
+                context.httpx_client,
+                proxy_url=context.proxy_url,
+                max_chars=2000,
+            )
+            for url in urls
+        ],
+    )
+
+    results: list[str] = []
+    for url, text in zip(urls, extracted, strict=False):
+        if text:
+            results.append(f"--- URL Content: {url} ---\n{text}")
+    return results
 
 
 @dataclass(slots=True)
@@ -54,6 +181,7 @@ class ExternalContentContext:
     enable_youtube_transcripts: bool
     youtube_transcript_proxy: str | None
     reddit_proxy: str | None
+    proxy_url: str | None = None
 
 
 async def apply_googlelens(context: GoogleLensContext) -> str:
@@ -245,70 +373,16 @@ async def collect_external_content(
     context: ExternalContentContext,
 ) -> list[str]:
     """Collect content from external sources (YouTube, Twitter, Reddit, PDFs)."""
-    video_ids = re.findall(
-        (
-            r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?"
-            r"(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})"
-        ),
-        context.cleaned_content,
-    )
-    if video_ids and context.enable_youtube_transcripts:
-        yt_results = await asyncio.gather(
-            *[
-                extract_youtube_transcript(
-                    vid,
-                    context.httpx_client,
-                    proxy_url=context.youtube_transcript_proxy,
-                )
-                for vid in video_ids
-            ],
-        )
-        yt_transcripts = [t for t in yt_results if t is not None]
-    else:
-        yt_transcripts = []
-
-    tweets: list[str] = []
-    for tweet_id in re.findall(
-        (
-            r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?"
-            r"(?:twitter\.com|x\.com)\/[a-zA-Z0-9_]+\/status\/([0-9]+)"
-        ),
-        context.cleaned_content,
-    ):
-        tweet_text = await fetch_tweet_with_replies(
-            context.twitter_api,
-            int(tweet_id),
-            max_replies=context.max_tweet_replies,
-            include_url=False,
-        )
-        if tweet_text:
-            tweets.append(tweet_text)
-
-    reddit_posts: list[str] = []
-    for post_url in re.findall(
-        (
-            r"(https?:\/\/(?:[a-zA-Z0-9-]+\.)?"
-            r"(?:reddit\.com\/r\/[a-zA-Z0-9_]+\/(?:comments|s)\/"
-            r"[a-zA-Z0-9_]+(?:[\w\-\.\/\?\=\&%]*)"
-            r"|redd\.it\/[a-zA-Z0-9_]+))"
-        ),
-        context.cleaned_content,
-    ):
-        post_text = await extract_reddit_post(
-            post_url,
-            context.httpx_client,
-            reddit_client,
-            proxy_url=context.reddit_proxy,
-        )
-        if post_text:
-            reddit_posts.append(post_text)
-
+    yt_transcripts = await _collect_youtube_transcripts(context)
+    tweets = await _collect_tweets(context)
+    reddit_posts = await _collect_reddit_posts(context)
+    generic_url_contents = await _collect_generic_url_contents(context)
     pdf_texts = await _extract_pdf_texts(
         processed_attachments=context.processed_attachments,
         actual_model=context.actual_model,
     )
 
-    return yt_transcripts + tweets + reddit_posts + pdf_texts
+    return yt_transcripts + tweets + reddit_posts + generic_url_contents + pdf_texts
 
 
 def is_googlelens_query(

@@ -189,6 +189,7 @@ async def _populate_node_if_needed(
             enable_youtube_transcripts=context.enable_youtube_transcripts,
             youtube_transcript_proxy=context.youtube_transcript_proxy,
             reddit_proxy=context.reddit_proxy,
+            proxy_url=context.proxy_url,
         ),
     )
 

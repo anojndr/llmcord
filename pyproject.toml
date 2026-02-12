@@ -23,6 +23,12 @@ dependencies = [
     "youtube-transcript-api>=1.2.4",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.25.0",
+]
+
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -32,3 +38,23 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "ANN",   # allow dynamic typing in tests
+    "ARG",   # allow unused fixture args in helpers
+    "D",     # no docstring requirements in tests
+    "S101",  # allow asserts in tests
+    "TC003", # don't require TYPE_CHECKING moves in tests
+]
