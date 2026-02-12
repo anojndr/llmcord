@@ -96,20 +96,37 @@ class DatabaseCore:
             self._conn = None
         self._get_connection()
 
+    def _fallback_to_local(self, reason: BaseException) -> None:
+        """Switch to local-only SQLite mode after Turso failures."""
+        logger.warning(
+            "Falling back to local SQLite database at %s due to Turso error: %s",
+            self.local_db_path,
+            reason,
+        )
+        if self._conn is not None:
+            with contextlib.suppress(Exception):
+                self._conn.close()
+        self.db_url = None
+        self.auth_token = None
+        self._conn = libsql.connect(self.local_db_path)
+
     def _get_connection(self) -> LibsqlConnection:
         """Get or create the database connection."""
         if self._conn is None:
             if self.db_url and self.auth_token:
                 # Connect to Turso cloud with local embedded replica
-                self._conn = libsql.connect(
-                    self.local_db_path,
-                    sync_url=self.db_url,
-                    auth_token=self.auth_token,
-                )
-                # Sync with remote on initial connection
-                if self._conn is not None:
-                    self._conn.sync()
-                logger.info("Connected to Turso database: %s", self.db_url)
+                try:
+                    self._conn = libsql.connect(
+                        self.local_db_path,
+                        sync_url=self.db_url,
+                        auth_token=self.auth_token,
+                    )
+                    # Sync with remote on initial connection
+                    if self._conn is not None:
+                        self._conn.sync()
+                    logger.info("Connected to Turso database: %s", self.db_url)
+                except (ValueError, LIBSQL_ERROR) as exc:
+                    self._fallback_to_local(exc)
             else:
                 # Fallback to local-only SQLite if no Turso credentials
                 self._conn = libsql.connect(self.local_db_path)
@@ -123,5 +140,5 @@ class DatabaseCore:
         if self._conn is not None and self.db_url and self.auth_token:
             try:
                 self._conn.sync()
-            except LIBSQL_ERROR as exc:
-                logger.warning("Failed to sync with Turso: %s", exc)
+            except (ValueError, LIBSQL_ERROR) as exc:
+                self._fallback_to_local(exc)
