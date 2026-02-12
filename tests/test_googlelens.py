@@ -35,6 +35,13 @@ async def test_googlelens_results_appended(
         ]
         return lens_results, []
 
+    async def _fake_perform_google_lens_lookup(*args: object, **kwargs: object):
+        lens_results = [
+            "Result: Survival Through Potions",
+            "Text match: potion anime cover",
+        ]
+        return lens_results, []
+
     async def _fake_download_and_process_attachments(**kwargs: object):
         return [], [], []
 
@@ -44,6 +51,10 @@ async def test_googlelens_results_appended(
     monkeypatch.setattr(
         "llmcord.logic.content.perform_yandex_lookup",
         _fake_perform_yandex_lookup,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content.perform_google_lens_lookup",
+        _fake_perform_google_lens_lookup,
     )
     monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
     monkeypatch.setattr(
@@ -92,4 +103,7 @@ async def test_googlelens_results_appended(
 
     user_content = str(result.messages[0]["content"])
     assert "reverse image results" in user_content.lower()
+    assert "google lens" in user_content.lower()
+    assert "yandex" in user_content.lower()
     assert "potions will save me" in user_content.lower()
+    assert "potion anime cover" in user_content.lower()

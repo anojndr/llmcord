@@ -61,6 +61,8 @@ web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if we
 
 # Integrations:
 
+serpapi_api_key:  # Optional. Enables Google Lens reverse image results via SerpApi for googlelens queries.
+
 reddit_client_id: 
 reddit_client_secret: 
 reddit_user_agent: 

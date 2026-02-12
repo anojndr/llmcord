@@ -7,6 +7,7 @@ import logging
 import re
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, Protocol
+from urllib.parse import urlparse
 
 import asyncpraw
 import asyncprawcore
@@ -475,6 +476,36 @@ def _parse_yandex_sites_item(item: Tag) -> dict[str, str | None]:
     }
 
 
+def _parse_google_lens_item(item: dict[str, Any]) -> dict[str, str | None]:
+    title = str(item.get("title") or "N/A")
+    link = item.get("link")
+    source = str(item.get("source") or "")
+
+    parsed_domain = ""
+    if isinstance(link, str):
+        parsed = urlparse(link)
+        parsed_domain = parsed.netloc
+
+    domain = source or parsed_domain
+
+    details: list[str] = []
+    if "price" in item and isinstance(item["price"], dict):
+        price_value = item["price"].get("value")
+        if price_value:
+            details.append(f"Price: {price_value}")
+    if item.get("condition"):
+        details.append(f"Condition: {item['condition']}")
+    if "in_stock" in item:
+        details.append("In stock" if bool(item["in_stock"]) else "Out of stock")
+
+    return {
+        "title": title,
+        "link": link if isinstance(link, str) else None,
+        "domain": domain,
+        "desc": " | ".join(details),
+    }
+
+
 async def _process_yandex_results(
     sites_items: list[Tag],
     httpx_client: httpx.AsyncClient,
@@ -506,6 +537,43 @@ async def _process_yandex_results(
 
         # Check if the link is a Twitter/X URL and extract for later
         # processing.
+        if link and re.search(
+            r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
+            link,
+        ):
+            twitter_urls_found.append(link)
+
+    return lens_results, twitter_urls_found
+
+
+async def _process_google_lens_results(
+    visual_matches: list[dict[str, Any]],
+    httpx_client: httpx.AsyncClient,
+    proxy_url: str | None,
+) -> tuple[list[str], list[str]]:
+    lens_results = []
+    twitter_urls_found = []
+
+    items_to_process = visual_matches[:10]
+    parsed_items = [_parse_google_lens_item(item) for item in items_to_process]
+
+    extraction_tasks = [
+        extract_url_content(data["link"], httpx_client, proxy_url=proxy_url)
+        if data["link"]
+        else asyncio.sleep(0, result=None)
+        for data in parsed_items
+    ]
+    extracted_contents = await asyncio.gather(*extraction_tasks)
+
+    for data, content in zip(parsed_items, extracted_contents, strict=False):
+        link = data["link"] or "#"
+        result_line = f"- [{data['title']}]({link}) ({data['domain']})"
+        if data["desc"]:
+            result_line += f" - {data['desc']}"
+        if content:
+            result_line += f"\n  Content: {content}"
+        lens_results.append(result_line)
+
         if link and re.search(
             r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
             link,
@@ -596,6 +664,64 @@ async def perform_yandex_lookup(
         max_tweet_replies,
     )
 
+    return lens_results, twitter_content
+
+
+async def perform_google_lens_lookup(  # noqa: PLR0913
+    image_url: str,
+    serpapi_api_key: str,
+    httpx_client: httpx.AsyncClient,
+    twitter_api: TwitterApiProtocol,
+    max_tweet_replies: int,
+    *,
+    proxy_url: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Perform Google Lens reverse image search via SerpApi and extract results."""
+    if not serpapi_api_key:
+        return [], []
+
+    params = {
+        "engine": "google_lens",
+        "url": image_url,
+        "type": "visual_matches",
+        "api_key": serpapi_api_key,
+    }
+
+    async def fetch_google_lens(client: httpx.AsyncClient) -> httpx.Response:
+        resp = await client.get(
+            "https://serpapi.com/search.json",
+            params=params,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp
+
+    try:
+        response = await request_with_optional_proxy(
+            fetch_google_lens,
+            httpx_client,
+            proxy_url,
+            log_context="Google Lens reverse image search",
+        )
+    except httpx.HTTPError as exc:
+        logger.debug("Google Lens lookup failed: %s", exc)
+        return [], []
+
+    payload: dict[str, Any] = response.json()
+    visual_matches = payload.get("visual_matches", [])
+    if not isinstance(visual_matches, list):
+        return [], []
+
+    lens_results, twitter_urls_found = await _process_google_lens_results(
+        visual_matches,
+        httpx_client,
+        proxy_url,
+    )
+    twitter_content = await _fetch_twitter_results(
+        twitter_urls_found,
+        twitter_api,
+        max_tweet_replies,
+    )
     return lens_results, twitter_content
 
 

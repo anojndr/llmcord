@@ -6,10 +6,12 @@ import asyncio
 import logging
 import re
 from base64 import b64encode
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
-from llmcord.core.config import is_gemini_model
+from llmcord.core.config import get_config, is_gemini_model
 from llmcord.globals import reddit_client
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import (
@@ -21,6 +23,7 @@ from llmcord.services.extractors import (
     extract_url_content,
     extract_youtube_transcript,
     fetch_tweet_with_replies,
+    perform_google_lens_lookup,
     perform_yandex_lookup,
     process_attachments,
 )
@@ -56,6 +59,57 @@ _REDDIT_URL_RE = re.compile(
     ),
 )
 _GENERIC_URL_RE = re.compile(r"https?://[^\s<>()\[\]{}]+")
+
+
+def _extract_result_url(result_line: str) -> str | None:
+    markdown_match = re.search(r"\]\((https?://[^)\s]+)\)", result_line)
+    if markdown_match:
+        return markdown_match.group(1)
+
+    plain_match = re.search(r"https?://[^\s)]+", result_line)
+    if plain_match:
+        return plain_match.group(0)
+    return None
+
+
+def _normalize_result_url(url: str) -> str:
+    parsed = urlsplit(url)
+    normalized_path = parsed.path.rstrip("/")
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            normalized_path,
+            "",
+            "",
+        ),
+    )
+
+
+def _merge_reverse_image_results(
+    yandex_results: list[str],
+    google_results: list[str],
+) -> list[str]:
+    interleaved: list[str] = []
+    max_len = max(len(yandex_results), len(google_results))
+    for index in range(max_len):
+        if index < len(yandex_results):
+            interleaved.append(f"[Yandex] {yandex_results[index]}")
+        if index < len(google_results):
+            interleaved.append(f"[Google Lens] {google_results[index]}")
+
+    deduped: OrderedDict[str, str] = OrderedDict()
+    for line in interleaved:
+        extracted_url = _extract_result_url(line)
+        if extracted_url:
+            dedupe_key = _normalize_result_url(extracted_url)
+        else:
+            dedupe_key = line.strip().lower()
+
+        if dedupe_key not in deduped:
+            deduped[dedupe_key] = line
+
+    return list(deduped.values())
 
 
 async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[str]:
@@ -215,18 +269,37 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
         return cleaned_content
 
     try:
-        lens_results, twitter_content = await perform_yandex_lookup(
+        config = get_config()
+        serpapi_api_key = str(config.get("serpapi_api_key") or "").strip()
+
+        yandex_task = perform_yandex_lookup(
             image_url,
             context.httpx_client,
             context.twitter_api,
             context.max_tweet_replies,
             proxy_url=context.proxy_url,
         )
+        google_lens_task = perform_google_lens_lookup(
+            image_url,
+            serpapi_api_key,
+            context.httpx_client,
+            context.twitter_api,
+            context.max_tweet_replies,
+            proxy_url=context.proxy_url,
+        )
+        (
+            (yandex_results, yandex_twitter),
+            (google_results, google_twitter),
+        ) = await asyncio.gather(yandex_task, google_lens_task)
+        lens_results = _merge_reverse_image_results(yandex_results, google_results)
+        twitter_content = list(
+            OrderedDict.fromkeys([*yandex_twitter, *google_twitter]),
+        )
 
         if lens_results:
             result_text = (
-                "\n\nanswer the user's query based on the yandex "
-                "reverse image results:\n" + "\n".join(lens_results)
+                "\n\nanswer the user's query based on these reverse image "
+                "results (Google Lens + Yandex):\n" + "\n".join(lens_results)
             )
             if twitter_content:
                 result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(
@@ -244,7 +317,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
                 context.curr_msg.id,
             )
     except Exception:
-        logger.exception("Error fetching Yandex results")
+        logger.exception("Error fetching reverse image search results")
 
     return cleaned_content
 

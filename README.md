@@ -54,7 +54,7 @@ Or run local models with:
 - **"View Response Better" button**: Upload long responses to rentry.co for easier reading
 - **"Show Sources" button**: View search queries and source URLs when web search was used
 - Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
-- Supports Reverse Image Search (powered by Yandex) (start your message with "googlelens" and attach an image)
+- Supports Reverse Image Search (Google Lens via SerpApi + Yandex) (start your message with "googlelens" and attach an image)
 - Supports YouTube video transcripts (just paste a YouTube link)
 - Supports Twitter/X link expansion (automatically fetches tweet content and replies)
 - Supports Reddit link expansion (automatically fetches post content and comments)
@@ -144,6 +144,7 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
 | **exa_mcp_url** | Optional. URL for [Exa MCP](https://mcp.exa.ai/) web search endpoint. Append `?tools=...` to enable specific tools. Alternative to Tavily that doesn't require API keys. |
 | **web_search_provider** | Which web search provider to use: `tavily`, `exa`, or `auto`. Auto prefers Tavily if keys are available, otherwise falls back to Exa. (Default: `tavily`) |
 | **web_search_decider_model** | The model used to decide if a query needs web search. Format: `provider/model`. (Default: `gemini/gemini-3-flash-preview`) |
+| **serpapi_api_key** | Optional. SerpApi key used to fetch Google Lens reverse image matches for `googlelens` queries. When set, results are combined with Yandex for better accuracy. |
 | **reddit_client_id** | Optional. Reddit API client ID for expanding Reddit links. |
 | **reddit_client_secret** | Optional. Reddit API client secret. |
 | **reddit_user_agent** | Optional. User agent string for Reddit API requests. |
