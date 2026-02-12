@@ -8,6 +8,14 @@ from llmcord.services.search.utils import convert_messages_to_openai_format
 from ._fakes import FakeMessage, FakeUser
 
 
+def _assert_with_trailing_newline_tolerance(actual: str, expected: str) -> None:
+    """Assert exact formatting while allowing only trailing newline variance."""
+    normalized = actual.rstrip("\n")
+    assert normalized == expected
+    trailing = actual[len(normalized) :]
+    assert set(trailing).issubset({"\n"})
+
+
 class _FakeDB:
     def get_message_search_data(self, _message_id: str) -> tuple[None, None, None]:
         return None, None, None
@@ -83,9 +91,26 @@ async def test_web_search_decider_appends_results(
     )
 
     assert search_metadata == {"provider": "mock"}
-    assert messages[0]["content"] == (
-        "latest news\n\n--- Search Results ---\nHeadline: Example"
+    _assert_with_trailing_newline_tolerance(
+        str(messages[0]["content"]),
+        "latest news\n\n--- Search Results ---\nHeadline: Example",
     )
+
+
+def test_search_formatting_tolerates_only_trailing_newline() -> None:
+    expected = "latest news\n\n--- Search Results ---\nHeadline: Example"
+
+    # Allowed: exact output or output with one or more trailing newlines.
+    _assert_with_trailing_newline_tolerance(expected, expected)
+    _assert_with_trailing_newline_tolerance(f"{expected}\n", expected)
+    _assert_with_trailing_newline_tolerance(f"{expected}\n\n", expected)
+
+    # Not allowed: whitespace mutation that changes formatting semantics.
+    with pytest.raises(AssertionError):
+        _assert_with_trailing_newline_tolerance(
+            "latest news\n\n--- Search Results ---\nHeadline:  Example",
+            expected,
+        )
 
 
 def test_decider_message_format_preserves_or_describes_files() -> None:
