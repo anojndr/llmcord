@@ -158,6 +158,11 @@ def _make_retry_callback(
             override_provider_slash_model=retry_model,
             fallback_chain=[
                 (
+                    "openrouter",
+                    "openrouter/free",
+                    "openrouter/openrouter/free",
+                ),
+                (
                     "mistral",
                     "mistral-large-latest",
                     "mistral/mistral-large-latest",

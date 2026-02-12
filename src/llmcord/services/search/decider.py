@@ -158,6 +158,11 @@ def _get_next_decider_fallback(
     original_provider: str,
     original_model: str,
 ) -> tuple[int, tuple[str, str, str] | None, str | None]:
+    openrouter_fallback = (
+        "openrouter",
+        "openrouter/free",
+        "openrouter/openrouter/free",
+    )
     mistral_fallback = (
         "mistral",
         "mistral-large-latest",
@@ -169,12 +174,13 @@ def _get_next_decider_fallback(
         "gemini/gemma-3-27b-it",
     )
 
-    if original_provider == "mistral" and original_model == "mistral-large-latest":
-        fallback_chain = [gemini_fallback]
-    elif original_provider == "gemini" and original_model == "gemma-3-27b-it":
-        fallback_chain = [mistral_fallback]
-    else:
-        fallback_chain = [mistral_fallback, gemini_fallback]
+    ordered_fallbacks = [openrouter_fallback, mistral_fallback, gemini_fallback]
+    original = (original_provider, original_model)
+    fallback_chain = [
+        fallback
+        for fallback in ordered_fallbacks
+        if (fallback[0], fallback[1]) != original
+    ]
 
     if fallback_level < len(fallback_chain):
         next_fallback = fallback_chain[fallback_level]
