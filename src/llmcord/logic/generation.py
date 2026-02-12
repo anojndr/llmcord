@@ -63,6 +63,7 @@ for _exception_name in (
     "APIError",
     "APIConnectionError",
     "ServiceUnavailableError",
+    "NotFoundError",
 ):
     _exception_type = getattr(litellm.exceptions, _exception_name, None)
     if _exception_type is not None:

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import litellm
+
 from llmcord.logic.discord_ui import _build_footer_text
-from llmcord.logic.generation import _is_image_input_error, _remove_images_from_messages
+from llmcord.logic.generation import (
+    GENERATION_EXCEPTIONS,
+    _is_image_input_error,
+    _remove_images_from_messages,
+)
 from llmcord.logic.generation_types import GenerationState
 
 
@@ -59,3 +65,7 @@ def test_footer_includes_image_removed_warning() -> None:
 
     assert "openrouter/openrouter/free | total tokens: 150" in footer_text
     assert "Image removed from input due to provider error" in footer_text
+
+
+def test_not_found_error_is_retryable_generation_exception() -> None:
+    assert litellm.exceptions.NotFoundError in GENERATION_EXCEPTIONS
