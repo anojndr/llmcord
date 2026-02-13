@@ -657,7 +657,7 @@ async def stream_google_gemini_cli(
     base_url: str | None,
     extra_headers: dict[str, str] | None,
     model_parameters: dict[str, object] | None,
-) -> AsyncIterator[tuple[str, object | None]]:
+) -> AsyncIterator[tuple[str, object | None, bool]]:
     """Stream text deltas from Cloud Code Assist SSE endpoint."""
     credentials = await get_valid_google_gemini_cli_credentials(api_key)
     if not credentials.access or not credentials.project_id:
@@ -743,11 +743,11 @@ async def stream_google_gemini_cli(
                                 continue
                             text = part.get("text")
                             if isinstance(text, str) and text:
-                                yield text, None
+                                yield text, None, bool(part.get("thought"))
 
                 finish_reason = candidate.get("finishReason")
                 if finish_reason is not None:
-                    yield "", finish_reason
+                    yield "", finish_reason, False
 
             return
 

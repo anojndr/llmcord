@@ -52,6 +52,8 @@ class GenerationState:
     generated_images: list["GeneratedImage"]
     generated_image_hashes: set[str]
     display_model: str
+    thought_process: str = ""
+    full_history_response: str = ""
     fallback_warning: str | None = None
     image_removal_warning: str | None = None
 

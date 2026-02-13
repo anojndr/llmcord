@@ -6,6 +6,7 @@ import discord
 
 from llmcord.discord.ui.constants import (
     RETRY_RESPONSE_ID,
+    SHOW_THOUGHT_PROCESS_ID,
     VIEW_RESPONSE_BETTER_ID,
 )
 from llmcord.discord.ui.metadata import has_grounding_data
@@ -142,6 +143,59 @@ class ViewResponseBetterButton(discord.ui.Button):
             )
 
 
+class ShowThoughtProcessButton(discord.ui.Button):
+    """Button to reveal hidden thought process for providers that expose it."""
+
+    def __init__(self, thought_process: str | None = None) -> None:
+        """Initialize button with optional thought process content."""
+        super().__init__(
+            label="Show Thought Process",
+            style=discord.ButtonStyle.secondary,
+            emoji="🧠",
+            custom_id=SHOW_THOUGHT_PROCESS_ID,
+        )
+        self.thought_process = thought_process
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Reveal thought process to the requesting user."""
+        await interaction.response.defer(ephemeral=True)
+
+        thought_process = self.thought_process
+        if not thought_process and interaction.message:
+            response_data = get_response_data(interaction.message.id)
+            thought_process = response_data.thought_process
+
+        if not thought_process:
+            await interaction.followup.send(
+                embed=build_error_embed(
+                    "No thought process is available for this response.",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        paste_url = await upload_to_rentry(thought_process)
+        if paste_url:
+            embed = discord.Embed(
+                title="Thought Process",
+                description=(
+                    "The hidden thought process has been uploaded for viewing:\n\n"
+                    f"**[Click here to view]({paste_url})**"
+                ),
+                color=discord.Color.green(),
+            )
+            embed.set_footer(text="Powered by rentry.co")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        await interaction.followup.send(
+            embed=build_error_embed(
+                "Failed to show thought process. Please try again later.",
+            ),
+            ephemeral=True,
+        )
+
+
 class ResponseView(discord.ui.View):
     """View with a button that uploads responses to rentry.co."""
 
@@ -184,6 +238,7 @@ class PersistentResponseView(discord.ui.View):
         """Initialize persistent response buttons."""
         super().__init__(timeout=None)
         self.add_item(ViewResponseBetterButton())
+        self.add_item(ShowThoughtProcessButton())
         self.add_item(RetryButton())
         self.add_item(SourceButton())
         self.add_item(TavilySourceButton())

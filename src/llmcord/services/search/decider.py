@@ -54,7 +54,11 @@ async def _get_decider_response_text(
 ) -> str:
     if run_config.provider == "google-gemini-cli":
         response_chunks: list[str] = []
-        async for delta_content, _chunk_finish_reason in stream_google_gemini_cli(
+        async for (
+            delta_content,
+            _chunk_finish_reason,
+            is_thinking,
+        ) in stream_google_gemini_cli(
             model=run_config.model,
             messages=litellm_messages,
             api_key=current_api_key,
@@ -62,7 +66,7 @@ async def _get_decider_response_text(
             extra_headers=run_config.extra_headers,
             model_parameters=run_config.model_parameters,
         ):
-            if delta_content:
+            if delta_content and not is_thinking:
                 response_chunks.append(delta_content)
         return "".join(response_chunks).strip()
 

@@ -184,8 +184,9 @@ def _release_response_locks(
     state: GenerationState,
 ) -> str:
     full_response = "".join(state.response_contents) if state.response_contents else ""
+    history_response = state.full_history_response or full_response
     for response_msg in state.response_msgs:
-        context.msg_nodes[response_msg.id].text = full_response
+        context.msg_nodes[response_msg.id].text = history_response
         context.msg_nodes[response_msg.id].lock.release()
     return full_response
 
@@ -233,6 +234,7 @@ async def _persist_response_payload(
             request_message_id=str(context.new_msg.id),
             request_user_id=str(context.new_msg.author.id),
             full_response=full_response,
+            thought_process=state.thought_process or None,
             grounding_metadata=grounding_payload,
             tavily_metadata=context.tavily_metadata,
         )
@@ -342,10 +344,16 @@ async def _get_stream(
     *,
     context: GenerationContext,
     stream_config: StreamConfig,
-) -> AsyncIterator[tuple[str, object | None, object | None, list[GeneratedImage]]]:
+) -> AsyncIterator[
+    tuple[str, object | None, object | None, list[GeneratedImage], bool]
+]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
     if stream_config.provider == "google-gemini-cli":
-        async for delta_content, chunk_finish_reason in stream_google_gemini_cli(
+        async for (
+            delta_content,
+            chunk_finish_reason,
+            is_thinking,
+        ) in stream_google_gemini_cli(
             model=stream_config.actual_model,
             messages=context.messages[::-1],
             api_key=stream_config.api_key,
@@ -358,6 +366,7 @@ async def _get_stream(
                 chunk_finish_reason,
                 None,
                 [],
+                is_thinking,
             )
         return
 
@@ -438,6 +447,7 @@ async def _get_stream(
             chunk_finish_reason,
             grounding_metadata,
             image_payloads,
+            False,
         )
 
 
@@ -477,6 +487,28 @@ def _append_stream_content(
         is_final_edit=is_final_edit,
         is_good_finish=is_good_finish,
     )
+
+
+def _append_history_content(
+    *,
+    history_parts: list[str],
+    delta_content: str,
+    is_thinking: bool,
+    in_thinking_block: bool,
+) -> bool:
+    if is_thinking and delta_content:
+        if not in_thinking_block:
+            history_parts.append("\n<thinking>\n")
+            in_thinking_block = True
+        history_parts.append(delta_content)
+        return in_thinking_block
+
+    if in_thinking_block:
+        history_parts.append("\n</thinking>\n")
+        in_thinking_block = False
+    if delta_content:
+        history_parts.append(delta_content)
+    return in_thinking_block
 
 
 def _is_image_input_error(error: Exception) -> bool:
@@ -804,7 +836,7 @@ async def _handle_exhausted_keys(
     return False
 
 
-async def _stream_response(
+async def _stream_response(  # noqa: C901
     *,
     context: GenerationContext,
     state: GenerationState,
@@ -816,6 +848,8 @@ async def _stream_response(
     use_plain_responses = state.use_plain_responses
     grounding_metadata = state.grounding_metadata
     loop_state = StreamLoopState(curr_content=None, finish_reason=None)
+    history_parts: list[str] = []
+    in_thinking_block = False
 
     async with context.new_msg.channel.typing():
         async for (
@@ -823,6 +857,7 @@ async def _stream_response(
             new_finish_reason,
             new_grounding_metadata,
             image_payloads,
+            is_thinking,
         ) in _get_stream(
             context=context,
             stream_config=stream_config,
@@ -840,7 +875,19 @@ async def _stream_response(
             if loop_state.finish_reason is not None:
                 break
 
+            in_thinking_block = _append_history_content(
+                history_parts=history_parts,
+                delta_content=delta_content,
+                is_thinking=is_thinking,
+                in_thinking_block=in_thinking_block,
+            )
+            if is_thinking and delta_content:
+                state.thought_process += delta_content
+
             loop_state.finish_reason = new_finish_reason
+
+            if is_thinking:
+                continue
 
             decision = _append_stream_content(
                 response_contents=response_contents,
@@ -863,6 +910,10 @@ async def _stream_response(
                 decision=decision,
                 grounding_metadata=grounding_metadata,
             )
+
+    if in_thinking_block:
+        history_parts.append("\n</thinking>\n")
+    state.full_history_response = "".join(history_parts)
 
     if not response_contents:
         _raise_empty_response()
@@ -904,6 +955,8 @@ async def _run_generation_loop(
 
     while True:
         state.response_contents = []
+        state.thought_process = ""
+        state.full_history_response = ""
         loop_state.attempt_count += 1
 
         if not loop_state.good_keys:

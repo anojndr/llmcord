@@ -53,6 +53,7 @@ class ResponseData:
     """Container for response-related metadata."""
 
     full_response: str | None
+    thought_process: str | None
     grounding_metadata: object | None
     tavily_metadata: dict[str, object] | None
     request_message_id: int | None
@@ -64,6 +65,7 @@ def get_response_data(message_id: int) -> ResponseData:
     db = get_bad_keys_db()
     (
         full_response,
+        thought_process,
         grounding_metadata,
         tavily_metadata,
         request_message_id,
@@ -72,6 +74,7 @@ def get_response_data(message_id: int) -> ResponseData:
 
     return ResponseData(
         full_response=full_response,
+        thought_process=thought_process,
         grounding_metadata=grounding_metadata,
         tavily_metadata=tavily_metadata,
         request_message_id=int(request_message_id)

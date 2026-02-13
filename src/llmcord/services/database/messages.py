@@ -34,6 +34,7 @@ class MessageResponsePayload:
     request_message_id: str
     request_user_id: str
     full_response: str | None = None
+    thought_process: str | None = None
     grounding_metadata: dict[str, Any] | list[Any] | None = None
     tavily_metadata: dict[str, Any] | None = None
 
@@ -64,6 +65,7 @@ class MessageDataMixin(_Base):
                 request_message_id TEXT,
                 request_user_id TEXT,
                 full_response TEXT,
+                    thought_process TEXT,
                 grounding_metadata TEXT,
                 tavily_metadata TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -91,6 +93,7 @@ class MessageDataMixin(_Base):
                 "request_message_id": "TEXT",
                 "request_user_id": "TEXT",
                 "full_response": "TEXT",
+                "thought_process": "TEXT",
                 "grounding_metadata": "TEXT",
                 "tavily_metadata": "TEXT",
                 "created_at": "TIMESTAMP",
@@ -104,6 +107,7 @@ class MessageDataMixin(_Base):
                         request_message_id TEXT,
                         request_user_id TEXT,
                         full_response TEXT,
+                        thought_process TEXT,
                         grounding_metadata TEXT,
                         tavily_metadata TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -257,6 +261,7 @@ class MessageDataMixin(_Base):
         request_message_id = payload.request_message_id
         request_user_id = payload.request_user_id
         full_response = payload.full_response
+        thought_process = payload.thought_process
         grounding_metadata = payload.grounding_metadata
         tavily_metadata = payload.tavily_metadata
         cursor.execute(
@@ -265,14 +270,16 @@ class MessageDataMixin(_Base):
                    request_message_id,
                    request_user_id,
                    full_response,
+                   thought_process,
                    grounding_metadata,
                    tavily_metadata
                )
-               VALUES (?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(message_id) DO UPDATE SET
                    request_message_id = COALESCE(?, request_message_id),
                    request_user_id = COALESCE(?, request_user_id),
                    full_response = COALESCE(?, full_response),
+                   thought_process = COALESCE(?, thought_process),
                    grounding_metadata = COALESCE(?, grounding_metadata),
                    tavily_metadata = COALESCE(?, tavily_metadata)""",
             (
@@ -280,11 +287,13 @@ class MessageDataMixin(_Base):
                 str(request_message_id),
                 str(request_user_id),
                 full_response,
+                thought_process,
                 json.dumps(grounding_metadata) if grounding_metadata else None,
                 json.dumps(tavily_metadata) if tavily_metadata else None,
                 str(request_message_id),
                 str(request_user_id),
                 full_response,
+                thought_process,
                 json.dumps(grounding_metadata) if grounding_metadata else None,
                 json.dumps(tavily_metadata) if tavily_metadata else None,
             ),
@@ -301,6 +310,7 @@ class MessageDataMixin(_Base):
         message_id: str,
     ) -> tuple[
         str | None,
+        str | None,
         dict[str, Any] | list[Any] | None,
         dict[str, Any] | None,
         str | None,
@@ -310,20 +320,22 @@ class MessageDataMixin(_Base):
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT full_response, grounding_metadata, tavily_metadata, "
+            "SELECT full_response, thought_process, grounding_metadata, "
+            "tavily_metadata, "
             "request_message_id, request_user_id "
             "FROM message_response_data WHERE message_id = ?",
             (str(message_id),),
         )
         result = cursor.fetchone()
         if not result:
-            return None, None, None, None, None
+            return None, None, None, None, None, None
 
         full_response = result[0]
-        grounding_metadata_raw = result[1]
-        tavily_metadata_raw = result[2]
-        request_message_id = result[3]
-        request_user_id = result[4]
+        thought_process = result[1]
+        grounding_metadata_raw = result[2]
+        tavily_metadata_raw = result[3]
+        request_message_id = result[4]
+        request_user_id = result[5]
 
         grounding_metadata = None
         tavily_metadata = None
@@ -348,6 +360,7 @@ class MessageDataMixin(_Base):
 
         return (
             full_response,
+            thought_process,
             grounding_metadata,
             tavily_metadata,
             request_message_id,

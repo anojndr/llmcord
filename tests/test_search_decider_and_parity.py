@@ -233,7 +233,7 @@ async def test_decider_google_gemini_cli_uses_native_stream(
 ) -> None:
     async def _fake_stream_google_gemini_cli(**kwargs: object):
         assert kwargs.get("model") == "gemini-3-flash-preview-minimal"
-        yield '{"needs_search":false}', None
+        yield '{"needs_search":false}', None, False
 
     async def _fail_litellm_call(**_kwargs: object) -> object:
         msg = "litellm path should not be used for google-gemini-cli decider"

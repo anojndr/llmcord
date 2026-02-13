@@ -90,6 +90,10 @@ async def update_response_view(
         context.retry_callback,
         context.new_msg.author.id,
     )
+    if state.thought_process:
+        response_view_instance.add_item(
+            response_view.ShowThoughtProcessButton(state.thought_process),
+        )
 
     output_tokens = count_text_tokens(full_response)
     total_tokens = state.input_tokens + output_tokens
