@@ -6,6 +6,10 @@ import pytest
 
 from llmcord.logic.content import _merge_reverse_image_results
 from llmcord.logic.messages import MessageBuildContext, build_messages
+from llmcord.services.extractors import (
+    _fetch_twitter_results,
+    _process_google_lens_results,
+)
 
 from ._fakes import DummyTwitterApi, FakeAttachment, FakeMessage, FakeUser
 
@@ -41,6 +45,71 @@ def test_googlelens_overlap_weighting_prioritizes_shared_urls() -> None:
 
     assert merged
     assert "shared" in merged[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_googlelens_url_content_extraction_uses_fast_fail_settings(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+) -> None:
+    calls: list[tuple[float, int]] = []
+
+    async def _fake_extract_url_content(
+        _url: str,
+        _httpx_client: Any,
+        *,
+        timeout_seconds: float = 20,
+        retries: int = 2,
+        **_kwargs: object,
+    ) -> str | None:
+        calls.append((timeout_seconds, retries))
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.services.extractors.extract_url_content",
+        _fake_extract_url_content,
+    )
+
+    visual_matches = [
+        {
+            "title": "Example Result",
+            "link": "https://example.com/post/1",
+            "source": "example.com",
+        },
+    ]
+
+    await _process_google_lens_results(visual_matches, httpx_client)
+
+    assert calls == [(5.0, 0)]
+
+
+@pytest.mark.asyncio
+async def test_googlelens_twitter_url_parsing_extracts_status_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called_ids: list[int] = []
+
+    async def _fake_fetch_tweet_with_replies(
+        _twitter_api: Any,
+        tweet_id: int,
+        **_kwargs: object,
+    ) -> str | None:
+        called_ids.append(tweet_id)
+        return "tweet body"
+
+    monkeypatch.setattr(
+        "llmcord.services.extractors.fetch_tweet_with_replies",
+        _fake_fetch_tweet_with_replies,
+    )
+
+    twitter_content = await _fetch_twitter_results(
+        ["https://x.com/cb_doge/status/2019995898894520711"],
+        DummyTwitterApi(),
+        max_tweet_replies=0,
+    )
+
+    assert called_ids == [2019995898894520711]
+    assert twitter_content == ["tweet body"]
 
 
 @pytest.mark.asyncio

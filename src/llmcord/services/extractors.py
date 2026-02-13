@@ -27,9 +27,12 @@ from youtube_transcript_api import (
 
 from llmcord.core.config import BROWSER_HEADERS
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
-from llmcord.services.http import request_with_retries
+from llmcord.services.http import RetryOptions, request_with_retries
 
 logger = logging.getLogger(__name__)
+
+_REVERSE_IMAGE_URL_EXTRACTION_TIMEOUT_SECONDS = 5.0
+_REVERSE_IMAGE_URL_EXTRACTION_RETRIES = 0
 
 fitz_module: Any
 try:
@@ -390,6 +393,8 @@ async def extract_url_content(
     httpx_client: httpx.AsyncClient,
     *,
     max_chars: int = 2000,
+    timeout_seconds: float = 20,
+    retries: int = 2,
 ) -> str | None:
     """Extract text content from a URL."""
     # Skip specialized domains that we handle elsewhere or that don't scrape well
@@ -405,8 +410,9 @@ async def extract_url_content(
                 url,
                 headers=BROWSER_HEADERS,
                 follow_redirects=True,
-                timeout=20,
+                timeout=timeout_seconds,
             ),
+            options=RetryOptions(retries=retries),
             log_context=f"URL content extraction {url}",
         )
         if response.status_code != httpx.codes.OK:
@@ -432,14 +438,11 @@ async def _fetch_twitter_results(
     """Fetch content for a list of Twitter URLs."""
     twitter_content = []
     for twitter_url in twitter_urls:
-        tweet_id_match = re.search(
-            r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
-            twitter_url,
-        )
-        if tweet_id_match:
+        tweet_id = _extract_tweet_id_from_url(twitter_url)
+        if tweet_id is not None:
             tweet_text = await fetch_tweet_with_replies(
                 twitter_api,
-                int(tweet_id_match.group(1)),
+                tweet_id,
                 max_replies=max_tweet_replies,
                 include_url=True,
                 tweet_url=twitter_url,
@@ -447,6 +450,18 @@ async def _fetch_twitter_results(
             if tweet_text:
                 twitter_content.append(tweet_text)
     return twitter_content
+
+
+def _extract_tweet_id_from_url(url: str) -> int | None:
+    match = re.search(
+        r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/([0-9]+)",
+        url,
+    )
+    if not match:
+        return None
+
+    tweet_id_str = match.group(1)
+    return int(tweet_id_str)
 
 
 def _parse_yandex_sites_item(item: Tag) -> dict[str, str | None]:
@@ -511,7 +526,12 @@ async def _process_yandex_results(
     parsed_items = [_parse_yandex_sites_item(item) for item in items_to_process]
 
     extraction_tasks = [
-        extract_url_content(data["link"], httpx_client)
+        extract_url_content(
+            data["link"],
+            httpx_client,
+            timeout_seconds=_REVERSE_IMAGE_URL_EXTRACTION_TIMEOUT_SECONDS,
+            retries=_REVERSE_IMAGE_URL_EXTRACTION_RETRIES,
+        )
         if data["link"]
         else asyncio.sleep(0, result=None)
         for data in parsed_items
@@ -548,7 +568,12 @@ async def _process_google_lens_results(
     parsed_items = [_parse_google_lens_item(item) for item in items_to_process]
 
     extraction_tasks = [
-        extract_url_content(data["link"], httpx_client)
+        extract_url_content(
+            data["link"],
+            httpx_client,
+            timeout_seconds=_REVERSE_IMAGE_URL_EXTRACTION_TIMEOUT_SECONDS,
+            retries=_REVERSE_IMAGE_URL_EXTRACTION_RETRIES,
+        )
         if data["link"]
         else asyncio.sleep(0, result=None)
         for data in parsed_items
