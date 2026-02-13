@@ -88,6 +88,14 @@ providers:
   gemini:
     api_key: 
 
+  google-gemini-cli:
+    # Paste JSON produced by:
+    # uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_main; raise SystemExit(cli_login_main())"
+    # Example value:
+    # {"refresh":"...","access":"...","expires":1700000000000,"projectId":"my-project"}
+    api_key: 
+    base_url: https://cloudcode-pa.googleapis.com
+
   openrouter:
     api_key:
     base_url: https://openrouter.ai/api/v1
@@ -120,6 +128,9 @@ models:
         threshold: BLOCK_NONE
       - category: HARM_CATEGORY_DANGEROUS_CONTENT
         threshold: BLOCK_NONE
+
+  google-gemini-cli/gemini-3-flash-preview:
+    thinking_level: minimal
 
   openrouter/openrouter/free:
 

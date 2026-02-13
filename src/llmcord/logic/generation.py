@@ -51,6 +51,7 @@ from llmcord.logic.utils import (
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
+from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +344,23 @@ async def _get_stream(
     stream_config: StreamConfig,
 ) -> AsyncIterator[tuple[str, object | None, object | None, list[GeneratedImage]]]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
+    if stream_config.provider == "google-gemini-cli":
+        async for delta_content, chunk_finish_reason in stream_google_gemini_cli(
+            model=stream_config.actual_model,
+            messages=context.messages[::-1],
+            api_key=stream_config.api_key,
+            base_url=stream_config.base_url,
+            extra_headers=stream_config.extra_headers,
+            model_parameters=stream_config.model_parameters,
+        ):
+            yield (
+                delta_content,
+                chunk_finish_reason,
+                None,
+                [],
+            )
+        return
+
     enable_grounding = not re.search(r"https?://", context.new_msg.content)
 
     if not is_gemini_model(stream_config.actual_model):

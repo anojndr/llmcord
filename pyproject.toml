@@ -56,6 +56,18 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"src/llmcord/services/llm/providers/gemini_cli.py" = [
+    "A002",   # stdlib override requires parameter name `format`
+    "ANN401", # stdlib override requires Any for variadic log_message args
+    "C901",   # complex OAuth/streaming orchestration is intentional
+    "PLR0912",# many branches in protocol parsing and onboarding logic
+    "PLR0913",# stream helper needs explicit request fields
+    "PLR0915",# provider flow has many statements by design
+    "S105",   # OAuth/token endpoint constants are not credentials
+    "TC003",  # keep runtime type imports explicit in this provider module
+    "T201",   # login helper prints credentials for manual setup
+    "TRY004", # runtime errors are used for user-facing flow failures
+]
 "tests/**" = [
     "ANN",   # allow dynamic typing in tests
     "ARG",   # allow unused fixture args in helpers

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_metadata
+from llmcord.services.search.decider import DeciderRunConfig, _run_decider_once
 from llmcord.services.search.utils import convert_messages_to_openai_format
 
 from ._fakes import FakeMessage, FakeUser
@@ -159,3 +160,105 @@ def test_decider_message_format_preserves_or_describes_files() -> None:
     gemini_content = openai_gemini[0]["content"]
     assert isinstance(gemini_content, list)
     assert any(part.get("type") == "file" for part in gemini_content)
+
+
+@pytest.mark.asyncio
+async def test_web_search_decider_normalizes_mapping_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_config: dict[str, object] = {}
+
+    async def _fake_decide_web_search(
+        _messages: list[dict[str, object]],
+        decider_config: dict,
+    ) -> dict[str, object]:
+        captured_config.update(decider_config)
+        return {"needs_search": False}
+
+    def _fake_is_googlelens_query(*args: object, **kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "llmcord.logic.search_logic.decide_web_search",
+        _fake_decide_web_search,
+    )
+    monkeypatch.setattr("llmcord.logic.search_logic.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(id=21, content="at ai hi", author=FakeUser(1234))
+    messages: list[dict[str, object]] = [{"role": "user", "content": "hi"}]
+
+    await resolve_search_metadata(
+        SearchResolutionContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            msg_nodes={},
+            messages=messages,
+            user_warnings=set(),
+            tavily_api_keys=["tvly-TEST"],
+            config={
+                "web_search_provider": "tavily",
+                "web_search_decider_model": (
+                    "google-gemini-cli/gemini-3-flash-preview-minimal"
+                ),
+                "providers": {
+                    "google-gemini-cli": {
+                        "api_key": {
+                            "refresh": "refresh-token",
+                            "projectId": "project-123",
+                        },
+                    },
+                },
+                "models": {
+                    "google-gemini-cli/gemini-3-flash-preview-minimal": {},
+                },
+            },
+            web_search_available=True,
+            web_search_provider="tavily",
+            exa_mcp_url="",
+            actual_model="gpt-4o",
+        ),
+        is_googlelens_query_func=_fake_is_googlelens_query,
+    )
+
+    api_keys = captured_config.get("api_keys")
+    assert isinstance(api_keys, list)
+    assert len(api_keys) == 1
+    assert '"refresh":"refresh-token"' in str(api_keys[0])
+
+
+@pytest.mark.asyncio
+async def test_decider_google_gemini_cli_uses_native_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_stream_google_gemini_cli(**kwargs: object):
+        assert kwargs.get("model") == "gemini-3-flash-preview-minimal"
+        yield '{"needs_search":false}', None
+
+    async def _fail_litellm_call(**_kwargs: object) -> object:
+        msg = "litellm path should not be used for google-gemini-cli decider"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.stream_google_gemini_cli",
+        _fake_stream_google_gemini_cli,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.litellm.acompletion",
+        _fail_litellm_call,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="google-gemini-cli",
+            model="gemini-3-flash-preview-minimal",
+            api_keys=["refresh-token"],
+            base_url="https://cloudcode-pa.googleapis.com",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert exhausted is False
+    assert result == {"needs_search": False}

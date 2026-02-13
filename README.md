@@ -36,6 +36,7 @@ llmcord supports remote models from:
 - [OpenAI API](https://platform.openai.com/docs/models)
 - [xAI API](https://docs.x.ai/docs/models)
 - [Google Gemini API](https://ai.google.dev/gemini-api/docs/models)
+- Google Cloud Code Assist (Gemini CLI OAuth)
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
 - [OpenRouter](https://openrouter.ai/models)
@@ -167,6 +168,14 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
 | **models** | Add the models you want to use in `<provider>/<model>: <parameters>` format (examples are included). When you run `/model` these models will show up as autocomplete suggestions.<br /><br />**Refer to each provider's documentation for supported parameters.**<br /><br />**The first model in your `models` list will be the default model at startup.**<br /><br />**Some vision models may need `:vision` added to the end of their name to enable image support.** |
 | **retry_stable_model** | The model used when clicking the “Retry with stable model” button. Format: `provider/model`. If unset, defaults to `gemini/gemma-3-27b-it`. |
 | **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
+
+For `google-gemini-cli`, run:
+
+```bash
+uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_main; raise SystemExit(cli_login_main())"
+```
+
+Then paste the printed JSON into `providers.google-gemini-cli.api_key`.
 
 4. Run the bot:
   ```bash

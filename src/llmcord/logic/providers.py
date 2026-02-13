@@ -1,15 +1,43 @@
 """Provider and model configuration logic."""
 
 import asyncio
+import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 
 import discord
 
-from llmcord.core.config import ensure_list, get_config
+from llmcord.core.config import get_config
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_api_keys(raw_api_keys: object) -> list[str]:
+    """Normalize provider api_key config into a list of string keys."""
+    if raw_api_keys is None:
+        return []
+
+    if isinstance(raw_api_keys, str):
+        return [raw_api_keys]
+
+    if isinstance(raw_api_keys, Mapping):
+        return [json.dumps(raw_api_keys, separators=(",", ":"))]
+
+    if not isinstance(raw_api_keys, Iterable):
+        return [str(raw_api_keys)]
+
+    normalized: list[str] = []
+    for value in raw_api_keys:
+        if isinstance(value, str):
+            normalized.append(value)
+            continue
+        if isinstance(value, Mapping):
+            normalized.append(json.dumps(value, separators=(",", ":")))
+            continue
+        normalized.append(str(value))
+
+    return normalized
 
 
 @dataclass(slots=True)
@@ -78,7 +106,7 @@ async def resolve_provider_settings(
         return None
 
     base_url = provider_config.get("base_url")
-    api_keys = ensure_list(provider_config.get("api_key"))
+    api_keys = _normalize_api_keys(provider_config.get("api_key"))
     if not api_keys:
         api_keys = ["sk-no-key-required"]
     model_parameters = config["models"].get(provider_slash_model, None)
