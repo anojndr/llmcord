@@ -38,8 +38,9 @@ must be actual searchable terms, NOT descriptions of what to search
 for.
    - NEVER output queries like "events mentioned by X", "topics in
 the conversation", "things the user asked about", etc.
-   - ALWAYS extract the ACTUAL entities, names, events, or topics
-from the conversation and use those as queries.
+   - ALWAYS extract the ACTUAL entities, names, events, topics,
+and specific descriptors from the conversation and use those as
+queries.
    - If the user says "search for the events John mentioned" and
 John mentioned "Russia Ukraine war" and "Trump policies", your
 queries should be ["Russia Ukraine war", "Trump policies"], NOT
@@ -60,8 +61,14 @@ Target Response On-Ear", "VDSF 5128 Demo Target Response In-Ear",
 "B&K 5128 Diffuse Field Target vs VDSF 5128 Demo Target Response
 On-Ear vs VDSF 5128 Demo Target Response In-Ear vs 5128 Harman
 In-Ear 2024 Beta vs 4128/4195 VDSF Target Response"]
-5. Make queries search-engine friendly
-6. Preserve the user's original intent
+5. Make queries search-engine friendly, but prioritize preserving
+the user's specific wording over making them "professional" or
+"clean".
+6. Preserve the user's original intent and phrasing. Use the same
+adjectives, descriptors, and tone the user used. If the user asks
+"why is [character] so [adjective]", your query should be
+"[character] [adjective]" or the original query itself. Do NOT
+sanitize, clinicalize, or broaden the user's language.
 7. Exclude years from search queries unless explicitly requested by the user.
 8. PRESERVE EXACT NAMES, VERSION NUMBERS, AND IDENTIFIERS. Never
 paraphrase, generalize, or "simplify" specific entity names, model
@@ -114,4 +121,6 @@ Examples:
    {"needs_search": true,
    "queries": ["5.2 Codex initial release date",
    "5.2 Codex API availability date"]}
+- "why is Wakana Kinme so lewd" → {"needs_search": true,
+   "queries": ["why is Wakana Kinme so lewd"]}
 """
