@@ -8,6 +8,8 @@ from llmcord.services.search.utils import convert_messages_to_openai_format
 
 from ._fakes import FakeMessage, FakeUser
 
+EXPECTED_WEB_SEARCH_MAX_CHARS = 4000
+
 
 def _assert_with_trailing_newline_tolerance(actual: str, expected: str) -> None:
     """Assert exact formatting while allowing only trailing newline variance."""
@@ -50,6 +52,11 @@ async def test_web_search_decider_appends_results(
         **kwargs: object,
     ):
         assert queries == ["latest news"]
+        options = kwargs.get("options")
+        assert options is not None
+        assert (
+            getattr(options, "max_chars_per_url", None) == EXPECTED_WEB_SEARCH_MAX_CHARS
+        )
         return "--- Search Results ---\nHeadline: Example", {"provider": "mock"}
 
     def _fake_is_googlelens_query(*args: object, **kwargs: object) -> bool:
@@ -79,6 +86,7 @@ async def test_web_search_decider_appends_results(
             tavily_api_keys=["tvly-TEST"],
             config={
                 "web_search_provider": "tavily",
+                "web_search_max_chars_per_url": EXPECTED_WEB_SEARCH_MAX_CHARS,
                 "web_search_decider_model": "gemini/gemini-3-flash-preview",
                 "providers": {"gemini": {"api_key": ["k"]}},
                 "models": {},

@@ -121,6 +121,22 @@ def resolve_web_search_provider(
     return web_search_provider, web_search_available
 
 
+def _get_web_search_max_chars_per_url(config: Mapping[str, object]) -> int:
+    raw_value = config.get("web_search_max_chars_per_url", 4000)
+    if isinstance(raw_value, bool):
+        return 1
+
+    if not isinstance(raw_value, int | str):
+        return 4000
+
+    try:
+        max_chars = int(raw_value)
+    except (TypeError, ValueError):
+        return 4000
+
+    return max(max_chars, 1)
+
+
 async def resolve_search_metadata(
     context: SearchResolutionContext,
     is_googlelens_query_func: Callable[[discord.Message, discord.Client], bool],
@@ -340,10 +356,13 @@ async def maybe_run_web_search(
                         "advanced",
                     ),
                 )
+                max_chars_per_url = _get_web_search_max_chars_per_url(
+                    context.config,
+                )
                 effective_exa_mcp_url = context.exa_mcp_url or EXA_MCP_URL
                 search_options = WebSearchOptions(
                     max_results_per_query=5,
-                    max_chars_per_url=2000,
+                    max_chars_per_url=max_chars_per_url,
                     search_depth=search_depth,
                     web_search_provider=context.web_search_provider,
                     exa_mcp_url=effective_exa_mcp_url,

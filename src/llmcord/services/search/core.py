@@ -23,7 +23,7 @@ class WebSearchOptions:
     """Options for web search orchestration."""
 
     max_results_per_query: int = 5
-    max_chars_per_url: int = 2000
+    max_chars_per_url: int = 4000
     min_score: float = 0.3
     search_depth: str = "advanced"
     web_search_provider: str = "tavily"

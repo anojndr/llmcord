@@ -53,6 +53,7 @@ exa_mcp_url: https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa
 
 # Web search provider: "tavily" (default), "exa", or "auto" (auto prefers Tavily if keys available)
 web_search_provider: tavily
+web_search_max_chars_per_url: 4000  # Max chars kept per URL result for Tavily/Exa
 
 web_search_decider_model: gemini/gemini-3-flash-preview  # Model to decide if web search is needed (provider/model format)
 

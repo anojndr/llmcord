@@ -144,6 +144,7 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
 | **tavily_api_key** | Optional. API key(s) for [Tavily Search](https://tavily.com/) to enable web search for non-Gemini models. Can be a single key or a list of keys for rotation. |
 | **exa_mcp_url** | Optional. URL for [Exa MCP](https://mcp.exa.ai/) web search endpoint. Append `?tools=...` to enable specific tools. Alternative to Tavily that doesn't require API keys. |
 | **web_search_provider** | Which web search provider to use: `tavily`, `exa`, or `auto`. Auto prefers Tavily if keys are available, otherwise falls back to Exa. (Default: `tavily`) |
+| **web_search_max_chars_per_url** | Maximum number of characters kept per URL result snippet for Tavily/Exa web search output. (Default: `4000`) |
 | **web_search_decider_model** | The model used to decide if a query needs web search. Format: `provider/model`. (Default: `gemini/gemini-3-flash-preview`) |
 | **serpapi_api_key** | Optional. SerpApi key used to fetch Google Lens reverse image matches for `googlelens` queries. When set, results are combined with Yandex for better accuracy. |
 | **googlelens_prefer_overlapping_matches** | Optional. When `true`, reverse image matches that appear in both Google Lens and Yandex are ranked ahead of single-source matches. (Default: `true`) |
