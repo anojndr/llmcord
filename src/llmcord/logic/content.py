@@ -321,8 +321,13 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
 
         if lens_results:
             result_text = (
-                "\n\nanswer the user's query based on these reverse image "
-                "results (Google Lens + Yandex):\n" + "\n".join(lens_results)
+                "\n\nAnswer the user's query based on these reverse image "
+                "results (Google Lens + Yandex). Base your answers on frequency, "
+                "as that is most likely the correct answer. For example, if the "
+                "query is 'what anime?' and one title appears more frequently in "
+                "the results, that title is most likely the answer. In your "
+                "responses, include the top 3 most frequently appearing results:\n"
+                + "\n".join(lens_results)
             )
             if twitter_content:
                 result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(
