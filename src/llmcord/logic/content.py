@@ -275,15 +275,12 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
         )
         return cleaned_content
 
-    image_url = next(
-        (
-            att.url
-            for att in context.curr_msg.attachments
-            if att.content_type and att.content_type.startswith("image")
-        ),
-        None,
-    )
-    if not image_url:
+    image_attachments = [
+        att
+        for att in context.curr_msg.attachments
+        if att.content_type and att.content_type.startswith("image")
+    ]
+    if not image_attachments:
         return cleaned_content
 
     try:
@@ -293,52 +290,82 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             config.get("googlelens_prefer_overlapping_matches", True),
         )
 
-        yandex_task = perform_yandex_lookup(
-            image_url,
-            context.httpx_client,
-            context.twitter_api,
-            context.max_tweet_replies,
-        )
-        google_lens_task = perform_google_lens_lookup(
-            image_url,
-            serpapi_api_key,
-            context.httpx_client,
-            context.twitter_api,
-            context.max_tweet_replies,
-        )
-        (
-            (yandex_results, yandex_twitter),
-            (google_results, google_twitter),
-        ) = await asyncio.gather(yandex_task, google_lens_task)
-        lens_results = _merge_reverse_image_results(
-            yandex_results,
-            google_results,
-            prefer_overlapping_matches=prefer_overlapping_matches,
-        )
-        twitter_content = list(
-            OrderedDict.fromkeys([*yandex_twitter, *google_twitter]),
-        )
+        async def _lookup_single_image(
+            index: int,
+            att: discord.Attachment,
+        ) -> str:
+            image_url = att.url
+            yandex_task = perform_yandex_lookup(
+                image_url,
+                context.httpx_client,
+                context.twitter_api,
+                context.max_tweet_replies,
+            )
+            google_lens_task = perform_google_lens_lookup(
+                image_url,
+                serpapi_api_key,
+                context.httpx_client,
+                context.twitter_api,
+                context.max_tweet_replies,
+            )
+            (
+                (yandex_results, yandex_twitter),
+                (google_results, google_twitter),
+            ) = await asyncio.gather(yandex_task, google_lens_task)
+            lens_results = _merge_reverse_image_results(
+                yandex_results,
+                google_results,
+                prefer_overlapping_matches=prefer_overlapping_matches,
+            )
+            twitter_content = list(
+                OrderedDict.fromkeys([*yandex_twitter, *google_twitter]),
+            )
 
-        if lens_results:
-            result_text = (
-                "\n\nAnswer the user's query based on these reverse image "
+            if not lens_results:
+                return ""
+
+            image_name = f"Image {index + 1}"
+            if att.filename:
+                image_name += f" ({att.filename})"
+
+            result_text = f"\n\n{image_name}\nResults for {image_name}:\n" + "\n".join(
+                lens_results,
+            )
+            if twitter_content:
+                result_text += (
+                    f"\n\n--- Extracted Twitter/X Content for {image_name} ---"
+                    + "".join(twitter_content)
+                )
+            return result_text
+
+        results = await asyncio.gather(
+            *(_lookup_single_image(i, att) for i, att in enumerate(image_attachments)),
+        )
+        all_results_text = "".join(results)
+
+        if all_results_text:
+            instruction_text = (
+                "\n\nAnswer the user's query based on the above reverse image "
                 "results (Google Lens + Yandex). Base your answers on frequency, "
                 "as that is most likely the correct answer. For example, if the "
                 "query is 'what anime?' and one title appears more frequently in "
-                "the results, that title is most likely the answer. In your "
-                "responses, include the top 3 most frequently appearing results:\n"
-                + "\n".join(lens_results)
+                "the results for an image, that title is most likely the answer. "
+                "In your responses, provide the top 3 most frequently appearing "
+                "results for each image, clearly labeling which image you are "
+                "referring to. For each result, include a confidence level based "
+                "on how often it appears and its relevance, following this format:\n"
+                "1. [Title] - [X]% confidence - [Short reasoning]\n"
+                "Example:\n"
+                "1. Towa no Yuugure (Dusk Beyond the End of the World) - 100% "
+                "confidence - most likely the answer\n"
+                "2. SPY x FAMILY - 10% confidence - very unlikely to be the answer"
             )
-            if twitter_content:
-                result_text += "\n\n--- Extracted Twitter/X Content ---" + "".join(
-                    twitter_content,
-                )
-            cleaned_content += result_text
+            cleaned_content += all_results_text + instruction_text
 
-            context.curr_node.lens_results = result_text
+            context.curr_node.lens_results = all_results_text
             get_bad_keys_db().save_message_search_data(
                 str(context.curr_msg.id),
-                lens_results=result_text,
+                lens_results=all_results_text,
             )
             logger.info(
                 "Saved lens results for message %s",
