@@ -48,6 +48,7 @@ class MessageBuildContext:
     max_messages: int
     max_tweet_replies: int
     enable_youtube_transcripts: bool
+    youtube_transcript_method: str
 
 
 @dataclass(slots=True)
@@ -201,6 +202,7 @@ async def _populate_node_if_needed(
             processed_attachments=processed_attachments,
             actual_model=context.actual_model,
             enable_youtube_transcripts=context.enable_youtube_transcripts,
+            youtube_transcript_method=context.youtube_transcript_method,
             curr_node=curr_node,
         ),
     )

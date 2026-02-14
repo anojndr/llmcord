@@ -82,6 +82,7 @@ async def test_text_attachment_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 
@@ -151,6 +152,7 @@ async def test_pdf_text_extracted_and_appended_for_non_gemini(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 
@@ -213,6 +215,7 @@ async def test_image_attachment_included(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 
@@ -289,6 +292,7 @@ async def test_tiktok_query_adds_video_file_for_gemini(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 
@@ -363,6 +367,7 @@ async def test_tiktok_download_not_used_for_non_gemini(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 

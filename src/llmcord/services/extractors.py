@@ -9,6 +9,7 @@ import re
 from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, Protocol
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import asyncpraw
 import asyncprawcore
@@ -191,6 +192,8 @@ _PDF_IMAGE_MIME_MAP: dict[str, str] = {
     "tiff": "image/tiff",
     "tif": "image/tiff",
 }
+
+_NOTEGPT_SUCCESS_CODE = 100000
 
 
 def _extract_single_pdf_image(
@@ -758,11 +761,67 @@ def _build_youtube_transcript_api() -> YouTubeTranscriptApi:
     return YouTubeTranscriptApi()
 
 
-async def extract_youtube_transcript(
+async def _extract_youtube_transcript_notegpt(
     video_id: str,
     httpx_client: httpx.AsyncClient,
-) -> str | None:
-    """Fetch YouTube transcript and metadata."""
+) -> tuple[str, str, str]:
+    """Fetch YouTube transcript and metadata using NoteGPT."""
+    title, channel = "Unknown Title", "Unknown Channel"
+    transcript_text = "[Transcript not available]"
+    try:
+        anonymous_user_id = str(uuid4())
+        response = await request_with_retries(
+            lambda: httpx_client.get(
+                f"https://notegpt.io/api/v2/video-transcript?platform=youtube&video_id={video_id}",
+                headers={
+                    "Cookie": f"anonymous_user_id={anonymous_user_id}",
+                    "User-Agent": FALLBACK_USER_AGENT,
+                },
+                timeout=30,
+            ),
+            log_context=f"NoteGPT YouTube transcript {video_id}",
+        )
+        if response.status_code == httpx.codes.OK:
+            data = response.json()
+            if data.get("code") == _NOTEGPT_SUCCESS_CODE:
+                inner_data = data.get("data", {})
+                video_info = inner_data.get("videoInfo", {})
+                title = video_info.get("name", title)
+                channel = video_info.get("author", channel)
+
+                transcripts = inner_data.get("transcripts", {})
+                if transcripts:
+                    # Try to find English first, otherwise use first available
+                    langs = list(transcripts.keys())
+                    target_lang = (
+                        "en" if "en" in langs else (langs[0] if langs else None)
+                    )
+                    if target_lang:
+                        lang_data = transcripts[target_lang]
+                        # Prefer 'default', then 'auto', then 'custom'
+                        transcript_list = (
+                            lang_data.get("default")
+                            or lang_data.get("auto")
+                            or lang_data.get("custom")
+                        )
+                        if transcript_list:
+                            transcript_text = " ".join(
+                                item["text"] for item in transcript_list
+                            )
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.debug(
+            "Failed to fetch YouTube transcript from NoteGPT for %s: %s",
+            video_id,
+            exc,
+        )
+    return title, channel, transcript_text
+
+
+async def _extract_youtube_transcript_api(
+    video_id: str,
+    httpx_client: httpx.AsyncClient,
+) -> tuple[str, str, str]:
+    """Fetch YouTube transcript and metadata using YouTubeTranscriptApi."""
     title, channel = "Unknown Title", "Unknown Channel"
     try:
         resp = await request_with_retries(
@@ -787,7 +846,10 @@ async def extract_youtube_transcript(
 
         if resp.status_code == httpx.codes.OK:
             resp_text = resp.text
-            title_match = re.search(r'<meta name="title" content="(.*?)">', resp_text)
+            title_match = re.search(
+                r'<meta name="title" content="(.*?)">',
+                resp_text,
+            )
             if title_match:
                 title = html.unescape(title_match.group(1))
 
@@ -839,6 +901,26 @@ async def extract_youtube_transcript(
         ValueError,
     ) as exc:
         logger.debug("Failed to fetch YouTube transcript for %s: %s", video_id, exc)
+    return title, channel, transcript_text
+
+
+async def extract_youtube_transcript(
+    video_id: str,
+    httpx_client: httpx.AsyncClient,
+    *,
+    method: str = "youtube-transcript-api",
+) -> str | None:
+    """Fetch YouTube transcript and metadata."""
+    if method == "notegpt":
+        title, channel, transcript_text = await _extract_youtube_transcript_notegpt(
+            video_id,
+            httpx_client,
+        )
+    else:
+        title, channel, transcript_text = await _extract_youtube_transcript_api(
+            video_id,
+            httpx_client,
+        )
 
     if (
         title == "Unknown Title"

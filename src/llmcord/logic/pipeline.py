@@ -127,19 +127,24 @@ def _get_message_limits(
     config: dict,
     *,
     accept_images: bool,
-) -> tuple[int, int, int, int, bool]:
+) -> tuple[int, int, int, int, bool, str]:
     """Extract message limits from config."""
     max_text = config.get("max_text", 100000)
     max_images = config.get("max_images", 5) if accept_images else 0
     max_messages = config.get("max_messages", 25)
     max_tweet_replies = config.get("max_tweet_replies", 50)
     enable_youtube_transcripts = config.get("enable_youtube_transcripts", True)
+    youtube_transcript_method = config.get(
+        "youtube_transcript_method",
+        "youtube-transcript-api",
+    )
     return (
         max_text,
         max_images,
         max_messages,
         max_tweet_replies,
         enable_youtube_transcripts,
+        youtube_transcript_method,
     )
 
 
@@ -245,6 +250,7 @@ async def process_message(
             max_messages,
             max_tweet_replies,
             enable_youtube_transcripts,
+            youtube_transcript_method,
         ) = _get_message_limits(config, accept_images=accept_images)
 
         build_result = await build_messages(
@@ -261,6 +267,7 @@ async def process_message(
                 max_messages=max_messages,
                 max_tweet_replies=max_tweet_replies,
                 enable_youtube_transcripts=enable_youtube_transcripts,
+                youtube_transcript_method=youtube_transcript_method,
             ),
         )
         messages = build_result.messages

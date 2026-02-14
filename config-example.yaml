@@ -70,6 +70,8 @@ reddit_mode: json
 
 # YouTube transcript settings:
 enable_youtube_transcripts: true
+# Choose transcript extraction method: "youtube-transcript-api" or "notegpt"
+youtube_transcript_method: "youtube-transcript-api"
 
 twitter_accounts:
   - username: 

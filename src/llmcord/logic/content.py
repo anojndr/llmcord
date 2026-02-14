@@ -149,6 +149,7 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
             extract_youtube_transcript(
                 vid,
                 context.httpx_client,
+                method=context.youtube_transcript_method,
             )
             for vid in unique_video_ids
         ],
@@ -270,6 +271,7 @@ class ExternalContentContext:
     processed_attachments: list[dict[str, bytes | str | None]]
     actual_model: str
     enable_youtube_transcripts: bool
+    youtube_transcript_method: str
     curr_node: MsgNode
 
 

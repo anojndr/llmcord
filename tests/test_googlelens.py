@@ -185,6 +185,7 @@ async def test_googlelens_results_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 
@@ -274,6 +275,7 @@ async def test_googlelens_multiple_images_results_appended(
             max_messages=1,
             max_tweet_replies=50,
             enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
         ),
     )
 
