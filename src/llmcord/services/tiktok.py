@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import httpx
 
-from llmcord.core.config import is_gemini_model
+from llmcord.core.config import DEFAULT_USER_AGENT, is_gemini_model
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ async def _download_video_payload(
     download_url: str,
     httpx_client: httpx.AsyncClient,
 ) -> DownloadedTikTokVideo | None:
-    request_headers = {"user-agent": "TelegramBot (like TwitterBot)"}
+    request_headers = {"User-Agent": DEFAULT_USER_AGENT}
     video_response = await httpx_client.get(
         download_url,
         headers=request_headers,

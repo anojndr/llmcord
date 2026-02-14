@@ -233,7 +233,6 @@ async def _collect_generic_url_contents(context: ExternalContentContext) -> list
             extract_url_content(
                 url,
                 context.httpx_client,
-                max_chars=2000,
             )
             for url in urls
         ],

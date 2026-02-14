@@ -16,6 +16,7 @@ import brotli
 import discord
 import httpx
 import pymupdf4llm
+import trafilatura
 from asyncpraw import exceptions as asyncpraw_exceptions
 from asyncpraw import models as asyncpraw_models
 from bs4 import BeautifulSoup, Tag
@@ -26,7 +27,7 @@ from youtube_transcript_api import (
     YouTubeTranscriptApiException,
 )
 
-from llmcord.core.config import BROWSER_HEADERS
+from llmcord.core.config import BROWSER_HEADERS, DEFAULT_USER_AGENT
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
 from llmcord.services.http import RetryOptions, request_with_retries
 
@@ -393,7 +394,6 @@ async def extract_url_content(
     url: str,
     httpx_client: httpx.AsyncClient,
     *,
-    max_chars: int = 2000,
     timeout_seconds: float = 20,
     retries: int = 2,
 ) -> str | None:
@@ -417,18 +417,36 @@ async def extract_url_content(
             log_context=f"URL content extraction {url}",
         )
         if response.status_code != httpx.codes.OK:
+            # Fallback for sites that block certain headers (like Wikipedia)
+            response = await request_with_retries(
+                lambda: httpx_client.get(
+                    url,
+                    headers={
+                        "User-Agent": DEFAULT_USER_AGENT,
+                    },
+                    follow_redirects=True,
+                    timeout=timeout_seconds,
+                ),
+                options=RetryOptions(retries=retries),
+                log_context=f"URL content extraction fallback {url}",
+            )
+            if response.status_code != httpx.codes.OK:
+                return None
+
+        # Use trafilatura for better content extraction
+        # Run in thread pool since extraction can be CPU-bound
+        text = await asyncio.to_thread(
+            trafilatura.extract,
+            response.text,
+            output_format="markdown",
+            with_metadata=True,
+        )
+        if not text:
             return None
-
-        soup = BeautifulSoup(response.text, "lxml")
-        for element in soup(["script", "style", "nav", "footer", "header"]):
-            element.decompose()
-
-        text = soup.get_text(separator=" ", strip=True)
-        # Clean up whitespace
-        text = re.sub(r"\s+", " ", text)
-        return text[:max_chars]
     except (httpx.HTTPError, RuntimeError, ValueError):
         return None
+    else:
+        return text
 
 
 async def _fetch_twitter_results(
@@ -928,7 +946,10 @@ async def _extract_reddit_json_direct(
 
     """
     # Create a fresh client for direct Reddit JSON access
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        follow_redirects=True,
+        headers=BROWSER_HEADERS,
+    ) as client:
         # Resolve share URLs first if needed
         if re.search(r"/r/\w+/s/", post_url):
             resolve_resp = await client.head(
