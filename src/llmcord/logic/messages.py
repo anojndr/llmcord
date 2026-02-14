@@ -9,7 +9,7 @@ from typing import cast
 import discord
 import httpx
 
-from llmcord.core.config import is_gemini_model
+from llmcord.core.config import EMBED_FIELD_NAME_LIMIT, is_gemini_model
 from llmcord.core.models import MsgNode
 from llmcord.logic.content import (
     ExternalContentContext,
@@ -475,4 +475,7 @@ def _update_user_warnings(
 
     if curr_node.failed_extractions:
         failed_list = "\n- " + "\n- ".join(curr_node.failed_extractions)
-        user_warnings.add(f"⚠️ Failed to extract from: {failed_list}")
+        warning = f"⚠️ Failed to extract from: {failed_list}"
+        if len(warning) > EMBED_FIELD_NAME_LIMIT:
+            warning = warning[: EMBED_FIELD_NAME_LIMIT - 3] + "..."
+        user_warnings.add(warning)

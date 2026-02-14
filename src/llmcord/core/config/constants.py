@@ -33,3 +33,6 @@ EDIT_DELAY_SECONDS = 1
 
 # Message node limits
 MAX_MESSAGE_NODES = 500
+
+# Discord limit constants
+EMBED_FIELD_NAME_LIMIT = 256
