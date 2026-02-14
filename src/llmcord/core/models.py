@@ -34,4 +34,6 @@ class MsgNode:
     # Google Lens / Yandex reverse image search results
     lens_results: str | None = None
 
+    failed_extractions: list[str] = field(default_factory=list)
+
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)

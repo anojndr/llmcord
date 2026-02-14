@@ -153,7 +153,20 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
             for vid in unique_video_ids
         ],
     )
-    return [t for t in results if t is not None]
+
+    extracted = []
+    for vid, res in zip(unique_video_ids, results, strict=False):
+        if res is not None:
+            extracted.append(res)
+            if "[Transcript not available]" in res:
+                context.curr_node.failed_extractions.append(
+                    f"https://www.youtube.com/watch?v={vid} (transcript unavailable)",
+                )
+        else:
+            context.curr_node.failed_extractions.append(
+                f"https://www.youtube.com/watch?v={vid}",
+            )
+    return extracted
 
 
 async def _collect_tweets(context: ExternalContentContext) -> list[str]:
@@ -256,6 +269,7 @@ class ExternalContentContext:
     processed_attachments: list[dict[str, bytes | str | None]]
     actual_model: str
     enable_youtube_transcripts: bool
+    curr_node: MsgNode
 
 
 async def apply_googlelens(context: GoogleLensContext) -> str:

@@ -201,6 +201,7 @@ async def _populate_node_if_needed(
             processed_attachments=processed_attachments,
             actual_model=context.actual_model,
             enable_youtube_transcripts=context.enable_youtube_transcripts,
+            curr_node=curr_node,
         ),
     )
 
@@ -471,3 +472,7 @@ def _update_user_warnings(
             f"⚠️ Only using last {messages_len} message"
             f"{'' if messages_len == 1 else 's'}",
         )
+
+    if curr_node.failed_extractions:
+        failed_list = "\n- " + "\n- ".join(curr_node.failed_extractions)
+        user_warnings.add(f"⚠️ Failed to extract from: {failed_list}")
