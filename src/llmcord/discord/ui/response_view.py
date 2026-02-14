@@ -30,7 +30,7 @@ class RetryButton(discord.ui.Button):
         """Initialize a retry button for the given user."""
         super().__init__(
             style=discord.ButtonStyle.secondary,
-            label="Retry with stable model",
+            label="Retry",
             emoji="🔄",
             custom_id=RETRY_RESPONSE_ID,
         )
@@ -213,8 +213,9 @@ class ResponseView(discord.ui.View):
         self.metadata = metadata
         self.tavily_metadata = tavily_metadata
 
-        # View Response Better button (always present)
-        self.add_item(ViewResponseBetterButton(full_response))
+        # View Response Better button (only if response exists)
+        if full_response:
+            self.add_item(ViewResponseBetterButton(full_response))
 
         # Add Retry button if callback is provided
         if retry_callback and user_id:

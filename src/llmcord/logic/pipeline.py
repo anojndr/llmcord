@@ -12,12 +12,19 @@ import httpx
 
 from llmcord.core.config import (
     EMBED_COLOR_INCOMPLETE,
+    PROCESSING_MESSAGE,
     PROVIDERS_SUPPORTING_USERNAMES,
     VISION_MODEL_TAGS,
     ensure_list,
     get_config,
 )
 from llmcord.core.models import MsgNode
+from llmcord.discord.ui.response_view import (
+    LayoutView,
+    ResponseView,
+    RetryButton,
+    TextDisplay,
+)
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.content import is_googlelens_query
 from llmcord.logic.generation import GenerationContext, generate_response
@@ -138,16 +145,11 @@ def _get_message_limits(
 
 def _make_retry_callback(
     new_msg: discord.Message,
-    config: dict,
     context: ProcessContext,
 ) -> Callable[[], Awaitable[None]]:
-    """Create a retry callback for when the primary model fails."""
+    """Create a retry callback for the generation."""
 
     async def retry_callback() -> None:
-        retry_model = config.get("retry_stable_model")
-        if not isinstance(retry_model, str) or not retry_model.strip():
-            retry_model = "gemini/gemma-3-27b-it"
-
         retry_context = ProcessContext(
             discord_bot=context.discord_bot,
             httpx_client=context.httpx_client,
@@ -155,23 +157,30 @@ def _make_retry_callback(
             msg_nodes=context.msg_nodes,
             curr_model_lock=context.curr_model_lock,
             curr_model_ref=context.curr_model_ref,
-            override_provider_slash_model=retry_model,
-            fallback_chain=[
-                (
-                    "openrouter",
-                    "openrouter/free",
-                    "openrouter/openrouter/free",
-                ),
-                (
-                    "mistral",
-                    "mistral-large-latest",
-                    "mistral/mistral-large-latest",
-                ),
-            ],
+            override_provider_slash_model=None,
         )
         await process_message(new_msg=new_msg, context=retry_context)
 
     return retry_callback
+
+
+async def _setup_initial_view(
+    processing_msg: discord.Message,
+    new_msg: discord.Message,
+    *,
+    use_plain_responses: bool,
+    retry_callback: Callable[[], Awaitable[None]],
+) -> None:
+    if use_plain_responses:
+        initial_view = LayoutView().add_item(TextDisplay(content=PROCESSING_MESSAGE))
+        initial_view.add_item(RetryButton(retry_callback, new_msg.author.id))
+    else:
+        initial_view = ResponseView(
+            full_response="",
+            retry_callback=retry_callback,
+            user_id=new_msg.author.id,
+        )
+    await processing_msg.edit(view=initial_view)
 
 
 async def process_message(
@@ -201,6 +210,14 @@ async def process_message(
 
     config = get_config()
     use_plain_responses = config.get("use_plain_responses", False)
+
+    retry_callback = _make_retry_callback(new_msg, context)
+    await _setup_initial_view(
+        processing_msg,
+        new_msg,
+        use_plain_responses=use_plain_responses,
+        retry_callback=retry_callback,
+    )
 
     try:
         provider_settings = await resolve_provider_settings(
@@ -304,8 +321,6 @@ async def process_message(
             ),
             is_googlelens_query_func=is_googlelens_query,
         )
-
-        retry_callback = _make_retry_callback(new_msg, config, context)
 
         generation_context = GenerationContext(
             new_msg=new_msg,

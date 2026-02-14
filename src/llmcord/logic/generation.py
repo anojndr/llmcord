@@ -905,6 +905,7 @@ async def _stream_response(  # noqa: C901
                 continue
 
             await maybe_edit_stream_message(
+                context=context,
                 state=state,
                 reply_helper=reply_helper,
                 decision=decision,
@@ -927,6 +928,7 @@ async def _stream_response(  # noqa: C901
             )
 
         await render_plain_responses(
+            context=context,
             response_contents=rendered_contents,
             response_msgs=state.response_msgs,
             reply_helper=reply_helper,

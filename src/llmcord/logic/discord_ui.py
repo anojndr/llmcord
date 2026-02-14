@@ -114,6 +114,7 @@ async def update_response_view(
 
 async def maybe_edit_stream_message(
     *,
+    context: GenerationContext,
     state: GenerationState,
     reply_helper: Callable[..., Awaitable[None]],
     decision: StreamEditDecision,
@@ -145,10 +146,12 @@ async def maybe_edit_stream_message(
         else EMBED_COLOR_INCOMPLETE
     )
 
-    view = (
-        sources_view.SourceView(grounding_metadata)
-        if decision.is_final_edit and ui_metadata.has_grounding_data(grounding_metadata)
-        else None
+    view = response_view.ResponseView(
+        full_response="".join(state.response_contents),
+        metadata=grounding_metadata,
+        tavily_metadata=context.tavily_metadata,
+        retry_callback=context.retry_callback,
+        user_id=context.new_msg.author.id,
     )
 
     msg_index = len(response_contents) - 1
@@ -163,8 +166,9 @@ async def maybe_edit_stream_message(
     state.last_edit_time = datetime.now(UTC).timestamp()
 
 
-async def render_plain_responses(
+async def render_plain_responses(  # noqa: PLR0913
     *,
+    context: GenerationContext,
     response_contents: list[str],
     response_msgs: list[discord.Message],
     reply_helper: Callable[..., Awaitable[None]],
@@ -178,6 +182,12 @@ async def render_plain_responses(
         )
 
         if i == len(response_contents) - 1:
+            layout.add_item(
+                response_view.RetryButton(
+                    context.retry_callback,
+                    context.new_msg.author.id,
+                ),
+            )
             if ui_metadata.has_grounding_data(grounding_metadata):
                 layout.add_item(
                     sources_view.SourceButton(grounding_metadata),
