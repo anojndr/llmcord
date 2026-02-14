@@ -57,7 +57,7 @@ _REDDIT_URL_RE = re.compile(
         r"|redd\.it\/[a-zA-Z0-9_]+))"
     ),
 )
-_GENERIC_URL_RE = re.compile(r"https?://[^\s<>()\[\]{}]+")
+_GENERIC_URL_RE = re.compile(r"https?://[^\s<>{}\[\]]+")
 
 
 def _extract_result_url(result_line: str) -> str | None:
@@ -242,6 +242,8 @@ async def _collect_generic_url_contents(context: ExternalContentContext) -> list
     for url, text in zip(urls, extracted, strict=False):
         if text:
             results.append(f"--- URL Content: {url} ---\n{text}")
+        else:
+            context.curr_node.failed_extractions.append(url)
     return results
 
 

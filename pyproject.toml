@@ -69,6 +69,9 @@ ignore = [
     "T201",   # login helper prints credentials for manual setup
     "TRY004", # runtime errors are used for user-facing flow failures
 ]
+"src/llmcord/services/extractors.py" = [
+    "C901", # extraction logic with fallback/retry is complex by design
+]
 "tests/**" = [
     "ANN",   # allow dynamic typing in tests
     "ARG",   # allow unused fixture args in helpers

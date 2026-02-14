@@ -10,6 +10,8 @@ DEFAULT_USER_AGENT = (
     "Chrome/133.0.0.0 Safari/537.36"
 )
 
+FALLBACK_USER_AGENT = "llmcord (https://github.com/mariozechner/llmcord)"
+
 
 # Browser-like headers for web scraping/HTTP requests
 @dataclass(frozen=True, slots=True)

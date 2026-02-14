@@ -18,6 +18,7 @@ from llmcord.core.config.constants import (
 from llmcord.core.config.http import (
     BROWSER_HEADERS,
     DEFAULT_USER_AGENT,
+    FALLBACK_USER_AGENT,
     HttpxClientOptions,
     get_or_create_httpx_client,
 )
@@ -37,12 +38,13 @@ from llmcord.core.config.utils import is_gemini_model
 
 __all__ = [
     "BROWSER_HEADERS",
-    "DEFAULT_USER_AGENT",
     "CONFIG_CACHE_TTL",
+    "DEFAULT_USER_AGENT",
     "EDIT_DELAY_SECONDS",
     "EMBED_COLOR_COMPLETE",
     "EMBED_COLOR_INCOMPLETE",
     "EMBED_FIELD_NAME_LIMIT",
+    "FALLBACK_USER_AGENT",
     "MAX_MESSAGE_NODES",
     "PROCESSING_MESSAGE",
     "PROVIDERS_SUPPORTING_USERNAMES",

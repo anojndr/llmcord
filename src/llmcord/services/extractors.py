@@ -27,7 +27,10 @@ from youtube_transcript_api import (
     YouTubeTranscriptApiException,
 )
 
-from llmcord.core.config import BROWSER_HEADERS, DEFAULT_USER_AGENT
+from llmcord.core.config import (
+    BROWSER_HEADERS,
+    FALLBACK_USER_AGENT,
+)
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
 from llmcord.services.http import RetryOptions, request_with_retries
 
@@ -417,12 +420,13 @@ async def extract_url_content(
             log_context=f"URL content extraction {url}",
         )
         if response.status_code != httpx.codes.OK:
-            # Fallback for sites that block certain headers (like Wikipedia)
+            # Fallback for sites that block browser headers (like Wikipedia)
+            # using a descriptive bot user agent.
             response = await request_with_retries(
                 lambda: httpx_client.get(
                     url,
                     headers={
-                        "User-Agent": DEFAULT_USER_AGENT,
+                        "User-Agent": FALLBACK_USER_AGENT,
                     },
                     follow_redirects=True,
                     timeout=timeout_seconds,
@@ -437,7 +441,8 @@ async def extract_url_content(
         # Run in thread pool since extraction can be CPU-bound
         text = await asyncio.to_thread(
             trafilatura.extract,
-            response.text,
+            response.content,
+            url=url,
             output_format="markdown",
             with_metadata=True,
         )
@@ -769,6 +774,17 @@ async def extract_youtube_transcript(
             ),
             log_context=f"YouTube metadata {video_id}",
         )
+        if resp.status_code != httpx.codes.OK:
+            resp = await request_with_retries(
+                lambda: httpx_client.get(
+                    f"https://www.youtube.com/watch?v={video_id}",
+                    headers={"User-Agent": FALLBACK_USER_AGENT},
+                    follow_redirects=True,
+                    timeout=30,
+                ),
+                log_context=f"YouTube metadata fallback {video_id}",
+            )
+
         if resp.status_code == httpx.codes.OK:
             resp_text = resp.text
             title_match = re.search(r'<meta name="title" content="(.*?)">', resp_text)
@@ -898,6 +914,16 @@ async def _fetch_reddit_json(
         ),
         log_context=f"Reddit JSON fetch {json_url}",
     )
+    if response.status_code != httpx.codes.OK:
+        response = await request_with_retries(
+            lambda: httpx_client.get(
+                json_url,
+                headers={"User-Agent": FALLBACK_USER_AGENT},
+                timeout=30,
+                follow_redirects=True,
+            ),
+            log_context=f"Reddit JSON fetch fallback {json_url}",
+        )
     response.raise_for_status()
     return response.json(), str(response.url)
 
@@ -957,6 +983,12 @@ async def _extract_reddit_json_direct(
                 headers=BROWSER_HEADERS,
                 timeout=30,
             )
+            if resolve_resp.status_code != httpx.codes.OK:
+                resolve_resp = await client.head(
+                    post_url,
+                    headers={"User-Agent": FALLBACK_USER_AGENT},
+                    timeout=30,
+                )
             post_url = str(resolve_resp.url)
             if "?" in post_url:
                 post_url = post_url.split("?")[0]
@@ -967,6 +999,12 @@ async def _extract_reddit_json_direct(
             headers=BROWSER_HEADERS,
             timeout=30,
         )
+        if response.status_code != httpx.codes.OK:
+            response = await client.get(
+                json_url,
+                headers={"User-Agent": FALLBACK_USER_AGENT},
+                timeout=30,
+            )
         response.raise_for_status()
         data = response.json()
 
