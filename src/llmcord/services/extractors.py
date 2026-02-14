@@ -1,6 +1,7 @@
 """Asset extraction and handling (PDFs, Tweets, YouTube, Reddit)."""
 
 import asyncio
+import html
 import importlib
 import io
 import logging
@@ -739,50 +740,78 @@ async def extract_youtube_transcript(
     httpx_client: httpx.AsyncClient,
 ) -> str | None:
     """Fetch YouTube transcript and metadata."""
-
-    async def _fetch(
-        client: httpx.AsyncClient,
-    ) -> tuple[list[dict], httpx.Response]:
-        ytt_api = _build_youtube_transcript_api()
-        transcript_obj = await asyncio.to_thread(ytt_api.fetch, video_id)
-        transcript_data = transcript_obj.to_raw_data()
-
+    title, channel = "Unknown Title", "Unknown Channel"
+    try:
         resp = await request_with_retries(
-            lambda: client.get(
+            lambda: httpx_client.get(
                 f"https://www.youtube.com/watch?v={video_id}",
+                headers=BROWSER_HEADERS,
                 follow_redirects=True,
                 timeout=30,
             ),
             log_context=f"YouTube metadata {video_id}",
         )
-        resp.raise_for_status()
-        return transcript_data, resp
+        if resp.status_code == httpx.codes.OK:
+            resp_text = resp.text
+            title_match = re.search(r'<meta name="title" content="(.*?)">', resp_text)
+            if title_match:
+                title = html.unescape(title_match.group(1))
 
+            channel_match = re.search(
+                r'<link itemprop="name" content="(.*?)">',
+                resp_text,
+            )
+            if channel_match:
+                channel = html.unescape(channel_match.group(1))
+    except (httpx.HTTPError, RuntimeError, ValueError) as exc:
+        logger.debug("Failed to fetch YouTube metadata for %s: %s", video_id, exc)
+
+    transcript_text = "[Transcript not available]"
     try:
-        transcript, response = await _fetch(httpx_client)
+        ytt_api = _build_youtube_transcript_api()
+        transcript_list = await asyncio.to_thread(ytt_api.list, video_id)
+        try:
+            # Prefer English, but fall back to many other languages if needed
+            transcript = transcript_list.find_transcript(
+                [
+                    "en",
+                    "es",
+                    "fr",
+                    "de",
+                    "it",
+                    "pt",
+                    "ru",
+                    "ja",
+                    "ko",
+                    "zh-Hans",
+                    "zh-Hant",
+                ],
+            )
+        except YouTubeTranscriptApiException:
+            # Fall back to the first available transcript
+            try:
+                transcript = next(iter(transcript_list))
+            except StopIteration:
+                transcript = None
+
+        if transcript:
+            fetched_transcript = await asyncio.to_thread(transcript.fetch)
+            transcript_data = fetched_transcript.to_raw_data()
+            transcript_text = " ".join(x["text"] for x in transcript_data)
     except (
         YouTubeTranscriptApiException,
         httpx.HTTPError,
         RuntimeError,
         ValueError,
-        KeyError,
     ) as exc:
-        logger.debug(
-            "Failed to fetch YouTube transcript for %s: %s",
-            video_id,
-            exc,
-        )
-        return None
-    html = response.text
-    title_match = re.search(r'<meta name="title" content="(.*?)">', html)
-    title = title_match.group(1) if title_match else "Unknown Title"
-    channel_match = re.search(
-        r'<link itemprop="name" content="(.*?)">',
-        html,
-    )
-    channel = channel_match.group(1) if channel_match else "Unknown Channel"
+        logger.debug("Failed to fetch YouTube transcript for %s: %s", video_id, exc)
 
-    transcript_text = " ".join(x["text"] for x in transcript)
+    if (
+        title == "Unknown Title"
+        and channel == "Unknown Channel"
+        and transcript_text == "[Transcript not available]"
+    ):
+        return None
 
     return (
         f"YouTube Video ID: {video_id}\n"

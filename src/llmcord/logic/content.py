@@ -39,10 +39,9 @@ if TYPE_CHECKING:
 
 
 _YOUTUBE_ID_RE = re.compile(
-    (
-        r"(?:https?:\/\/)?(?:[a-zA-Z0-9-]+\.)?"
-        r"(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})"
-    ),
+    r"(?:https?://)?(?:[a-zA-Z0-9-]+\.)?"
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|embed/|v/|shorts/|live/)|youtu\.be/)"
+    r"([a-zA-Z0-9_-]{11})",
 )
 _TWEET_ID_RE = re.compile(
     (
@@ -142,13 +141,16 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
     if not video_ids or not context.enable_youtube_transcripts:
         return []
 
+    # Deduplicate while preserving order
+    unique_video_ids = list(OrderedDict.fromkeys(video_ids))
+
     results = await asyncio.gather(
         *[
             extract_youtube_transcript(
                 vid,
                 context.httpx_client,
             )
-            for vid in video_ids
+            for vid in unique_video_ids
         ],
     )
     return [t for t in results if t is not None]
