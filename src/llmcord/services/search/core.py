@@ -28,6 +28,7 @@ class WebSearchOptions:
     search_depth: str = "advanced"
     web_search_provider: str = "tavily"
     exa_mcp_url: str = EXA_MCP_URL
+    tool: str = "web_search_exa"
 
 
 async def _search_single_query_tavily(
@@ -81,10 +82,11 @@ async def _run_exa_searches(
     queries: list[str],
     exa_mcp_url: str,
     max_results_per_query: int,
+    tool: str = "web_search_exa",
 ) -> list[dict]:
     """Execute Exa MCP searches concurrently."""
     search_tasks = [
-        exa_search(query, exa_mcp_url, max_results_per_query) for query in queries
+        exa_search(query, exa_mcp_url, max_results_per_query, tool) for query in queries
     ]
     return await asyncio.gather(*search_tasks)
 
@@ -249,6 +251,7 @@ async def perform_web_search(
             queries,
             opts.exa_mcp_url,
             opts.max_results_per_query,
+            opts.tool,
         )
         total_results = _count_total_results(results)
         retries_remaining = 3
@@ -261,6 +264,7 @@ async def perform_web_search(
                 queries,
                 opts.exa_mcp_url,
                 opts.max_results_per_query,
+                opts.tool,
             )
             total_results = _count_total_results(results)
             retries_remaining -= 1

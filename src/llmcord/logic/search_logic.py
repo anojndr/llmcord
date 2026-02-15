@@ -74,7 +74,6 @@ class WebSearchContext:
     config: dict[str, object]
     web_search_provider: str
     tavily_api_keys: list[str]
-    exa_mcp_url: str
     is_googlelens_query: bool
     actual_model: str
     has_existing_search: bool
@@ -94,27 +93,25 @@ class SearchResolutionContext:
     config: dict[str, object]
     web_search_available: bool
     web_search_provider: str
-    exa_mcp_url: str
     actual_model: str
 
 
 def resolve_web_search_provider(
     config: dict[str, Any],
     tavily_api_keys: list[str],
-    exa_mcp_url: str,
 ) -> tuple[str, bool]:
     """Determine the web search provider and availability."""
     web_search_provider = str(config.get("web_search_provider", "tavily"))
     web_search_available = False
     if (web_search_provider == "tavily" and tavily_api_keys) or (
-        web_search_provider == "exa" and exa_mcp_url
+        web_search_provider == "exa"
     ):
         web_search_available = True
     elif web_search_provider == "auto":
         if tavily_api_keys:
             web_search_provider = "tavily"
             web_search_available = True
-        elif exa_mcp_url:
+        else:
             web_search_provider = "exa"
             web_search_available = True
 
@@ -191,7 +188,6 @@ async def resolve_search_metadata(
                 config=context.config,
                 web_search_provider=context.web_search_provider,
                 tavily_api_keys=context.tavily_api_keys,
-                exa_mcp_url=context.exa_mcp_url,
                 is_googlelens_query=is_googlelens_query,
                 actual_model=context.actual_model,
                 has_existing_search=has_existing_search,
@@ -208,7 +204,6 @@ async def resolve_search_metadata(
                 config=context.config,
                 web_search_provider=context.web_search_provider,
                 tavily_api_keys=context.tavily_api_keys,
-                exa_mcp_url=context.exa_mcp_url,
                 is_googlelens_query=is_googlelens_query,
                 actual_model=context.actual_model,
                 has_existing_search=has_existing_search,
@@ -359,13 +354,13 @@ async def maybe_run_web_search(
                 max_chars_per_url = _get_web_search_max_chars_per_url(
                     context.config,
                 )
-                effective_exa_mcp_url = context.exa_mcp_url or EXA_MCP_URL
                 search_options = WebSearchOptions(
                     max_results_per_query=5,
                     max_chars_per_url=max_chars_per_url,
                     search_depth=search_depth,
                     web_search_provider=context.web_search_provider,
-                    exa_mcp_url=effective_exa_mcp_url,
+                    exa_mcp_url=EXA_MCP_URL,
+                    tool=search_decision.get("tool", "web_search_exa"),
                 )
                 search_results, search_metadata = await perform_web_search(
                     queries,

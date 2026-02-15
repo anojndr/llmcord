@@ -6,8 +6,8 @@ MAX_ERROR_CHARS = 500
 HTTP_OK = 200
 EXA_MCP_URL = (
     "https://mcp.exa.ai/mcp?tools=web_search_exa,web_search_advanced_exa,"
-    "get_code_context_exa,deep_search_exa,crawling_exa,company_research_exa,"
-    "linkedin_search_exa,deep_researcher_start,deep_researcher_check"
+    "get_code_context_exa,crawling_exa,company_research_exa,people_search_exa,"
+    "deep_researcher_start,deep_researcher_check"
 )
 
 # Web Search Decider and Tavily Search Functions
@@ -24,7 +24,20 @@ knowledge, math, coding):
 
 If web search IS needed (e.g., current events, recent news, product
 specs, prices, real-time info):
-{"needs_search": true, "queries": ["query1", "query2", ...]}
+{"needs_search": true, "queries": ["query1", "query2", ...],
+"tool": "optional_tool_name"}
+
+AVAILABLE TOOLS (only when using Exa):
+- "web_search_exa": Default for general web search, news, and facts.
+- "get_code_context_exa": Best for programming questions, API
+documentation, and code examples.
+- "company_research_exa": Best for researching a specific company's
+business, financials, and news.
+- "people_search_exa": Best for finding professional profiles or
+information about specific people.
+
+Use "web_search_exa" as the default. Only specify a different tool if
+the query clearly falls into one of the specialized categories.
 
 If the user explicitly says not to use web search (e.g., "don't search
 the net", "do not search the web", "no web search"), ALWAYS return:

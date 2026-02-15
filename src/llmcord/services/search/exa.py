@@ -54,12 +54,12 @@ def _parse_exa_block(block: str) -> dict | None:
 
     for line in block.split("\n"):
         if line.startswith("Title:"):
-            title = line[6:].strip()
+            title = line[len("Title:") :].strip()
         elif line.startswith("URL:"):
-            url = line[4:].strip()
+            url = line[len("URL:") :].strip()
         elif line.startswith("Text:"):
             text_started = True
-            text_lines.append(line[5:].strip())
+            text_lines.append(line[len("Text:") :].strip())
         elif text_started:
             text_lines.append(line)
 
@@ -74,28 +74,37 @@ def _parse_exa_block(block: str) -> dict | None:
     }
 
 
-def parse_exa_text_format(text_content: str) -> list[dict]:
-    """Parse Exa MCP text response format into a list of result dicts.
+def _parse_markdown_block(block: str) -> dict | None:
+    """Parse a markdown-style Exa block (e.g. from get_code_context_exa)."""
+    lines = block.strip().split("\n")
+    if not lines:
+        return None
 
-    Exa returns results in this format (multiple results separated by
-    blank lines):
-    Title: ...
-    Author: ...
-    Published Date: ...
-    URL: ...
-    Text: ...
+    title = lines[0].strip()
+    url = ""
+    content_start = 1
 
-    Returns a list of dicts with 'title', 'url', and 'content' keys.
-    """
-    if not text_content:
-        return []
+    if len(lines) > 1:
+        second_line = lines[1].strip()
+        if second_line.startswith("http"):
+            url = second_line
+            content_start = 2
 
-    results: list[dict] = []
+    content = "\n".join(lines[content_start:]).strip()
+    if not (title or url):
+        return None
 
-    # Split by double newlines to separate individual results
-    # Each result block starts with "Title:"
+    return {
+        "title": title,
+        "url": url,
+        "content": content,
+    }
+
+
+def _parse_exa_text_blocks(text_content: str) -> list[dict]:
+    """Parse "Title:" format text blocks."""
+    results = []
     blocks = text_content.split("\n\nTitle:")
-
     for i, block in enumerate(blocks):
         current_block = _normalize_exa_block(block, i)
         if not current_block:
@@ -103,22 +112,72 @@ def parse_exa_text_format(text_content: str) -> list[dict]:
         parsed = _parse_exa_block(current_block)
         if parsed:
             results.append(parsed)
-
     return results
 
 
-def _build_exa_payload(query: str, max_results: int) -> dict:
+def _parse_markdown_text_blocks(text_content: str) -> list[dict]:
+    """Parse markdown-style "##" text blocks."""
+    results = []
+    blocks = text_content.split("\n\n## ")
+    for i, block in enumerate(blocks):
+        clean_block = block.strip()
+        if i == 0 and clean_block.startswith("## "):
+            clean_block = clean_block[3:]
+        parsed = _parse_markdown_block(clean_block)
+        if parsed:
+            results.append(parsed)
+    return results
+
+
+def parse_exa_text_format(text_content: str) -> list[dict]:
+    """Parse Exa MCP text response format into a list of result dicts.
+
+    Supports both "Title:" format and Markdown "##" format.
+    """
+    if not text_content:
+        return []
+
+    # 1. Try splitting by "\n\nTitle:"
+    if "\n\nTitle:" in text_content or text_content.strip().startswith("Title:"):
+        results = _parse_exa_text_blocks(text_content)
+        if results:
+            return results
+
+    # 2. Try splitting by "\n\n## "
+    if "\n\n## " in text_content or text_content.strip().startswith("## "):
+        results = _parse_markdown_text_blocks(text_content)
+        if results:
+            return results
+
+    return []
+
+
+def _build_exa_payload(
+    query: str,
+    max_results: int,
+    tool: str = "web_search_exa",
+) -> dict:
     """Build the JSON-RPC payload for Exa MCP tool calls."""
+    arguments: dict = {
+        "query": query,
+    }
+
+    if tool == "company_research_exa":
+        arguments = {"companyName": query, "numResults": max_results}
+    elif tool == "get_code_context_exa":
+        arguments = {"query": query, "tokensNum": 5000}
+    elif tool == "people_search_exa":
+        arguments = {"query": query, "numResults": max_results}
+    else:
+        arguments["numResults"] = max_results
+
     return {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": {
-            "name": "web_search_exa",
-            "arguments": {
-                "query": query,
-                "numResults": max_results,
-            },
+            "name": tool,
+            "arguments": arguments,
         },
     }
 
@@ -229,28 +288,8 @@ async def _parse_exa_http_response(
     return await _parse_json_response(response, query)
 
 
-def _extract_exa_results(result: dict, query: str) -> dict:
-    """Extract Exa results from the MCP JSON-RPC response."""
-    if "error" in result:
-        error = result.get("error")
-        if isinstance(error, dict):
-            error_msg = error.get("message", "Unknown MCP error")
-        else:
-            error_msg = str(error)
-        logger.error("Exa MCP error for query '%s': %s", query, error_msg)
-        return {"error": error_msg, "query": query}
-
-    logger.debug(
-        "Exa MCP full result keys: %s",
-        result.keys() if isinstance(result, dict) else type(result),
-    )
-
-    mcp_result = result.get("result", {})
-    logger.debug(
-        "Exa MCP mcp_result keys: %s",
-        mcp_result.keys() if isinstance(mcp_result, dict) else type(mcp_result),
-    )
-
+def _extract_text_content(mcp_result: dict, query: str) -> str:
+    """Extract text content from MCP result."""
     content = mcp_result.get("content", [])
     logger.debug(
         "Exa MCP content type: %s, length: %s",
@@ -260,7 +299,7 @@ def _extract_exa_results(result: dict, query: str) -> dict:
 
     if not (content and isinstance(content, list) and len(content) > 0):
         logger.warning("Exa MCP returned empty content for query '%s'", query)
-        return {"results": [], "query": query}
+        return ""
 
     first_content = content[0]
     first_content_keys = (
@@ -269,42 +308,12 @@ def _extract_exa_results(result: dict, query: str) -> dict:
     logger.debug("Exa MCP first content item: %s", first_content_keys)
 
     if isinstance(first_content, dict):
-        text_content = first_content.get("text", "")
-    else:
-        text_content = str(first_content)
+        return first_content.get("text", "")
+    return str(first_content)
 
-    preview = text_content[:MAX_ERROR_CHARS] if text_content else "empty"
-    logger.info("Exa MCP text_content preview: %s...", preview)
 
-    try:
-        search_data = json.loads(text_content) if text_content else {}
-    except json.JSONDecodeError:
-        logger.info(
-            ("Exa MCP returned text format, parsing structured text for query '%s'"),
-            query,
-        )
-        results = parse_exa_text_format(text_content)
-        if results:
-            logger.info(
-                "Exa MCP parsed %s results from text format",
-                len(results),
-            )
-            return {"results": results, "query": query}
-
-        logger.warning(
-            "Could not parse Exa text format, using as single result",
-        )
-        return {
-            "results": [
-                {
-                    "title": "Search Result",
-                    "url": "",
-                    "content": text_content,
-                },
-            ],
-            "query": query,
-        }
-
+def _handle_json_data(search_data: list | dict, query: str) -> dict:
+    """Handle parsed JSON search data."""
     if isinstance(search_data, list):
         results = search_data
     else:
@@ -316,6 +325,72 @@ def _extract_exa_results(result: dict, query: str) -> dict:
         len(results),
     )
     return {"results": results, "query": query}
+
+
+def _handle_text_format(text_content: str, query: str) -> dict:
+    """Handle text format search data."""
+    logger.info(
+        ("Exa MCP returned text format, parsing structured text for query '%s'"),
+        query,
+    )
+    results = parse_exa_text_format(text_content)
+    if results:
+        logger.info(
+            "Exa MCP parsed %s results from text format",
+            len(results),
+        )
+        return {"results": results, "query": query}
+
+    logger.warning(
+        "Could not parse Exa text format, using as single result",
+    )
+    return {
+        "results": [
+            {
+                "title": "Search Result",
+                "url": "",
+                "content": text_content,
+            },
+        ],
+        "query": query,
+    }
+
+
+def _extract_exa_results(result: dict, query: str) -> dict:
+    """Extract Exa results from the MCP JSON-RPC response."""
+    if "error" in result:
+        error = result.get("error")
+        error_msg = (
+            error.get("message", "Unknown MCP error")
+            if isinstance(error, dict)
+            else str(error)
+        )
+        logger.error("Exa MCP error for query '%s': %s", query, error_msg)
+        return {"error": error_msg, "query": query}
+
+    mcp_result = result.get("result", {})
+    if mcp_result.get("isError"):
+        error_msg = "Unknown MCP tool error"
+        content = mcp_result.get("content", [])
+        if content and isinstance(content, list) and len(content) > 0:
+            first_content = content[0]
+            if isinstance(first_content, dict):
+                error_msg = first_content.get("text", error_msg)
+        logger.error("Exa MCP tool error for query '%s': %s", query, error_msg)
+        return {"error": error_msg, "query": query}
+
+    text_content = _extract_text_content(mcp_result, query)
+    if not text_content:
+        return {"results": [], "query": query}
+
+    preview = text_content[:MAX_ERROR_CHARS]
+    logger.info("Exa MCP text_content preview: %s...", preview)
+
+    try:
+        search_data = json.loads(text_content)
+        return _handle_json_data(search_data, query)
+    except json.JSONDecodeError:
+        return _handle_text_format(text_content, query)
 
 
 async def _do_exa_request(
@@ -378,6 +453,7 @@ async def exa_search(
     query: str,
     exa_mcp_url: str = EXA_MCP_URL,
     max_results: int = 5,
+    tool: str = "web_search_exa",
 ) -> dict:
     """Execute a single Exa MCP web search query.
 
@@ -389,13 +465,15 @@ async def exa_search(
         query: Search query
         exa_mcp_url: The Exa MCP endpoint URL (default: https://mcp.exa.ai/mcp)
         max_results: Maximum results to return
+        tool: The Exa MCP tool to call (default: web_search_exa)
 
     """
     client = _get_exa_client()
-    payload = _build_exa_payload(query, max_results)
+    payload = _build_exa_payload(query, max_results, tool)
 
     logger.info(
-        "Exa MCP request for query '%s': max_results=%s",
+        "Exa MCP request (%s) for query '%s': max_results=%s",
+        tool,
         query,
         max_results,
     )

@@ -306,11 +306,9 @@ async def process_message(
         )
 
         tavily_api_keys = ensure_list(config.get("tavily_api_key"))
-        exa_mcp_url = config.get("exa_mcp_url", "")
         web_search_provider, web_search_available = resolve_web_search_provider(
             config,
             tavily_api_keys,
-            exa_mcp_url,
         )
         search_metadata = await resolve_search_metadata(
             SearchResolutionContext(
@@ -323,7 +321,6 @@ async def process_message(
                 config=config,
                 web_search_available=web_search_available,
                 web_search_provider=web_search_provider,
-                exa_mcp_url=exa_mcp_url,
                 actual_model=provider_settings.actual_model,
             ),
             is_googlelens_query_func=is_googlelens_query,
