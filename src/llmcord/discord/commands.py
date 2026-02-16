@@ -6,6 +6,7 @@ import discord
 from discord.app_commands import Choice
 
 from llmcord import config as config_module
+from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.globals import discord_bot
 from llmcord.services.database import get_bad_keys_db
@@ -42,7 +43,8 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
         return
     locked_model = get_channel_locked_model(channel_id)
     if locked_model:
-        await interaction.followup.send(
+        await call_with_embed_limits(
+            interaction.followup.send,
             embed=build_error_embed(
                 (
                     f"This channel is locked to model `{locked_model}`. "
@@ -169,7 +171,8 @@ async def reset_all_preferences_command(
     # Only allow the bot owner to use this command
     owner_user_id = 676735636656357396
     if interaction.user.id != owner_user_id:
-        await interaction.response.send_message(
+        await call_with_embed_limits(
+            interaction.response.send_message,
             embed=build_error_embed(
                 "This command can only be used by the bot owner.",
             ),

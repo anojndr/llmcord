@@ -10,6 +10,7 @@ from llmcord.discord.ui.constants import (
     SHOW_THOUGHT_PROCESS_ID,
     VIEW_RESPONSE_BETTER_ID,
 )
+from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.metadata import has_grounding_data
 from llmcord.discord.ui.sources_view import SourceButton, TavilySourceButton
 from llmcord.discord.ui.utils import (
@@ -46,7 +47,8 @@ class RetryButton(discord.ui.Button):
             self.user_id = response_data.request_user_id
 
         if not self.user_id or interaction.user.id != self.user_id:
-            await interaction.response.send_message(
+            await call_with_embed_limits(
+                interaction.response.send_message,
                 embed=build_error_embed("You can only retry your own message."),
                 ephemeral=True,
             )
@@ -60,7 +62,8 @@ class RetryButton(discord.ui.Button):
 
         retry_handler = get_retry_handler()
         if not retry_handler:
-            await interaction.followup.send(
+            await call_with_embed_limits(
+                interaction.followup.send,
                 embed=build_error_embed(
                     "Retry is unavailable right now. Please try again later.",
                 ),
@@ -76,7 +79,8 @@ class RetryButton(discord.ui.Button):
             or not response_data.request_message_id
             or not response_data.request_user_id
         ):
-            await interaction.followup.send(
+            await call_with_embed_limits(
+                interaction.followup.send,
                 embed=build_error_embed(
                     "Missing retry context for this message.",
                 ),
@@ -114,7 +118,8 @@ class ViewResponseBetterButton(discord.ui.Button):
             full_response = response_data.full_response
 
         if not full_response:
-            await interaction.followup.send(
+            await call_with_embed_limits(
+                interaction.followup.send,
                 embed=build_error_embed(
                     "Missing response content for this message.",
                 ),
@@ -134,9 +139,14 @@ class ViewResponseBetterButton(discord.ui.Button):
                 color=discord.Color.green(),
             )
             embed.set_footer(text="Powered by rentry.co")
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await call_with_embed_limits(
+                interaction.followup.send,
+                embed=embed,
+                ephemeral=True,
+            )
         else:
-            await interaction.followup.send(
+            await call_with_embed_limits(
+                interaction.followup.send,
                 embed=build_error_embed(
                     ("Failed to upload response to rentry.co. Please try again later."),
                 ),
@@ -167,7 +177,8 @@ class ShowThoughtProcessButton(discord.ui.Button):
             thought_process = response_data.thought_process
 
         if not thought_process:
-            await interaction.followup.send(
+            await call_with_embed_limits(
+                interaction.followup.send,
                 embed=build_error_embed(
                     "No thought process is available for this response.",
                 ),
@@ -186,10 +197,15 @@ class ShowThoughtProcessButton(discord.ui.Button):
                 color=discord.Color.green(),
             )
             embed.set_footer(text="Powered by rentry.co")
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await call_with_embed_limits(
+                interaction.followup.send,
+                embed=embed,
+                ephemeral=True,
+            )
             return
 
-        await interaction.followup.send(
+        await call_with_embed_limits(
+            interaction.followup.send,
             embed=build_error_embed(
                 "Failed to show thought process. Please try again later.",
             ),
@@ -220,7 +236,8 @@ class FailedUrlsButton(discord.ui.Button):
             failed_extractions = response_data.failed_extractions
 
         if not failed_extractions:
-            await interaction.followup.send(
+            await call_with_embed_limits(
+                interaction.followup.send,
                 embed=build_error_embed(
                     "No failed URLs are available for this response.",
                 ),
@@ -249,7 +266,11 @@ class FailedUrlsButton(discord.ui.Button):
             description=description,
             color=discord.Color.orange(),
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await call_with_embed_limits(
+            interaction.followup.send,
+            embed=embed,
+            ephemeral=True,
+        )
 
 
 class ResponseView(discord.ui.View):

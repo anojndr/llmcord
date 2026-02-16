@@ -9,6 +9,7 @@ import discord
 from discord.app_commands import Choice
 
 from llmcord import config as config_module
+from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,8 @@ async def _handle_model_switch(
 
     config_data = config_module.get_config()
     if model not in config_data["models"]:
-        await interaction.followup.send(
+        await call_with_embed_limits(
+            interaction.followup.send,
             embed=build_error_embed(
                 (f"Model `{model}` is not available. Please choose another model."),
             ),
@@ -95,7 +97,8 @@ async def _handle_model_switch(
         current_user_model = default_model
 
     if current_user_model is None:
-        await interaction.followup.send(
+        await call_with_embed_limits(
+            interaction.followup.send,
             embed=build_error_embed(
                 (
                     f"No valid {model_type_label} is configured. "

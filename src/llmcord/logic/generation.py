@@ -23,6 +23,7 @@ from llmcord.core.exceptions import (
 )
 from llmcord.core.models import MsgNode
 from llmcord.discord.ui import metadata as ui_metadata
+from llmcord.discord.ui.embed_limits import sanitize_embed_kwargs
 from llmcord.logic.discord_ui import (
     maybe_edit_stream_message,
     render_exhausted_response,
@@ -963,7 +964,13 @@ async def _run_generation_loop(
 
     async def reply_helper(**reply_kwargs: Any) -> None:  # noqa: ANN401
         reply_target = context.new_msg if not response_msgs else response_msgs[-1]
-        response_msg = await reply_target.reply(**reply_kwargs)
+        sanitized_reply_kwargs = cast(
+            "dict[str, Any]",
+            sanitize_embed_kwargs(reply_kwargs),
+        )
+        response_msg = await reply_target.reply(
+            **sanitized_reply_kwargs,
+        )
         response_msgs.append(response_msg)
 
         context.msg_nodes[response_msg.id] = MsgNode(parent_msg=context.new_msg)

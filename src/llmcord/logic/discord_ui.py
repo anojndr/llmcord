@@ -15,6 +15,7 @@ from llmcord.core.config import (
 )
 from llmcord.discord.ui import metadata as ui_metadata
 from llmcord.discord.ui import response_view, sources_view
+from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.logic.generation_types import (
     FallbackState,
     GenerationContext,
@@ -62,7 +63,11 @@ async def render_exhausted_response(
         state.embed.color = EMBED_COLOR_INCOMPLETE
 
     if state.response_msgs:
-        await state.response_msgs[-1].edit(embed=state.embed, view=None)
+        await call_with_embed_limits(
+            state.response_msgs[-1].edit,
+            embed=state.embed,
+            view=None,
+        )
     else:
         await reply_helper(embed=state.embed)
     return [error_text]
@@ -111,7 +116,8 @@ async def update_response_view(
             total_tokens=total_tokens,
         )
         state.embed.set_footer(text=footer_text)
-        await state.response_msgs[last_msg_index].edit(
+        await call_with_embed_limits(
+            state.response_msgs[last_msg_index].edit,
             embed=state.embed,
             view=response_view_instance,
         )
@@ -165,12 +171,20 @@ async def maybe_edit_stream_message(
     msg_index = len(response_contents) - 1
     if decision.start_next_msg:
         if msg_index < len(response_msgs):
-            await response_msgs[msg_index].edit(embed=embed, view=view)
+            await call_with_embed_limits(
+                response_msgs[msg_index].edit,
+                embed=embed,
+                view=view,
+            )
         else:
             await reply_helper(embed=embed, silent=True, view=view)
     else:
         await asyncio.sleep(EDIT_DELAY_SECONDS - time_delta)
-        await response_msgs[msg_index].edit(embed=embed, view=view)
+        await call_with_embed_limits(
+            response_msgs[msg_index].edit,
+            embed=embed,
+            view=view,
+        )
     state.last_edit_time = datetime.now(UTC).timestamp()
 
 

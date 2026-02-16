@@ -7,6 +7,7 @@ from llmcord.core.config import (
     PROCESSING_MESSAGE,
     get_config,
 )
+from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.response_view import LayoutView, TextDisplay
 
 
@@ -96,7 +97,8 @@ async def should_process_message(
             description=PROCESSING_MESSAGE,
             color=EMBED_COLOR_INCOMPLETE,
         )
-        processing_msg = await new_msg.reply(
+        processing_msg = await call_with_embed_limits(
+            new_msg.reply,
             embed=processing_embed,
             silent=True,
         )

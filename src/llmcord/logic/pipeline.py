@@ -19,6 +19,7 @@ from llmcord.core.config import (
     get_config,
 )
 from llmcord.core.models import MsgNode
+from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.response_view import (
     LayoutView,
     ResponseView,
@@ -67,7 +68,7 @@ async def _send_processing_error(
         description=description,
         color=EMBED_COLOR_INCOMPLETE,
     )
-    await processing_msg.edit(embed=embed)
+    await call_with_embed_limits(processing_msg.edit, embed=embed)
 
 
 def _is_system_prompt_disabled(
@@ -292,7 +293,7 @@ async def process_message(
                 description="❌ Could not process your message. Please try again.",
                 color=EMBED_COLOR_INCOMPLETE,
             )
-            await processing_msg.edit(embed=embed)
+            await call_with_embed_limits(processing_msg.edit, embed=embed)
             return
 
         system_prompt = config.get("system_prompt")
@@ -369,7 +370,8 @@ async def process_message(
                     view=None,
                 )
             else:
-                await processing_msg.edit(
+                await call_with_embed_limits(
+                    processing_msg.edit,
                     embed=build_error_embed(error_message),
                     view=None,
                 )

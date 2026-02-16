@@ -5,6 +5,11 @@ from typing import cast
 
 import discord
 
+from llmcord.discord.ui.embed_limits import (
+    EMBED_FIELD_VALUE_LIMIT,
+    enforce_embed_limits,
+)
+
 
 def _normalize_queries(value: object) -> list[str]:
     if isinstance(value, list):
@@ -150,7 +155,7 @@ def add_chunked_embed_field(
     embed: discord.Embed,
     items: list[str],
     base_name: str,
-    field_limit: int = 1024,
+    field_limit: int = EMBED_FIELD_VALUE_LIMIT,
 ) -> None:
     """Add items to embed fields, splitting into multiple fields if needed.
 
@@ -222,4 +227,4 @@ def build_grounding_sources_embed(metadata: object) -> discord.Embed:
             inline=False,
         )
 
-    return embed
+    return enforce_embed_limits(embed)

@@ -14,6 +14,7 @@ from llmcord.core.config import (
     get_or_create_httpx_client,
 )
 from llmcord.discord.ui.constants import HTTP_OK
+from llmcord.discord.ui.embed_limits import enforce_embed_limits
 from llmcord.services.database import get_bad_keys_db
 
 LOGGER = logging.getLogger(__name__)
@@ -41,10 +42,12 @@ def build_error_embed(
     title: str = "Something went wrong",
 ) -> discord.Embed:
     """Build a standardized error embed for user-facing failures."""
-    return discord.Embed(
-        title=title,
-        description=description,
-        color=EMBED_COLOR_INCOMPLETE,
+    return enforce_embed_limits(
+        discord.Embed(
+            title=title,
+            description=description,
+            color=EMBED_COLOR_INCOMPLETE,
+        ),
     )
 
 

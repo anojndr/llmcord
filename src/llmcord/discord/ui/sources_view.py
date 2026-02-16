@@ -9,6 +9,7 @@ from llmcord.discord.ui.constants import (
     TAVILY_SOURCES_ID,
     URL_MAX_LENGTH,
 )
+from llmcord.discord.ui.embed_limits import call_with_embed_limits, enforce_embed_limits
 from llmcord.discord.ui.metadata import (
     add_chunked_embed_field,
     build_grounding_sources_embed,
@@ -36,7 +37,8 @@ class SourceButton(discord.ui.Button):
             metadata = response_data.grounding_metadata
 
         if not metadata:
-            await interaction.response.send_message(
+            await call_with_embed_limits(
+                interaction.response.send_message,
                 embed=build_error_embed(
                     "No source information available for this message.",
                 ),
@@ -45,7 +47,11 @@ class SourceButton(discord.ui.Button):
             return
 
         embed = build_grounding_sources_embed(metadata)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await call_with_embed_limits(
+            interaction.response.send_message,
+            embed=embed,
+            ephemeral=True,
+        )
 
 
 class TavilySourcesView(discord.ui.View):
@@ -195,7 +201,7 @@ class TavilySourcesView(discord.ui.View):
         )
         embed.set_footer(text=footer_text)
 
-        return embed
+        return enforce_embed_limits(embed)
 
     @discord.ui.button(
         label="Previous",
@@ -211,7 +217,8 @@ class TavilySourcesView(discord.ui.View):
         """Show the previous page of sources."""
         self.current_page = max(0, self.current_page - 1)
         self.update_buttons()
-        await interaction.response.edit_message(
+        await call_with_embed_limits(
+            interaction.response.edit_message,
             embed=self.build_embed(),
             view=self,
         )
@@ -229,7 +236,8 @@ class TavilySourcesView(discord.ui.View):
         """Show the next page of sources."""
         self.current_page = min(self.total_pages - 1, self.current_page + 1)
         self.update_buttons()
-        await interaction.response.edit_message(
+        await call_with_embed_limits(
+            interaction.response.edit_message,
             embed=self.build_embed(),
             view=self,
         )
@@ -274,12 +282,14 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
                 # Convert to 0-indexed.
                 self.sources_view.current_page = page_num - 1
                 self.sources_view.update_buttons()
-                await interaction.response.edit_message(
+                await call_with_embed_limits(
+                    interaction.response.edit_message,
                     embed=self.sources_view.build_embed(),
                     view=self.sources_view,
                 )
             else:
-                await interaction.response.send_message(
+                await call_with_embed_limits(
+                    interaction.response.send_message,
                     embed=build_error_embed(
                         (
                             "Invalid page number. Please enter a number "
@@ -289,7 +299,8 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
                     ephemeral=True,
                 )
         except ValueError:
-            await interaction.response.send_message(
+            await call_with_embed_limits(
+                interaction.response.send_message,
                 embed=build_error_embed("Please enter a valid number."),
                 ephemeral=True,
             )
@@ -319,7 +330,8 @@ class TavilySourceButton(discord.ui.Button):
             search_metadata = response_data.tavily_metadata
 
         if not search_metadata:
-            await interaction.response.send_message(
+            await call_with_embed_limits(
+                interaction.response.send_message,
                 embed=build_error_embed(
                     "No web search sources available for this message.",
                 ),
@@ -329,7 +341,8 @@ class TavilySourceButton(discord.ui.Button):
 
         view = TavilySourcesView(search_metadata)
         embed = view.build_embed()
-        await interaction.response.send_message(
+        await call_with_embed_limits(
+            interaction.response.send_message,
             embed=embed,
             view=view,
             ephemeral=True,
@@ -361,7 +374,8 @@ class SourceView(discord.ui.View):
             metadata = response_data.grounding_metadata
 
         if not metadata:
-            await interaction.response.send_message(
+            await call_with_embed_limits(
+                interaction.response.send_message,
                 embed=build_error_embed(
                     "No source information available for this message.",
                 ),
@@ -370,4 +384,8 @@ class SourceView(discord.ui.View):
             return
 
         embed = build_grounding_sources_embed(metadata)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await call_with_embed_limits(
+            interaction.response.send_message,
+            embed=embed,
+            ephemeral=True,
+        )
