@@ -245,11 +245,13 @@ async def test_tiktok_query_adds_video_file_for_gemini(
     async def _fake_download_and_process_attachments(**kwargs: object):
         return [], [], []
 
-    async def _fake_maybe_download_tiktok_video(**kwargs: object):
-        return DownloadedTikTokVideo(
-            content=b"fake-mp4-bytes",
-            content_type="video/mp4",
-        )
+    async def _fake_maybe_download_tiktok_videos(**kwargs: object):
+        return [
+            DownloadedTikTokVideo(
+                content=b"fake-mp4-bytes",
+                content_type="video/mp4",
+            ),
+        ]
 
     async def _noop_set_parent_message(**kwargs: object) -> None:
         return None
@@ -259,8 +261,8 @@ async def test_tiktok_query_adds_video_file_for_gemini(
         _fake_download_and_process_attachments,
     )
     monkeypatch.setattr(
-        "llmcord.logic.messages.maybe_download_tiktok_video",
-        _fake_maybe_download_tiktok_video,
+        "llmcord.logic.messages.maybe_download_tiktok_videos",
+        _fake_maybe_download_tiktok_videos,
     )
     monkeypatch.setattr(
         "llmcord.logic.messages._set_parent_message",
@@ -334,7 +336,7 @@ async def test_tiktok_download_not_used_for_non_gemini(
         _fake_download_and_process_attachments,
     )
     monkeypatch.setattr(
-        "llmcord.logic.messages.maybe_download_tiktok_video",
+        "llmcord.logic.messages.maybe_download_tiktok_videos",
         _failing_tiktok_download,
     )
     monkeypatch.setattr(

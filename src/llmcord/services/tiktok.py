@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import re
@@ -47,11 +48,17 @@ class DownloadedTikTokVideo:
     content_type: str
 
 
-def _extract_first_tiktok_url(text: str) -> str | None:
-    match = _TIKTOK_URL_RE.search(text)
-    if not match:
-        return None
-    return match.group(0).rstrip('.,;:!?)"')
+def _extract_tiktok_urls(text: str) -> list[str]:
+    unique_urls: list[str] = []
+    seen_urls: set[str] = set()
+    for match in _TIKTOK_URL_RE.finditer(text):
+        candidate_url = match.group(0).rstrip('.,;:!?)"')
+        if candidate_url in seen_urls:
+            continue
+        seen_urls.add(candidate_url)
+        unique_urls.append(candidate_url)
+
+    return unique_urls
 
 
 def _decode_snaptik_payload(payload: str) -> str | None:
@@ -170,32 +177,58 @@ async def _download_video_payload(
     return DownloadedTikTokVideo(content=video_bytes, content_type=content_type)
 
 
+async def maybe_download_tiktok_videos(
+    *,
+    cleaned_content: str,
+    actual_model: str,
+    httpx_client: httpx.AsyncClient,
+) -> list[DownloadedTikTokVideo]:
+    """Download TikTok videos via Snaptik for Gemini requests when URLs are present."""
+    if not is_gemini_model(actual_model):
+        return []
+
+    tiktok_urls = _extract_tiktok_urls(cleaned_content)
+    if not tiktok_urls:
+        return []
+
+    async def _download_for_url(tiktok_url: str) -> DownloadedTikTokVideo | None:
+        try:
+            download_url = await _fetch_snaptik_download_url(
+                tiktok_url=tiktok_url,
+                httpx_client=httpx_client,
+            )
+            if not download_url:
+                return None
+
+            return await _download_video_payload(
+                download_url=download_url,
+                httpx_client=httpx_client,
+            )
+        except (httpx.HTTPError, ValueError):
+            logger.exception(
+                "Failed to download TikTok video for Gemini request: %s",
+                tiktok_url,
+            )
+            return None
+
+    downloaded_videos = await asyncio.gather(
+        *(_download_for_url(url) for url in tiktok_urls),
+    )
+    return [video for video in downloaded_videos if video is not None]
+
+
 async def maybe_download_tiktok_video(
     *,
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
 ) -> DownloadedTikTokVideo | None:
-    """Download TikTok video via Snaptik for Gemini requests when URL is present."""
-    if not is_gemini_model(actual_model):
+    """Download the first TikTok video for Gemini requests when a URL is present."""
+    downloaded_videos = await maybe_download_tiktok_videos(
+        cleaned_content=cleaned_content,
+        actual_model=actual_model,
+        httpx_client=httpx_client,
+    )
+    if not downloaded_videos:
         return None
-
-    tiktok_url = _extract_first_tiktok_url(cleaned_content)
-    if not tiktok_url:
-        return None
-
-    try:
-        download_url = await _fetch_snaptik_download_url(
-            tiktok_url=tiktok_url,
-            httpx_client=httpx_client,
-        )
-        if not download_url:
-            return None
-
-        return await _download_video_payload(
-            download_url=download_url,
-            httpx_client=httpx_client,
-        )
-    except (httpx.HTTPError, ValueError):
-        logger.exception("Failed to download TikTok video for Gemini request")
-        return None
+    return downloaded_videos[0]
