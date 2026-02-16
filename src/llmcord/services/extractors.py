@@ -761,13 +761,32 @@ def _build_youtube_transcript_api() -> YouTubeTranscriptApi:
     return YouTubeTranscriptApi()
 
 
+def _summarize_youtube_failure(exc: Exception) -> str:
+    lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
+    if not lines:
+        return exc.__class__.__name__
+
+    for index, line in enumerate(lines):
+        if "most likely caused by:" in line.lower() and index + 1 < len(lines):
+            return lines[index + 1].rstrip(".")
+
+    for line in lines:
+        if not line.lower().startswith(
+            "could not retrieve a transcript for the video",
+        ):
+            return line.rstrip(".")
+
+    return lines[0].rstrip(".")
+
+
 async def _extract_youtube_transcript_notegpt(
     video_id: str,
     httpx_client: httpx.AsyncClient,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str | None]:
     """Fetch YouTube transcript and metadata using NoteGPT."""
     title, channel = "Unknown Title", "Unknown Channel"
     transcript_text = "[Transcript not available]"
+    failure_reason: str | None = None
     try:
         anonymous_user_id = str(uuid4())
         response = await request_with_retries(
@@ -783,13 +802,15 @@ async def _extract_youtube_transcript_notegpt(
         )
         if response.status_code == httpx.codes.OK:
             data = response.json()
-            if data.get("code") == _NOTEGPT_SUCCESS_CODE:
+            response_code = data.get("code")
+            if response_code == _NOTEGPT_SUCCESS_CODE:
                 inner_data = data.get("data", {})
                 video_info = inner_data.get("videoInfo", {})
                 title = video_info.get("name", title)
                 channel = video_info.get("author", channel)
 
                 transcripts = inner_data.get("transcripts", {})
+                transcript_found = False
                 if transcripts:
                     # Try to find English first, otherwise use first available
                     langs = list(transcripts.keys())
@@ -808,19 +829,27 @@ async def _extract_youtube_transcript_notegpt(
                             transcript_text = " ".join(
                                 item["text"] for item in transcript_list
                             )
+                            transcript_found = True
+                if not transcript_found:
+                    failure_reason = "No transcript segments returned by NoteGPT"
+            else:
+                failure_reason = f"NoteGPT returned code {response_code}"
+        else:
+            failure_reason = f"NoteGPT HTTP {response.status_code}"
     except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-        logger.debug(
+        failure_reason = _summarize_youtube_failure(exc)
+        logger.info(
             "Failed to fetch YouTube transcript from NoteGPT for %s: %s",
             video_id,
-            exc,
+            failure_reason,
         )
-    return title, channel, transcript_text
+    return title, channel, transcript_text, failure_reason
 
 
 async def _extract_youtube_transcript_api(
     video_id: str,
     httpx_client: httpx.AsyncClient,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str | None]:
     """Fetch YouTube transcript and metadata using YouTubeTranscriptApi."""
     title, channel = "Unknown Title", "Unknown Channel"
     try:
@@ -863,6 +892,7 @@ async def _extract_youtube_transcript_api(
         logger.debug("Failed to fetch YouTube metadata for %s: %s", video_id, exc)
 
     transcript_text = "[Transcript not available]"
+    failure_reason: str | None = None
     try:
         ytt_api = _build_youtube_transcript_api()
         transcript_list = await asyncio.to_thread(ytt_api.list, video_id)
@@ -900,24 +930,41 @@ async def _extract_youtube_transcript_api(
         RuntimeError,
         ValueError,
     ) as exc:
-        logger.debug("Failed to fetch YouTube transcript for %s: %s", video_id, exc)
-    return title, channel, transcript_text
+        failure_reason = _summarize_youtube_failure(exc)
+        logger.info(
+            "Failed to fetch YouTube transcript for %s: %s",
+            video_id,
+            failure_reason,
+        )
+    if transcript_text == "[Transcript not available]" and failure_reason is None:
+        failure_reason = "No transcripts available for this video"
+    return title, channel, transcript_text, failure_reason
 
 
-async def extract_youtube_transcript(
+async def extract_youtube_transcript_with_reason(
     video_id: str,
     httpx_client: httpx.AsyncClient,
     *,
     method: str = "youtube-transcript-api",
-) -> str | None:
-    """Fetch YouTube transcript and metadata."""
+) -> tuple[str | None, str | None]:
+    """Fetch YouTube transcript and metadata with failure reason."""
     if method == "notegpt":
-        title, channel, transcript_text = await _extract_youtube_transcript_notegpt(
+        (
+            title,
+            channel,
+            transcript_text,
+            failure_reason,
+        ) = await _extract_youtube_transcript_notegpt(
             video_id,
             httpx_client,
         )
     else:
-        title, channel, transcript_text = await _extract_youtube_transcript_api(
+        (
+            title,
+            channel,
+            transcript_text,
+            failure_reason,
+        ) = await _extract_youtube_transcript_api(
             video_id,
             httpx_client,
         )
@@ -927,14 +974,35 @@ async def extract_youtube_transcript(
         and channel == "Unknown Channel"
         and transcript_text == "[Transcript not available]"
     ):
-        return None
+        return (
+            None,
+            failure_reason or "Unable to fetch metadata and transcript",
+        )
 
     return (
-        f"YouTube Video ID: {video_id}\n"
-        f"Title: {title}\n"
-        f"Channel: {channel}\n"
-        f"Transcript:\n{transcript_text}"
+        (
+            f"YouTube Video ID: {video_id}\n"
+            f"Title: {title}\n"
+            f"Channel: {channel}\n"
+            f"Transcript:\n{transcript_text}"
+        ),
+        failure_reason,
     )
+
+
+async def extract_youtube_transcript(
+    video_id: str,
+    httpx_client: httpx.AsyncClient,
+    *,
+    method: str = "youtube-transcript-api",
+) -> str | None:
+    """Fetch YouTube transcript and metadata."""
+    transcript, _failure_reason = await extract_youtube_transcript_with_reason(
+        video_id,
+        httpx_client,
+        method=method,
+    )
+    return transcript
 
 
 async def _resolve_reddit_share_url(

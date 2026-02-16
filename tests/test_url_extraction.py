@@ -164,8 +164,8 @@ async def test_youtube_url_extraction_appended(
     httpx_client: Any,
     msg_nodes: dict[int, object],
 ) -> None:
-    async def _fake_extract_youtube_transcript(*args: object, **kwargs: object) -> str:
-        return "Winner confirmed: Age 28"
+    async def _fake_extract_youtube_transcript(*args: object, **kwargs: object):
+        return "Winner confirmed: Age 28", None
 
     async def _fake_download_and_process_attachments(**kwargs: object):
         return [], [], []
@@ -174,7 +174,7 @@ async def test_youtube_url_extraction_appended(
         return None
 
     monkeypatch.setattr(
-        "llmcord.logic.content.extract_youtube_transcript",
+        "llmcord.logic.content.extract_youtube_transcript_with_reason",
         _fake_extract_youtube_transcript,
     )
     monkeypatch.setattr(
@@ -236,7 +236,7 @@ async def test_multiple_youtube_urls_extracted_concurrently(
         video_id: str,
         *args: object,
         **kwargs: object,
-    ) -> str:
+    ):
         nonlocal in_flight, max_in_flight
         async with lock:
             in_flight += 1
@@ -247,7 +247,7 @@ async def test_multiple_youtube_urls_extracted_concurrently(
         async with lock:
             in_flight -= 1
         completed_ids.append(video_id)
-        return f"Transcript for {video_id}"
+        return f"Transcript for {video_id}", None
 
     async def _fake_download_and_process_attachments(**kwargs: object):
         return [], [], []
@@ -256,7 +256,7 @@ async def test_multiple_youtube_urls_extracted_concurrently(
         return None
 
     monkeypatch.setattr(
-        "llmcord.logic.content.extract_youtube_transcript",
+        "llmcord.logic.content.extract_youtube_transcript_with_reason",
         _fake_extract_youtube_transcript,
     )
     monkeypatch.setattr(
@@ -306,6 +306,69 @@ async def test_multiple_youtube_urls_extracted_concurrently(
     assert set(completed_ids) == expected_ids
     assert len(completed_ids) == len(expected_ids)
     assert max_in_flight >= minimum_concurrency
+
+
+@pytest.mark.asyncio
+async def test_youtube_failure_reason_is_in_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    async def _fake_extract_youtube_transcript(*args: object, **kwargs: object):
+        return None, "Subtitles are disabled for this video"
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.content.extract_youtube_transcript_with_reason",
+        _fake_extract_youtube_transcript,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=6,
+        content="at ai summarize https://www.youtube.com/watch?v=aD-uI63jR8c",
+        author=FakeUser(1234),
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-4o",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    failed_warning = next(
+        warning
+        for warning in result.user_warnings
+        if warning.startswith("⚠️ Failed to extract from:")
+    )
+    assert "Subtitles are disabled for this video" in failed_warning
+    assert "https://www.youtube.com/watch?v=aD-uI63jR8c" in failed_warning
 
 
 @pytest.mark.asyncio

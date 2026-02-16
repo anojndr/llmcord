@@ -21,7 +21,7 @@ from llmcord.services.extractors import (
     extract_pdf_text,
     extract_reddit_post,
     extract_url_content,
-    extract_youtube_transcript,
+    extract_youtube_transcript_with_reason,
     fetch_tweet_with_replies,
     perform_google_lens_lookup,
     perform_yandex_lookup,
@@ -58,6 +58,19 @@ _REDDIT_URL_RE = re.compile(
     ),
 )
 _GENERIC_URL_RE = re.compile(r"https?://[^\s<>{}\[\]]+")
+
+
+def _format_youtube_failure(video_id: str, failure_reason: str | None) -> str:
+    youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+    if not failure_reason:
+        return youtube_url
+
+    normalized_reason = " ".join(failure_reason.split())
+    max_reason_len = 120
+    if len(normalized_reason) > max_reason_len:
+        normalized_reason = normalized_reason[: max_reason_len - 3] + "..."
+
+    return f"{youtube_url} ({normalized_reason})"
 
 
 def _extract_result_url(result_line: str) -> str | None:
@@ -146,7 +159,7 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
 
     results = await asyncio.gather(
         *[
-            extract_youtube_transcript(
+            extract_youtube_transcript_with_reason(
                 vid,
                 context.httpx_client,
                 method=context.youtube_transcript_method,
@@ -156,16 +169,19 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
     )
 
     extracted = []
-    for vid, res in zip(unique_video_ids, results, strict=False):
+    for vid, (res, failure_reason) in zip(unique_video_ids, results, strict=False):
         if res is not None:
             extracted.append(res)
             if "[Transcript not available]" in res:
                 context.curr_node.failed_extractions.append(
-                    f"https://www.youtube.com/watch?v={vid} (transcript unavailable)",
+                    _format_youtube_failure(
+                        vid,
+                        failure_reason or "transcript unavailable",
+                    ),
                 )
         else:
             context.curr_node.failed_extractions.append(
-                f"https://www.youtube.com/watch?v={vid}",
+                _format_youtube_failure(vid, failure_reason),
             )
     return extracted
 
