@@ -268,6 +268,7 @@ async def process_message(
                 max_tweet_replies=max_tweet_replies,
                 enable_youtube_transcripts=enable_youtube_transcripts,
                 youtube_transcript_method=youtube_transcript_method,
+                provider_slash_model=provider_settings.provider_slash_model,
             ),
         )
         messages = build_result.messages

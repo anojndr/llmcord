@@ -511,6 +511,11 @@ def _append_history_content(
     return in_thinking_block
 
 
+def _is_developer_instruction_error(error: Exception) -> bool:
+    error_str = str(error).lower()
+    return "developer instruction" in error_str and "not enabled" in error_str
+
+
 def _is_image_input_error(error: Exception) -> bool:
     error_str = str(error).lower()
     image_error_patterns = (
@@ -521,6 +526,16 @@ def _is_image_input_error(error: Exception) -> bool:
         "unsupported image",
     )
     return any(pattern in error_str for pattern in image_error_patterns)
+
+
+def _remove_system_messages(messages: list[dict[str, object]]) -> bool:
+    original_len = len(messages)
+    messages[:] = [
+        message
+        for message in messages
+        if str(message.get("role") or "").lower() != "system"
+    ]
+    return len(messages) != original_len
 
 
 def _remove_images_from_messages(messages: list[dict[str, object]]) -> bool:
@@ -643,9 +658,7 @@ def _handle_generation_exception(
         )
 
     error_str = str(error).lower()
-    is_developer_instruction_error = (
-        "developer instruction" in error_str and "not enabled" in error_str
-    )
+    is_developer_instruction_error = _is_developer_instruction_error(error)
     key_error_patterns = [
         "unauthorized",
         "invalid_api_key",
@@ -993,6 +1006,21 @@ async def _run_generation_loop(
             )
             break
         except GENERATION_EXCEPTIONS as exc:
+            if (
+                not loop_state.developer_instruction_removed
+                and _is_developer_instruction_error(cast("Exception", exc))
+                and _remove_system_messages(context.messages)
+            ):
+                loop_state.developer_instruction_removed = True
+                loop_state.last_error_msg = str(exc)
+                loop_state.attempt_count -= 1
+                logger.warning(
+                    "Retrying without system prompt after developer instruction "
+                    "provider error: %s",
+                    exc,
+                )
+                continue
+
             if (
                 not loop_state.image_input_removed
                 and _is_image_input_error(cast("Exception", exc))

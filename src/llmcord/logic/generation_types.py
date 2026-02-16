@@ -123,3 +123,4 @@ class GenerationLoopState:
     fallback_state: FallbackState
     fallback_chain: list[tuple[str, str, str]]
     image_input_removed: bool = False
+    developer_instruction_removed: bool = False

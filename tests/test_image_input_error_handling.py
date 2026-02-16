@@ -10,8 +10,10 @@ from llmcord.logic.discord_ui import _build_footer_text
 from llmcord.logic.generation import (
     GENERATION_EXCEPTIONS,
     _get_stream,
+    _is_developer_instruction_error,
     _is_image_input_error,
     _remove_images_from_messages,
+    _remove_system_messages,
 )
 from llmcord.logic.generation_types import (
     GenerationContext,
@@ -202,6 +204,35 @@ def test_detects_openrouter_image_input_error() -> None:
         error_message,
     )
     assert _is_image_input_error(error) is True
+
+
+def test_detects_developer_instruction_error() -> None:
+    error = Exception(
+        (
+            'OpenrouterException - {"error":{"message":"Provider returned '
+            'error","code":400,"metadata":{"raw":"{\\n  '
+            '\\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": '
+            '\\"Developer instruction is not enabled for models/gemma-3-4b-it\\",'
+            '\\n    \\"status\\": \\"INVALID_ARGUMENT\\"\\n  }\\n}\\n"}}}'
+        ),
+    )
+    assert _is_developer_instruction_error(error) is True
+
+
+def test_removes_system_messages_for_retry() -> None:
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+
+    removed = _remove_system_messages(messages)
+
+    assert removed is True
+    assert messages == [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
 
 
 def test_removes_images_from_message_content() -> None:

@@ -9,7 +9,11 @@ from typing import cast
 import discord
 import httpx
 
-from llmcord.core.config import EMBED_FIELD_NAME_LIMIT, is_gemini_model
+from llmcord.core.config import (
+    EMBED_FIELD_NAME_LIMIT,
+    VISION_MODEL_TAGS,
+    is_gemini_model,
+)
 from llmcord.core.models import MsgNode
 from llmcord.logic.content import (
     ExternalContentContext,
@@ -19,6 +23,7 @@ from llmcord.logic.content import (
     download_and_process_attachments,
     extract_pdf_images_for_model,
     get_allowed_attachment_types,
+    is_googlelens_query,
 )
 from llmcord.logic.utils import (
     TextDisplayComponentProtocol,
@@ -49,6 +54,7 @@ class MessageBuildContext:
     max_tweet_replies: int
     enable_youtube_transcripts: bool
     youtube_transcript_method: str
+    provider_slash_model: str | None = None
 
 
 @dataclass(slots=True)
@@ -132,6 +138,11 @@ async def _populate_node_if_needed(
             max_tweet_replies=context.max_tweet_replies,
         ),
     )
+    omit_image_inputs = _should_omit_googlelens_image_inputs(
+        curr_msg=curr_msg,
+        curr_node=curr_node,
+        context=context,
+    )
 
     allowed_types = get_allowed_attachment_types(context.actual_model)
     good_attachments = [
@@ -174,19 +185,15 @@ async def _populate_node_if_needed(
         processed_attachments=processed_attachments,
     )
 
-    curr_node.images = []
-    for att in processed_attachments:
-        if att["content_type"] and str(att["content_type"]).startswith("image"):
-            content = att["content"] if isinstance(att["content"], bytes) else b""
-            encoded = b64encode(content).decode("utf-8")
-            curr_node.images.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{att['content_type']!s};base64,{encoded}",
-                    },
-                },
-            )
+    curr_node.images, omitted_image_count = _extract_image_parts(
+        processed_attachments=processed_attachments,
+        omit_image_inputs=omit_image_inputs,
+    )
+    if omitted_image_count:
+        logger.info(
+            "Skipped %s image attachment(s) because Google Lens results were added",
+            omitted_image_count,
+        )
 
     curr_node.raw_attachments = [
         {"content_type": att["content_type"], "content": att["content"]}
@@ -247,6 +254,64 @@ async def _populate_node_if_needed(
         curr_node=curr_node,
         discord_bot=context.discord_bot,
     )
+
+
+def _should_omit_googlelens_image_inputs(
+    *,
+    curr_msg: discord.Message,
+    curr_node: MsgNode,
+    context: MessageBuildContext,
+) -> bool:
+    if not curr_node.lens_results:
+        return False
+    if not is_googlelens_query(curr_msg, context.discord_bot):
+        return False
+    return not _supports_provider_model_image_input(context=context)
+
+
+def _supports_provider_model_image_input(*, context: MessageBuildContext) -> bool:
+    if context.max_images <= 0:
+        return False
+
+    normalized_targets = {
+        context.actual_model.lower(),
+    }
+    if isinstance(context.provider_slash_model, str):
+        normalized_targets.add(context.provider_slash_model.lower())
+
+    return any(
+        tag in target for target in normalized_targets for tag in VISION_MODEL_TAGS
+    )
+
+
+def _extract_image_parts(
+    *,
+    processed_attachments: list[dict[str, bytes | str | None]],
+    omit_image_inputs: bool,
+) -> tuple[list[dict[str, object]], int]:
+    image_parts: list[dict[str, object]] = []
+    omitted_image_count = 0
+
+    for attachment in processed_attachments:
+        content_type = attachment["content_type"]
+        if not content_type or not str(content_type).startswith("image"):
+            continue
+        if omit_image_inputs:
+            omitted_image_count += 1
+            continue
+
+        content = (
+            attachment["content"] if isinstance(attachment["content"], bytes) else b""
+        )
+        encoded = b64encode(content).decode("utf-8")
+        image_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{content_type!s};base64,{encoded}"},
+            },
+        )
+
+    return image_parts, omitted_image_count
 
 
 def _build_content_payload(
