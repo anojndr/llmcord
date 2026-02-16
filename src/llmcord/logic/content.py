@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 
 _YOUTUBE_ID_RE = re.compile(
     r"(?:https?://)?(?:[a-zA-Z0-9-]+\.)?"
-    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|embed/|v/|shorts/|live/)|youtu\.be/)"
+    r"(?:youtube\.com/(?:watch\?[^#\s]*?v=|embed/|v/|shorts/|live/)|youtu\.be/)"
     r"([a-zA-Z0-9_-]{11})",
 )
 _TWEET_ID_RE = re.compile(

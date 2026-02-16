@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -219,6 +220,95 @@ async def test_youtube_url_extraction_appended(
 
 
 @pytest.mark.asyncio
+async def test_multiple_youtube_urls_extracted_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    expected_ids = {"AAAAAAAAAAA", "BBBBBBBBBBB", "CCCCCCCCCCC"}
+    minimum_concurrency = 2
+    completed_ids: list[str] = []
+    in_flight = 0
+    max_in_flight = 0
+    lock = asyncio.Lock()
+
+    async def _fake_extract_youtube_transcript(
+        video_id: str,
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        nonlocal in_flight, max_in_flight
+        async with lock:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+
+        await asyncio.sleep(0.02)
+
+        async with lock:
+            in_flight -= 1
+        completed_ids.append(video_id)
+        return f"Transcript for {video_id}"
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.content.extract_youtube_transcript",
+        _fake_extract_youtube_transcript,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=4,
+        content=(
+            "at ai summarize "
+            "https://www.youtube.com/watch?si=one&v=AAAAAAAAAAA&pp=x "
+            "https://youtu.be/BBBBBBBBBBB?t=5 "
+            "https://www.youtube.com/shorts/CCCCCCCCCCC?feature=share"
+        ),
+        author=FakeUser(1234),
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-4o",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    user_content = str(result.messages[0]["content"])
+    assert "Transcript for AAAAAAAAAAA" in user_content
+    assert "Transcript for BBBBBBBBBBB" in user_content
+    assert "Transcript for CCCCCCCCCCC" in user_content
+    assert set(completed_ids) == expected_ids
+    assert len(completed_ids) == len(expected_ids)
+    assert max_in_flight >= minimum_concurrency
+
+
+@pytest.mark.asyncio
 async def test_general_url_extraction_appended(
     monkeypatch: pytest.MonkeyPatch,
     httpx_client: Any,
@@ -256,7 +346,7 @@ async def test_general_url_extraction_appended(
 
     bot = _DummyBot()
     msg = FakeMessage(
-        id=4,
+        id=5,
         content="at ai summarize https://en.wikipedia.org/wiki/Elephant",
         author=FakeUser(1234),
     )
