@@ -37,6 +37,7 @@ class MessageResponsePayload:
     thought_process: str | None = None
     grounding_metadata: dict[str, Any] | list[Any] | None = None
     tavily_metadata: dict[str, Any] | None = None
+    failed_extractions: list[str] | None = None
 
 
 class MessageDataMixin(_Base):
@@ -65,9 +66,10 @@ class MessageDataMixin(_Base):
                 request_message_id TEXT,
                 request_user_id TEXT,
                 full_response TEXT,
-                    thought_process TEXT,
+                thought_process TEXT,
                 grounding_metadata TEXT,
                 tavily_metadata TEXT,
+                failed_extractions TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -96,6 +98,7 @@ class MessageDataMixin(_Base):
                 "thought_process": "TEXT",
                 "grounding_metadata": "TEXT",
                 "tavily_metadata": "TEXT",
+                "failed_extractions": "TEXT",
                 "created_at": "TIMESTAMP",
             }
 
@@ -110,6 +113,7 @@ class MessageDataMixin(_Base):
                         thought_process TEXT,
                         grounding_metadata TEXT,
                         tavily_metadata TEXT,
+                        failed_extractions TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
@@ -264,6 +268,7 @@ class MessageDataMixin(_Base):
         thought_process = payload.thought_process
         grounding_metadata = payload.grounding_metadata
         tavily_metadata = payload.tavily_metadata
+        failed_extractions = payload.failed_extractions
         cursor.execute(
             """INSERT INTO message_response_data (
                    message_id,
@@ -272,16 +277,18 @@ class MessageDataMixin(_Base):
                    full_response,
                    thought_process,
                    grounding_metadata,
-                   tavily_metadata
+                   tavily_metadata,
+                   failed_extractions
                )
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(message_id) DO UPDATE SET
                    request_message_id = COALESCE(?, request_message_id),
                    request_user_id = COALESCE(?, request_user_id),
                    full_response = COALESCE(?, full_response),
                    thought_process = COALESCE(?, thought_process),
                    grounding_metadata = COALESCE(?, grounding_metadata),
-                   tavily_metadata = COALESCE(?, tavily_metadata)""",
+                   tavily_metadata = COALESCE(?, tavily_metadata),
+                   failed_extractions = COALESCE(?, failed_extractions)""",
             (
                 str(message_id),
                 str(request_message_id),
@@ -290,12 +297,14 @@ class MessageDataMixin(_Base):
                 thought_process,
                 json.dumps(grounding_metadata) if grounding_metadata else None,
                 json.dumps(tavily_metadata) if tavily_metadata else None,
+                json.dumps(failed_extractions) if failed_extractions else None,
                 str(request_message_id),
                 str(request_user_id),
                 full_response,
                 thought_process,
                 json.dumps(grounding_metadata) if grounding_metadata else None,
                 json.dumps(tavily_metadata) if tavily_metadata else None,
+                json.dumps(failed_extractions) if failed_extractions else None,
             ),
         )
         conn.commit()
@@ -315,6 +324,7 @@ class MessageDataMixin(_Base):
         dict[str, Any] | None,
         str | None,
         str | None,
+        list[str] | None,
     ]:
         """Get response data for a Discord message."""
         conn = self._get_connection()
@@ -322,13 +332,13 @@ class MessageDataMixin(_Base):
         cursor.execute(
             "SELECT full_response, thought_process, grounding_metadata, "
             "tavily_metadata, "
-            "request_message_id, request_user_id "
+            "request_message_id, request_user_id, failed_extractions "
             "FROM message_response_data WHERE message_id = ?",
             (str(message_id),),
         )
         result = cursor.fetchone()
         if not result:
-            return None, None, None, None, None, None
+            return None, None, None, None, None, None, None
 
         full_response = result[0]
         thought_process = result[1]
@@ -336,9 +346,11 @@ class MessageDataMixin(_Base):
         tavily_metadata_raw = result[3]
         request_message_id = result[4]
         request_user_id = result[5]
+        failed_extractions_raw = result[6]
 
         grounding_metadata = None
         tavily_metadata = None
+        failed_extractions = None
 
         if grounding_metadata_raw:
             try:
@@ -358,6 +370,19 @@ class MessageDataMixin(_Base):
                     message_id,
                 )
 
+        if failed_extractions_raw:
+            try:
+                parsed_failed_extractions = json.loads(failed_extractions_raw)
+                if isinstance(parsed_failed_extractions, list):
+                    failed_extractions = [
+                        str(entry) for entry in parsed_failed_extractions
+                    ]
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode failed_extractions for message %s",
+                    message_id,
+                )
+
         return (
             full_response,
             thought_process,
@@ -365,4 +390,5 @@ class MessageDataMixin(_Base):
             tavily_metadata,
             request_message_id,
             request_user_id,
+            failed_extractions,
         )

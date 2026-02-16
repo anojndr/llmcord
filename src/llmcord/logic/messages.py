@@ -10,7 +10,6 @@ import discord
 import httpx
 
 from llmcord.core.config import (
-    EMBED_FIELD_NAME_LIMIT,
     VISION_MODEL_TAGS,
     is_gemini_model,
 )
@@ -63,6 +62,7 @@ class MessageBuildResult:
 
     messages: list[dict[str, object]]
     user_warnings: set[str]
+    failed_extractions: list[str]
 
 
 async def build_messages(
@@ -72,6 +72,7 @@ async def build_messages(
     """Build the list of messages for the LLM."""
     messages: list[dict[str, object]] = []
     user_warnings: set[str] = set()
+    failed_extractions: list[str] = []
     curr_msg: discord.Message | None = context.new_msg
 
     while curr_msg is not None and len(messages) < context.max_messages:
@@ -112,10 +113,15 @@ async def build_messages(
                 context=context,
                 messages_len=len(messages),
             )
+            failed_extractions.extend(curr_node.failed_extractions)
 
             curr_msg = curr_node.parent_msg
 
-    return MessageBuildResult(messages=messages, user_warnings=user_warnings)
+    return MessageBuildResult(
+        messages=messages,
+        user_warnings=user_warnings,
+        failed_extractions=list(dict.fromkeys(failed_extractions)),
+    )
 
 
 async def _populate_node_if_needed(
@@ -543,8 +549,7 @@ def _update_user_warnings(
         )
 
     if curr_node.failed_extractions:
-        failed_list = "\n- " + "\n- ".join(curr_node.failed_extractions)
-        warning = f"⚠️ Failed to extract from: {failed_list}"
-        if len(warning) > EMBED_FIELD_NAME_LIMIT:
-            warning = warning[: EMBED_FIELD_NAME_LIMIT - 3] + "..."
-        user_warnings.add(warning)
+        user_warnings.add(
+            '⚠️ failed to extract from some urls. click "failed urls" to see '
+            "which urls.",
+        )

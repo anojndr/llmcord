@@ -90,6 +90,11 @@ async def update_response_view(
         context.retry_callback,
         context.new_msg.author.id,
     )
+    failed_extractions = getattr(context, "failed_extractions", None)
+    if failed_extractions:
+        response_view_instance.add_item(
+            response_view.FailedUrlsButton(failed_extractions),
+        )
     if state.thought_process:
         response_view_instance.add_item(
             response_view.ShowThoughtProcessButton(state.thought_process),
@@ -153,6 +158,9 @@ async def maybe_edit_stream_message(
         retry_callback=context.retry_callback,
         user_id=context.new_msg.author.id,
     )
+    failed_extractions = getattr(context, "failed_extractions", None)
+    if failed_extractions:
+        view.add_item(response_view.FailedUrlsButton(failed_extractions))
 
     msg_index = len(response_contents) - 1
     if decision.start_next_msg:
@@ -176,6 +184,7 @@ async def render_plain_responses(  # noqa: PLR0913
     tavily_metadata: dict[str, object] | None,
 ) -> None:
     """Render multiple response parts as plain messages with layout views."""
+    failed_extractions = getattr(context, "failed_extractions", None)
     for i, content in enumerate(response_contents):
         layout = response_view.LayoutView().add_item(
             response_view.TextDisplay(content=content),
@@ -197,6 +206,10 @@ async def render_plain_responses(  # noqa: PLR0913
             ):
                 layout.add_item(
                     sources_view.TavilySourceButton(tavily_metadata),
+                )
+            if failed_extractions:
+                layout.add_item(
+                    response_view.FailedUrlsButton(failed_extractions),
                 )
 
         if i < len(response_msgs):

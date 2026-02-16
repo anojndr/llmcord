@@ -365,10 +365,15 @@ async def test_youtube_failure_reason_is_in_warning(
     failed_warning = next(
         warning
         for warning in result.user_warnings
-        if warning.startswith("⚠️ Failed to extract from:")
+        if warning.startswith("⚠️ failed to extract from some urls.")
     )
-    assert "Subtitles are disabled for this video" in failed_warning
-    assert "https://www.youtube.com/watch?v=aD-uI63jR8c" in failed_warning
+    assert (
+        failed_warning
+        == '⚠️ failed to extract from some urls. click "failed urls" to see which urls.'
+    )
+    assert result.failed_extractions
+    assert "Subtitles are disabled for this video" in result.failed_extractions[0]
+    assert "https://www.youtube.com/watch?v=aD-uI63jR8c" in result.failed_extractions[0]
 
 
 @pytest.mark.asyncio

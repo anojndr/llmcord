@@ -237,6 +237,7 @@ async def _persist_response_payload(
             thought_process=state.thought_process or None,
             grounding_metadata=grounding_payload,
             tavily_metadata=context.tavily_metadata,
+            failed_extractions=context.failed_extractions or None,
         )
         get_bad_keys_db().save_message_response_data(
             message_id=str(state.response_msgs[last_msg_index].id),

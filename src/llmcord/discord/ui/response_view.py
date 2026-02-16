@@ -6,6 +6,7 @@ import discord
 
 from llmcord.discord.ui.constants import (
     RETRY_RESPONSE_ID,
+    SHOW_FAILED_URLS_ID,
     SHOW_THOUGHT_PROCESS_ID,
     VIEW_RESPONSE_BETTER_ID,
 )
@@ -196,6 +197,61 @@ class ShowThoughtProcessButton(discord.ui.Button):
         )
 
 
+class FailedUrlsButton(discord.ui.Button):
+    """Button to reveal failed URL extractions."""
+
+    def __init__(self, failed_extractions: list[str] | None = None) -> None:
+        """Initialize button with optional failed extraction details."""
+        super().__init__(
+            label="failed urls",
+            style=discord.ButtonStyle.secondary,
+            emoji="⚠️",
+            custom_id=SHOW_FAILED_URLS_ID,
+        )
+        self.failed_extractions = failed_extractions
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Reveal failed URLs to the requesting user."""
+        await interaction.response.defer(ephemeral=True)
+
+        failed_extractions = self.failed_extractions
+        if failed_extractions is None and interaction.message:
+            response_data = get_response_data(interaction.message.id)
+            failed_extractions = response_data.failed_extractions
+
+        if not failed_extractions:
+            await interaction.followup.send(
+                embed=build_error_embed(
+                    "No failed URLs are available for this response.",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        lines = [f"- {url}" for url in failed_extractions]
+        max_description_length = 3800
+        description = ""
+        for index, line in enumerate(lines):
+            next_description = f"{description}\n{line}" if description else line
+            if len(next_description) <= max_description_length:
+                description = next_description
+                continue
+
+            remaining = len(lines) - index
+            if remaining > 0:
+                suffix = f"\n- ... and {remaining} more"
+                if len(description) + len(suffix) <= max_description_length:
+                    description += suffix
+            break
+
+        embed = discord.Embed(
+            title="Failed URLs",
+            description=description,
+            color=discord.Color.orange(),
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
 class ResponseView(discord.ui.View):
     """View with a button that uploads responses to rentry.co."""
 
@@ -243,6 +299,7 @@ class PersistentResponseView(discord.ui.View):
         self.add_item(RetryButton())
         self.add_item(SourceButton())
         self.add_item(TavilySourceButton())
+        self.add_item(FailedUrlsButton())
 
 
 class TextDisplay(discord.ui.Button):

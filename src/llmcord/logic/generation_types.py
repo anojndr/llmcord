@@ -17,6 +17,7 @@ class GenerationContext:
     msg_nodes: dict[int, MsgNode]
     messages: list[dict[str, object]]
     user_warnings: set[str]
+    failed_extractions: list[str]
     provider: str
     model: str
     actual_model: str

@@ -273,6 +273,7 @@ async def process_message(
         )
         messages = build_result.messages
         user_warnings = build_result.user_warnings
+        failed_extractions = build_result.failed_extractions
 
         logger.info(
             "Message received (user ID: %s, attachments: %s, "
@@ -333,6 +334,7 @@ async def process_message(
             msg_nodes=msg_nodes,
             messages=messages,
             user_warnings=user_warnings,
+            failed_extractions=failed_extractions,
             provider=provider_settings.provider,
             model=provider_settings.model,
             actual_model=provider_settings.actual_model,

@@ -58,6 +58,7 @@ class ResponseData:
     tavily_metadata: dict[str, object] | None
     request_message_id: int | None
     request_user_id: int | None
+    failed_extractions: list[str] | None
 
 
 def get_response_data(message_id: int) -> ResponseData:
@@ -70,6 +71,7 @@ def get_response_data(message_id: int) -> ResponseData:
         tavily_metadata,
         request_message_id,
         request_user_id,
+        failed_extractions,
     ) = db.get_message_response_data(str(message_id))
 
     return ResponseData(
@@ -83,6 +85,7 @@ def get_response_data(message_id: int) -> ResponseData:
         request_user_id=int(request_user_id)
         if request_user_id and str(request_user_id).isdigit()
         else None,
+        failed_extractions=failed_extractions,
     )
 
 
