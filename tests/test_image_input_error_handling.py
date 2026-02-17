@@ -263,7 +263,6 @@ def test_footer_includes_image_removed_warning() -> None:
         input_tokens=100,
         max_message_length=4096,
         embed=None,
-        use_plain_responses=False,
         grounding_metadata=None,
         last_edit_time=0.0,
         generated_images=[],

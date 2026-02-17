@@ -20,8 +20,6 @@ from llmcord.discord.error_handling import (
     send_message_processing_error,
 )
 
-EXPECTED_EDIT_CALLS = 2
-
 
 def _raise_runtime_error() -> None:
     raise RuntimeError
@@ -100,21 +98,12 @@ async def test_message_processing_error_helpers_write_expected_payloads() -> Non
     message = _FakeMessage()
 
     await send_message_processing_error(cast("discord.Message", message))
-    await edit_processing_message_error(
-        cast("discord.Message", message),
-        use_plain_responses=True,
-    )
-    await edit_processing_message_error(
-        cast("discord.Message", message),
-        use_plain_responses=False,
-    )
+    await edit_processing_message_error(cast("discord.Message", message))
 
     assert len(message.reply_calls) == 1
-    assert len(message.edit_calls) == EXPECTED_EDIT_CALLS
-    assert message.edit_calls[0]["embed"] is None
+    assert len(message.edit_calls) == 1
+    assert isinstance(message.edit_calls[0]["embed"], discord.Embed)
     assert message.edit_calls[0]["view"] is None
-    assert isinstance(message.edit_calls[1]["embed"], discord.Embed)
-    assert message.edit_calls[1]["view"] is None
 
 
 @pytest.mark.asyncio

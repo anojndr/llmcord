@@ -41,7 +41,6 @@ async def test_update_response_view_thought_button_visibility(
         input_tokens=0,
         max_message_length=4096,
         embed=discord.Embed(description="Visible answer"),
-        use_plain_responses=False,
         grounding_metadata=None,
         last_edit_time=0.0,
         generated_images=[],

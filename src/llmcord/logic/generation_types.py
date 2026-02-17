@@ -47,7 +47,6 @@ class GenerationState:
     input_tokens: int
     max_message_length: int
     embed: discord.Embed | None
-    use_plain_responses: bool
     grounding_metadata: object | None
     last_edit_time: float
     generated_images: list["GeneratedImage"]

@@ -13,8 +13,7 @@ from llmcord.core.config import (
     EMBED_COLOR_INCOMPLETE,
     STREAMING_INDICATOR,
 )
-from llmcord.discord.ui import metadata as ui_metadata
-from llmcord.discord.ui import response_view, sources_view
+from llmcord.discord.ui import response_view
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.logic.generation_types import (
     FallbackState,
@@ -81,11 +80,7 @@ async def update_response_view(
     grounding_metadata: object | None,
 ) -> None:
     """Update the response view with buttons and footer."""
-    if (
-        state.use_plain_responses
-        or not state.response_msgs
-        or not state.response_contents
-    ):
+    if not state.response_msgs or not state.response_contents:
         return
 
     response_view_instance = response_view.ResponseView(
@@ -186,47 +181,3 @@ async def maybe_edit_stream_message(
             view=view,
         )
     state.last_edit_time = datetime.now(UTC).timestamp()
-
-
-async def render_plain_responses(  # noqa: PLR0913
-    *,
-    context: GenerationContext,
-    response_contents: list[str],
-    response_msgs: list[discord.Message],
-    reply_helper: Callable[..., Awaitable[None]],
-    grounding_metadata: object | None,
-    tavily_metadata: dict[str, object] | None,
-) -> None:
-    """Render multiple response parts as plain messages with layout views."""
-    failed_extractions = getattr(context, "failed_extractions", None)
-    for i, content in enumerate(response_contents):
-        layout = response_view.LayoutView().add_item(
-            response_view.TextDisplay(content=content),
-        )
-
-        if i == len(response_contents) - 1:
-            layout.add_item(
-                response_view.RetryButton(
-                    context.retry_callback,
-                    context.new_msg.author.id,
-                ),
-            )
-            if ui_metadata.has_grounding_data(grounding_metadata):
-                layout.add_item(
-                    sources_view.SourceButton(grounding_metadata),
-                )
-            if tavily_metadata and (
-                tavily_metadata.get("urls") or tavily_metadata.get("queries")
-            ):
-                layout.add_item(
-                    sources_view.TavilySourceButton(tavily_metadata),
-                )
-            if failed_extractions:
-                layout.add_item(
-                    response_view.FailedUrlsButton(failed_extractions),
-                )
-
-        if i < len(response_msgs):
-            await response_msgs[i].edit(view=layout)
-        else:
-            await reply_helper(view=layout)

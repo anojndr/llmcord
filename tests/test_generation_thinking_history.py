@@ -44,14 +44,7 @@ async def test_thinking_chunks_hidden_but_preserved_in_history(
         yield "private-thought-2", None, None, [], True
         yield "done", "stop", None, [], False
 
-    async def _fake_render_plain_responses(**_kwargs: object) -> None:
-        return None
-
     monkeypatch.setattr("llmcord.logic.generation._get_stream", _fake_get_stream)
-    monkeypatch.setattr(
-        "llmcord.logic.generation.render_plain_responses",
-        _fake_render_plain_responses,
-    )
 
     async def _reply_helper(**_kwargs: object) -> None:
         return None
@@ -69,7 +62,6 @@ async def test_thinking_chunks_hidden_but_preserved_in_history(
         input_tokens=0,
         max_message_length=4096,
         embed=None,
-        use_plain_responses=True,
         grounding_metadata=None,
         last_edit_time=0.0,
         generated_images=[],

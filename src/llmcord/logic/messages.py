@@ -26,7 +26,6 @@ from llmcord.logic.content import (
     is_googlelens_query,
 )
 from llmcord.logic.utils import (
-    TextDisplayComponentProtocol,
     append_search_to_content,
     build_node_text_parts,
 )
@@ -375,7 +374,6 @@ def _build_initial_text(
     return build_node_text_parts(
         cleaned_content,
         curr_msg.embeds,
-        cast("list[TextDisplayComponentProtocol]", curr_msg.components),
         text_attachments=[
             str(att["text"])
             for att in processed_attachments
@@ -397,7 +395,6 @@ def _build_final_text(
     return build_node_text_parts(
         cleaned_content,
         curr_msg.embeds,
-        cast("list[TextDisplayComponentProtocol]", curr_msg.components),
         text_attachments=[
             str(resp.text)
             for att, resp in zip(

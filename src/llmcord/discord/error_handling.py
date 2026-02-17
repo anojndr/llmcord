@@ -85,19 +85,10 @@ async def send_message_processing_error(
 async def edit_processing_message_error(
     processing_msg: discord.Message,
     *,
-    use_plain_responses: bool,
     description: str = INTERNAL_ERROR_MESSAGE,
 ) -> None:
     """Update the processing placeholder message with a standardized error."""
     with suppress(Exception):
-        if use_plain_responses:
-            await call_with_embed_limits(
-                processing_msg.edit,
-                content=description,
-                embed=None,
-                view=None,
-            )
-            return
         await call_with_embed_limits(
             processing_msg.edit,
             embed=build_error_embed(description),

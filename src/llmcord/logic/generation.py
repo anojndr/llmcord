@@ -28,7 +28,6 @@ from llmcord.discord.ui.embed_limits import sanitize_embed_kwargs
 from llmcord.logic.discord_ui import (
     maybe_edit_stream_message,
     render_exhausted_response,
-    render_plain_responses,
     update_response_view,
 )
 from llmcord.logic.fallbacks import apply_fallback_config, get_next_fallback
@@ -128,27 +127,21 @@ async def _initialize_generation_state(
     await context.msg_nodes[processing_msg_id].lock.acquire()
 
     input_tokens = count_conversation_tokens(context.messages)
-    use_plain_responses = bool(context.config.get("use_plain_responses", False))
-
-    if use_plain_responses:
-        max_message_length = 4000
-        embed = None
-    else:
-        max_message_length = 4096 - len(STREAMING_INDICATOR)
-        embed = discord.Embed.from_dict(
-            {
-                "fields": [
-                    {"name": warning, "value": "", "inline": False}
-                    for warning in sorted(context.user_warnings)
-                ],
-            },
-        )
-        embed.set_footer(
-            text=_format_display_model(
-                context.provider,
-                context.actual_model,
-            ),
-        )
+    max_message_length = 4096 - len(STREAMING_INDICATOR)
+    embed = discord.Embed.from_dict(
+        {
+            "fields": [
+                {"name": warning, "value": "", "inline": False}
+                for warning in sorted(context.user_warnings)
+            ],
+        },
+    )
+    embed.set_footer(
+        text=_format_display_model(
+            context.provider,
+            context.actual_model,
+        ),
+    )
 
     display_model = _format_display_model(
         context.provider,
@@ -161,7 +154,6 @@ async def _initialize_generation_state(
         input_tokens=input_tokens,
         max_message_length=max_message_length,
         embed=embed,
-        use_plain_responses=use_plain_responses,
         grounding_metadata=None,
         last_edit_time=context.last_edit_time,
         generated_images=[],
@@ -175,9 +167,6 @@ async def _prune_response_messages(
     context: GenerationContext,
     state: GenerationState,
 ) -> None:
-    if state.use_plain_responses:
-        return
-
     if len(state.response_msgs) <= len(state.response_contents):
         return
 
@@ -880,7 +869,7 @@ async def _handle_exhausted_keys(
     return False
 
 
-async def _stream_response(  # noqa: C901
+async def _stream_response(
     *,
     context: GenerationContext,
     state: GenerationState,
@@ -889,7 +878,6 @@ async def _stream_response(  # noqa: C901
 ) -> None:
     response_contents = state.response_contents
     max_message_length = state.max_message_length
-    use_plain_responses = state.use_plain_responses
     grounding_metadata = state.grounding_metadata
     loop_state = StreamLoopState(curr_content=None, finish_reason=None)
     history_parts: list[str] = []
@@ -945,9 +933,6 @@ async def _stream_response(  # noqa: C901
             if decision is None:
                 continue
 
-            if use_plain_responses:
-                continue
-
             await maybe_edit_stream_message(
                 context=context,
                 state=state,
@@ -962,23 +947,6 @@ async def _stream_response(  # noqa: C901
 
     if not response_contents:
         _raise_empty_response()
-
-    if use_plain_responses:
-        rendered_contents = response_contents
-        if state.image_removal_warning and rendered_contents:
-            rendered_contents = rendered_contents.copy()
-            rendered_contents[-1] = (
-                f"{rendered_contents[-1]}\n\n{state.image_removal_warning}"
-            )
-
-        await render_plain_responses(
-            context=context,
-            response_contents=rendered_contents,
-            response_msgs=state.response_msgs,
-            reply_helper=reply_helper,
-            grounding_metadata=grounding_metadata,
-            tavily_metadata=context.tavily_metadata,
-        )
 
     state.grounding_metadata = grounding_metadata
 

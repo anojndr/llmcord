@@ -8,7 +8,6 @@ from llmcord.core.config import (
     get_config,
 )
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
-from llmcord.discord.ui.response_view import LayoutView, TextDisplay
 
 
 async def should_process_message(
@@ -86,21 +85,14 @@ async def should_process_message(
         return False, None
 
     # Send processing message immediately after confirming bot should respond
-    use_plain_responses = config.get("use_plain_responses", False)
-
-    if use_plain_responses:
-        processing_msg = await new_msg.reply(
-            view=LayoutView().add_item(TextDisplay(content=PROCESSING_MESSAGE)),
-        )
-    else:
-        processing_embed = discord.Embed(
-            description=PROCESSING_MESSAGE,
-            color=EMBED_COLOR_INCOMPLETE,
-        )
-        processing_msg = await call_with_embed_limits(
-            new_msg.reply,
-            embed=processing_embed,
-            silent=True,
-        )
+    processing_embed = discord.Embed(
+        description=PROCESSING_MESSAGE,
+        color=EMBED_COLOR_INCOMPLETE,
+    )
+    processing_msg = await call_with_embed_limits(
+        new_msg.reply,
+        embed=processing_embed,
+        silent=True,
+    )
 
     return True, processing_msg

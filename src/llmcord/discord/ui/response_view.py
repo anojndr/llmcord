@@ -357,26 +357,3 @@ class PersistentResponseView(discord.ui.View):
             logger=logger,
             context={"item_type": type(item).__name__},
         )
-
-
-class TextDisplay(discord.ui.Button):
-    """A button that displays text content (simulation)."""
-
-    def __init__(self, content: str) -> None:
-        """Initialize the text display button."""
-        super().__init__(
-            label=content[:80] if content else "...",
-            style=discord.ButtonStyle.secondary,
-            disabled=True,
-        )
-        self.content = content
-        if hasattr(discord.ComponentType, "text_display"):
-            self._underlying.type = discord.ComponentType.text_display  # type: ignore[attr-defined, misc, assignment]
-
-
-class LayoutView(discord.ui.View):
-    """View to hold text displays."""
-
-    def __init__(self) -> None:
-        """Initialize the layout view."""
-        super().__init__(timeout=None)

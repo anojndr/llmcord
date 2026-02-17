@@ -17,7 +17,6 @@ status_message:
 
 # Response behavior:
 
-use_plain_responses: false
 allow_dms: true
 
 # Message limits:

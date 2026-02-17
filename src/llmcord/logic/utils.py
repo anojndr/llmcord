@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from typing import Protocol, cast
+from typing import cast
 
 import discord
 import tiktoken
@@ -125,17 +125,9 @@ def _get_embed_text(embed: discord.Embed) -> str:
     return "\n".join(filter(None, parts))
 
 
-class TextDisplayComponentProtocol(Protocol):
-    """Protocol for text display components."""
-
-    type: discord.ComponentType
-    content: str | None
-
-
 def build_node_text_parts(
     cleaned_content: str,
     embeds: Iterable[discord.Embed],
-    components: Iterable[TextDisplayComponentProtocol],
     text_attachments: list[str] | None = None,
     extra_parts: list[str] | None = None,
 ) -> str:
@@ -146,7 +138,6 @@ def build_node_text_parts(
     Args:
         cleaned_content: The cleaned message content
         embeds: List of Discord embeds
-        components: List of Discord components
         text_attachments: Optional list of text attachment contents
         extra_parts: Optional list of additional text parts (transcripts,
             tweets, etc.)
@@ -165,13 +156,6 @@ def build_node_text_parts(
         embed_text = _get_embed_text(embed)
         if embed_text:
             parts.append(embed_text)
-
-    # Add text display components
-    parts.extend(
-        component.content
-        for component in components
-        if component.type == discord.ComponentType.text_display and component.content
-    )
 
     # Add text attachments
     if text_attachments:

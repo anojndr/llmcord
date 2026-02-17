@@ -11,7 +11,6 @@ import httpx
 
 from llmcord.core.config import (
     EMBED_COLOR_INCOMPLETE,
-    PROCESSING_MESSAGE,
     PROVIDERS_SUPPORTING_USERNAMES,
     VISION_MODEL_TAGS,
     ensure_list,
@@ -22,10 +21,7 @@ from llmcord.core.models import MsgNode
 from llmcord.discord.error_handling import edit_processing_message_error
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.response_view import (
-    LayoutView,
     ResponseView,
-    RetryButton,
-    TextDisplay,
 )
 from llmcord.logic.content import is_googlelens_query
 from llmcord.logic.generation import GenerationContext, generate_response
@@ -188,18 +184,13 @@ async def _setup_initial_view(
     processing_msg: discord.Message,
     new_msg: discord.Message,
     *,
-    use_plain_responses: bool,
     retry_callback: Callable[[], Awaitable[None]],
 ) -> None:
-    if use_plain_responses:
-        initial_view = LayoutView().add_item(TextDisplay(content=PROCESSING_MESSAGE))
-        initial_view.add_item(RetryButton(retry_callback, new_msg.author.id))
-    else:
-        initial_view = ResponseView(
-            full_response="",
-            retry_callback=retry_callback,
-            user_id=new_msg.author.id,
-        )
+    initial_view = ResponseView(
+        full_response="",
+        retry_callback=retry_callback,
+        user_id=new_msg.author.id,
+    )
     await processing_msg.edit(view=initial_view)
 
 
@@ -229,13 +220,10 @@ async def process_message(
     processing_msg = processing_msg_or_none
 
     config = get_config()
-    use_plain_responses = config.get("use_plain_responses", False)
-
     retry_callback = _make_retry_callback(new_msg, context)
     await _setup_initial_view(
         processing_msg,
         new_msg,
-        use_plain_responses=use_plain_responses,
         retry_callback=retry_callback,
     )
 
@@ -383,6 +371,5 @@ async def process_message(
         )
         await edit_processing_message_error(
             processing_msg,
-            use_plain_responses=use_plain_responses,
         )
         return
