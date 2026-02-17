@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_metadata
@@ -272,6 +273,36 @@ async def test_decider_google_gemini_cli_uses_native_stream(
 
     assert exhausted is False
     assert result == {"needs_search": False}
+
+
+@pytest.mark.asyncio
+async def test_decider_httpx_timeout_marks_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout_error = httpx.ReadTimeout("timed out")
+
+    async def _fake_get_decider_response_text(**_kwargs: object) -> str:
+        raise timeout_error
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._get_decider_response_text",
+        _fake_get_decider_response_text,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="google-gemini-cli",
+            model="gemini-3-flash-preview-minimal",
+            api_keys=["refresh-token"],
+            base_url="https://cloudcode-pa.googleapis.com",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert result is None
+    assert exhausted is True
 
 
 @pytest.mark.asyncio

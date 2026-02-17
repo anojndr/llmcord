@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import litellm
 import pytest
 
@@ -280,6 +281,10 @@ def test_footer_includes_image_removed_warning() -> None:
 
 def test_not_found_error_is_retryable_generation_exception() -> None:
     assert litellm.exceptions.NotFoundError in GENERATION_EXCEPTIONS
+
+
+def test_httpx_error_is_retryable_generation_exception() -> None:
+    assert httpx.HTTPError in GENERATION_EXCEPTIONS
 
 
 @pytest.mark.asyncio

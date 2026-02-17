@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from typing import Any, cast
 
 import discord
+import httpx
 import litellm
 
 from llmcord.core.config import (
@@ -74,6 +75,7 @@ for _exception_name in (
 GENERATION_EXCEPTIONS = (
     FirstTokenTimeoutError,
     asyncio.TimeoutError,
+    httpx.HTTPError,
     OSError,
     RuntimeError,
     ValueError,

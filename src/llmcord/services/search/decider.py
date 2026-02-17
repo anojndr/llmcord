@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import litellm
 
 from llmcord.core.config import get_config
@@ -186,6 +187,7 @@ async def _run_decider_once(
             RuntimeError,
             TypeError,
             ValueError,
+            httpx.HTTPError,
             litellm.exceptions.OpenAIError,
         ) as exc:
             log_exception(
