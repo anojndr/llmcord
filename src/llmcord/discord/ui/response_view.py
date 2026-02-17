@@ -1,9 +1,11 @@
 """Response related views and buttons."""
 
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 
 import discord
 
+from llmcord.discord.error_handling import handle_ui_callback_error
 from llmcord.discord.ui.constants import (
     RETRY_RESPONSE_ID,
     SHOW_FAILED_URLS_ID,
@@ -19,6 +21,8 @@ from llmcord.discord.ui.utils import (
     get_retry_handler,
     upload_to_rentry,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class RetryButton(discord.ui.Button):
@@ -308,6 +312,22 @@ class ResponseView(discord.ui.View):
         ):
             self.add_item(TavilySourceButton(tavily_metadata))
 
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[discord.ui.View],
+        /,
+    ) -> None:
+        """Handle uncaught response-view callback exceptions."""
+        await handle_ui_callback_error(
+            interaction=interaction,
+            error=error,
+            surface="response_view",
+            logger=logger,
+            context={"item_type": type(item).__name__},
+        )
+
 
 class PersistentResponseView(discord.ui.View):
     """Persistent view to handle response buttons after restarts."""
@@ -321,6 +341,22 @@ class PersistentResponseView(discord.ui.View):
         self.add_item(SourceButton())
         self.add_item(TavilySourceButton())
         self.add_item(FailedUrlsButton())
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[discord.ui.View],
+        /,
+    ) -> None:
+        """Handle uncaught persistent-view callback exceptions."""
+        await handle_ui_callback_error(
+            interaction=interaction,
+            error=error,
+            surface="persistent_response_view",
+            logger=logger,
+            context={"item_type": type(item).__name__},
+        )
 
 
 class TextDisplay(discord.ui.Button):

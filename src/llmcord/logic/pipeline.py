@@ -3,7 +3,6 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -18,7 +17,9 @@ from llmcord.core.config import (
     ensure_list,
     get_config,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.core.models import MsgNode
+from llmcord.discord.error_handling import edit_processing_message_error
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.response_view import (
     LayoutView,
@@ -26,7 +27,6 @@ from llmcord.discord.ui.response_view import (
     RetryButton,
     TextDisplay,
 )
-from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.content import is_googlelens_query
 from llmcord.logic.generation import GenerationContext, generate_response
 from llmcord.logic.messages import MessageBuildContext, build_messages
@@ -44,6 +44,20 @@ from llmcord.services.extractors import TwitterApiProtocol
 from llmcord.services.search import get_current_datetime_strings
 
 logger = logging.getLogger(__name__)
+
+PIPELINE_HANDLER_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    discord.DiscordException,
+    httpx.HTTPError,
+)
 
 
 @dataclass(slots=True)
@@ -356,23 +370,19 @@ async def process_message(
             fallback_chain=fallback_chain,
         )
         await generate_response(generation_context)
-    except Exception:
-        logger.exception("Error processing message")
-        with suppress(Exception):
-            error_message = (
-                "An internal error occurred while processing your request. "
-                "Please try again later."
-            )
-            if use_plain_responses:
-                await processing_msg.edit(
-                    content=error_message,
-                    embed=None,
-                    view=None,
-                )
-            else:
-                await call_with_embed_limits(
-                    processing_msg.edit,
-                    embed=build_error_embed(error_message),
-                    view=None,
-                )
+    except PIPELINE_HANDLER_EXCEPTIONS as exc:
+        log_exception(
+            logger=logger,
+            message="Error processing message",
+            error=exc,
+            context={
+                "message_id": new_msg.id,
+                "author_id": new_msg.author.id,
+                "channel_id": new_msg.channel.id,
+            },
+        )
+        await edit_processing_message_error(
+            processing_msg,
+            use_plain_responses=use_plain_responses,
+        )
         return

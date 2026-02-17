@@ -2,13 +2,15 @@
 
 import importlib
 import logging
-from contextlib import suppress
 from typing import TYPE_CHECKING, cast
 
 import discord
+import httpx
 
 from llmcord import config as config_module
 from llmcord import globals as app_globals
+from llmcord.core.error_handling import log_exception
+from llmcord.discord.error_handling import send_message_processing_error
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.pipeline import ProcessContext
@@ -19,6 +21,20 @@ if TYPE_CHECKING:
     from llmcord.services.extractors import TwitterApiProtocol
 
 logger = logging.getLogger(__name__)
+
+PROCESSING_HANDLER_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    ImportError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+    discord.DiscordException,
+    httpx.HTTPError,
+)
 
 
 async def _process_user_message(new_msg: discord.Message) -> None:
@@ -76,17 +92,18 @@ async def _process_user_message(new_msg: discord.Message) -> None:
             new_msg=new_msg,
             context=context,
         )
-    except Exception:
-        logger.exception("Error processing message")
-        # Try to notify the user about the error
-        with suppress(Exception):
-            await call_with_embed_limits(
-                new_msg.reply,
-                embed=build_error_embed(
-                    "An internal error occurred while processing your request. "
-                    "Please try again later.",
-                ),
-            )
+    except PROCESSING_HANDLER_EXCEPTIONS as exc:
+        log_exception(
+            logger=logger,
+            message="Error processing message",
+            error=exc,
+            context={
+                "message_id": new_msg.id,
+                "author_id": new_msg.author.id,
+                "channel_id": new_msg.channel.id,
+            },
+        )
+        await send_message_processing_error(new_msg)
 
 
 async def _handle_retry_request(

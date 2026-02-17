@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit, urlunsplit
 
 from llmcord.core.config import get_config, is_gemini_model
+from llmcord.core.error_handling import log_exception
 from llmcord.globals import reddit_client
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import (
@@ -406,8 +407,16 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
                 "Saved lens results for message %s",
                 context.curr_msg.id,
             )
-    except Exception:
-        logger.exception("Error fetching reverse image search results")
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        log_exception(
+            logger=logger,
+            message="Error fetching reverse image search results",
+            error=exc,
+            context={
+                "message_id": context.curr_msg.id,
+                "image_attachments": len(image_attachments),
+            },
+        )
 
     return cleaned_content
 

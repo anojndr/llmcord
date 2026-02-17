@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import httpx
 
 from llmcord.core.config import DEFAULT_USER_AGENT, is_gemini_model
+from llmcord.core.error_handling import log_exception
 
 logger = logging.getLogger(__name__)
 
@@ -204,10 +205,12 @@ async def maybe_download_tiktok_videos(
                 download_url=download_url,
                 httpx_client=httpx_client,
             )
-        except (httpx.HTTPError, ValueError):
-            logger.exception(
-                "Failed to download TikTok video for Gemini request: %s",
-                tiktok_url,
+        except (httpx.HTTPError, ValueError) as exc:
+            log_exception(
+                logger=logger,
+                message="Failed to download TikTok video for Gemini request",
+                error=exc,
+                context={"tiktok_url": tiktok_url},
             )
             return None
 

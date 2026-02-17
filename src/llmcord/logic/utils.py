@@ -11,6 +11,8 @@ import discord
 import tiktoken
 from twscrape import xclid
 
+from llmcord.core.error_handling import log_exception
+
 try:
     import pymupdf.layout as pymupdf_layout  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - optional dependency
@@ -70,8 +72,12 @@ setattr(  # noqa: B010
 _tiktoken_encoding: tiktoken.Encoding | None
 try:
     _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
-except (KeyError, RuntimeError, ValueError):
-    logger.exception("Failed to load tiktoken encoding.")
+except (KeyError, RuntimeError, ValueError) as exc:
+    log_exception(
+        logger=logger,
+        message="Failed to load tiktoken encoding",
+        error=exc,
+    )
     _tiktoken_encoding = None
 
 

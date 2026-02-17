@@ -32,6 +32,7 @@ from llmcord.core.config import (
     BROWSER_HEADERS,
     FALLBACK_USER_AGENT,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.logic.utils import _ensure_pymupdf_layout_activated
 from llmcord.services.http import RetryOptions, request_with_retries
 
@@ -379,8 +380,13 @@ async def process_attachments(
                     img.save(output, format="PNG")
                     content = output.getvalue()
                     content_type = "image/png"
-            except OSError:
-                logger.exception("Error converting GIF to PNG")
+            except OSError as exc:
+                log_exception(
+                    logger=logger,
+                    message="Error converting GIF to PNG",
+                    error=exc,
+                    context={"filename": att.filename},
+                )
 
         text_content = None
         if content_type and content_type.startswith("text"):

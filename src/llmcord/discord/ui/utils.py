@@ -13,6 +13,7 @@ from llmcord.core.config import (
     HttpxClientOptions,
     get_or_create_httpx_client,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.discord.ui.constants import HTTP_OK
 from llmcord.discord.ui.embed_limits import enforce_embed_limits
 from llmcord.services.database import get_bad_keys_db
@@ -184,7 +185,11 @@ async def upload_to_rentry(text: str) -> str | None:
         result = await _perform_rentry_upload(client, text)
         if result:
             return result
-    except (httpx.HTTPError, httpx.RequestError):
-        LOGGER.exception("Upload to rentry.co failed")
+    except (httpx.HTTPError, httpx.RequestError) as exc:
+        log_exception(
+            logger=LOGGER,
+            message="Upload to rentry.co failed",
+            error=exc,
+        )
 
     return None

@@ -3,7 +3,10 @@
 import logging
 
 import discord
+from discord import app_commands
 
+from llmcord.core.error_handling import log_discord_event_error
+from llmcord.discord.error_handling import handle_app_command_error
 from llmcord.discord.processing import (
     _handle_retry_request,
     _process_user_message,
@@ -60,3 +63,23 @@ async def on_ready() -> None:
 async def on_message(new_msg: discord.Message) -> None:
     """Handle inbound Discord messages."""
     await _process_user_message(new_msg)
+
+
+@discord_bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+) -> None:
+    """Handle uncaught slash-command exceptions in one place."""
+    await handle_app_command_error(interaction, error, logger=logger)
+
+
+@discord_bot.event
+async def on_error(event_method: str, *args: object, **kwargs: object) -> None:
+    """Handle uncaught Discord event exceptions in one place."""
+    log_discord_event_error(
+        logger=logger,
+        event_name=event_method,
+        args=args,
+        kwargs=kwargs,
+    )

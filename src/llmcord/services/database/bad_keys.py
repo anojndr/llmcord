@@ -242,16 +242,16 @@ class KeyRotator:
             try:
                 result = await my_api_call(key)
                 break  # Success, exit the loop
-            except Exception as e:
-                rotator.mark_current_bad(str(e))
+            except (OSError, RuntimeError, ValueError) as exc:
+                rotator.mark_current_bad(str(exc))
 
         # Or for sync operations:
         for key in rotator.get_keys():
             try:
                 result = my_api_call(key)
                 break  # Success
-            except Exception as e:
-                rotator.mark_current_bad(str(e))
+            except (OSError, RuntimeError, ValueError) as exc:
+                rotator.mark_current_bad(str(exc))
     """
 
     def __init__(

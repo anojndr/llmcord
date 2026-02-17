@@ -14,6 +14,7 @@ from llmcord.core.config import (
     HttpxClientOptions,
     get_or_create_httpx_client,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.http import request_with_retries
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
@@ -129,11 +130,15 @@ async def tavily_search(
             )
             return {"results": [], "query": query}
     except httpx.HTTPStatusError as exc:
-        logger.exception(
-            "Tavily HTTP error for query '%s': %s - %s",
-            query,
-            exc.response.status_code,
-            exc.response.text[:MAX_ERROR_CHARS],
+        log_exception(
+            logger=logger,
+            message="Tavily HTTP error",
+            error=exc,
+            context={
+                "query": query,
+                "status_code": exc.response.status_code,
+                "response_preview": exc.response.text[:MAX_ERROR_CHARS],
+            },
         )
         error_text = exc.response.text[:200]
         return {
@@ -141,13 +146,35 @@ async def tavily_search(
             "query": query,
         }
     except httpx.TimeoutException as exc:
-        logger.exception("Tavily timeout for query '%s'", query)
+        log_exception(
+            logger=logger,
+            message="Tavily timeout",
+            error=exc,
+            context={"query": query},
+        )
         return {"error": f"Timeout: {exc}", "query": query}
     except httpx.RequestError as exc:
-        logger.exception("Tavily connection error for query '%s'", query)
+        log_exception(
+            logger=logger,
+            message="Tavily connection error",
+            error=exc,
+            context={"query": query},
+        )
         return {"error": f"Connection error: {exc}", "query": query}
-    except Exception as exc:
-        logger.exception("Tavily search error for query '%s'", query)
+    except (
+        httpx.HTTPError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        log_exception(
+            logger=logger,
+            message="Tavily search error",
+            error=exc,
+            context={"query": query},
+        )
         return {"error": str(exc), "query": query}
     else:
         return result
@@ -190,13 +217,35 @@ async def tavily_research_create(
             log_context="Tavily research create",
         )
     except httpx.TimeoutException as exc:
-        logger.exception("Tavily research create timeout")
+        log_exception(
+            logger=logger,
+            message="Tavily research create timeout",
+            error=exc,
+            context={"model": model},
+        )
         return {"error": f"Timeout: {exc}"}
     except httpx.RequestError as exc:
-        logger.exception("Tavily research create connection error")
+        log_exception(
+            logger=logger,
+            message="Tavily research create connection error",
+            error=exc,
+            context={"model": model},
+        )
         return {"error": f"Connection error: {exc}"}
-    except Exception as exc:
-        logger.exception("Tavily research create error")
+    except (
+        httpx.HTTPError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        log_exception(
+            logger=logger,
+            message="Tavily research create error",
+            error=exc,
+            context={"model": model},
+        )
         return {"error": str(exc)}
     else:
         if response.status_code in (200, 201):
@@ -243,13 +292,35 @@ async def tavily_research_get(
             log_context=f"Tavily research get '{request_id}'",
         )
     except httpx.TimeoutException as exc:
-        logger.exception("Tavily research get timeout")
+        log_exception(
+            logger=logger,
+            message="Tavily research get timeout",
+            error=exc,
+            context={"request_id": request_id},
+        )
         return {"error": f"Timeout: {exc}"}
     except httpx.RequestError as exc:
-        logger.exception("Tavily research get connection error")
+        log_exception(
+            logger=logger,
+            message="Tavily research get connection error",
+            error=exc,
+            context={"request_id": request_id},
+        )
         return {"error": f"Connection error: {exc}"}
-    except Exception as exc:
-        logger.exception("Tavily research get error")
+    except (
+        httpx.HTTPError,
+        ImportError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        log_exception(
+            logger=logger,
+            message="Tavily research get error",
+            error=exc,
+            context={"request_id": request_id},
+        )
         return {"error": str(exc)}
     else:
         if response.status_code in (200, 202):

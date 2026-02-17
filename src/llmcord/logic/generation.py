@@ -15,6 +15,7 @@ from llmcord.core.config import (
     STREAMING_INDICATOR,
     is_gemini_model,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.core.exceptions import (
     FIRST_TOKEN_TIMEOUT_SECONDS,
     LITELLM_TIMEOUT_SECONDS,
@@ -84,8 +85,13 @@ GENERATION_EXCEPTIONS = (
 def _get_good_keys(provider: str, api_keys: list[str]) -> list[str]:
     try:
         return get_bad_keys_db().get_good_keys_synced(provider, api_keys)
-    except (OSError, RuntimeError, ValueError):
-        logger.exception("Failed to get good keys, falling back to all keys")
+    except (OSError, RuntimeError, ValueError) as exc:
+        log_exception(
+            logger=logger,
+            message="Failed to get good keys, falling back to all keys",
+            error=exc,
+            context={"provider": provider, "configured_keys": len(api_keys)},
+        )
         return api_keys.copy()
 
 
@@ -96,8 +102,13 @@ def _reset_provider_keys(provider: str, api_keys: list[str]) -> list[str]:
     )
     try:
         get_bad_keys_db().reset_provider_keys_synced(provider)
-    except (OSError, RuntimeError, ValueError):
-        logger.exception("Failed to reset provider keys")
+    except (OSError, RuntimeError, ValueError) as exc:
+        log_exception(
+            logger=logger,
+            message="Failed to reset provider keys",
+            error=exc,
+            context={"provider": provider, "configured_keys": len(api_keys)},
+        )
     return api_keys.copy()
 
 
@@ -244,8 +255,16 @@ async def _persist_response_payload(
             message_id=str(state.response_msgs[last_msg_index].id),
             payload=payload,
         )
-    except (OSError, RuntimeError, ValueError):
-        logger.exception("Failed to persist response data")
+    except (OSError, RuntimeError, ValueError) as exc:
+        log_exception(
+            logger=logger,
+            message="Failed to persist response data",
+            error=exc,
+            context={
+                "request_message_id": context.new_msg.id,
+                "response_message_id": state.response_msgs[last_msg_index].id,
+            },
+        )
 
 
 async def _trim_message_nodes(context: GenerationContext) -> None:
@@ -640,7 +659,12 @@ def _handle_generation_exception(
     good_keys: list[str],
 ) -> tuple[list[str], str]:
     last_error_msg = str(error)
-    logger.exception("Error while generating response")
+    log_exception(
+        logger=logger,
+        message="Error while generating response",
+        error=error,
+        context={"provider": provider},
+    )
 
     is_first_token_timeout = isinstance(error, FirstTokenTimeoutError)
     is_timeout_error = isinstance(error, asyncio.TimeoutError) or (
@@ -729,8 +753,13 @@ def _handle_key_rotation_error(
                 current_api_key,
                 error_msg,
             )
-        except Exception:
-            logger.exception("Failed to mark key as bad")
+        except (OSError, RuntimeError, ValueError) as exc:
+            log_exception(
+                logger=logger,
+                message="Failed to mark key as bad",
+                error=exc,
+                context={"provider": provider},
+            )
 
         _remove_key(good_keys, current_api_key)
         logger.info(

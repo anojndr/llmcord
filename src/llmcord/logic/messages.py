@@ -13,6 +13,7 @@ from llmcord.core.config import (
     VISION_MODEL_TAGS,
     is_gemini_model,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.core.models import MsgNode
 from llmcord.logic.content import (
     ExternalContentContext,
@@ -475,8 +476,13 @@ async def _set_parent_message(
                 curr_msg.reference.cached_message
                 or await curr_msg.channel.fetch_message(parent_msg_id)
             )
-    except (discord.NotFound, discord.HTTPException):
-        logger.exception("Error fetching next message in the chain")
+    except (discord.NotFound, discord.HTTPException) as exc:
+        log_exception(
+            logger=logger,
+            message="Error fetching next message in the chain",
+            error=exc,
+            context={"message_id": curr_msg.id},
+        )
         curr_node.fetch_parent_failed = True
 
 

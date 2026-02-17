@@ -9,6 +9,7 @@ from llmcord.core.config import (
     HttpxClientOptions,
     get_or_create_httpx_client,
 )
+from llmcord.core.error_handling import log_exception
 from llmcord.services.http import DEFAULT_RETRYABLE_STATUSES, wait_before_retry
 from llmcord.services.search.config import EXA_MCP_URL, HTTP_OK, MAX_ERROR_CHARS
 
@@ -230,9 +231,14 @@ async def _parse_sse_response(response: httpx.Response, query: str) -> dict:
     try:
         return json.loads(full_response)
     except json.JSONDecodeError as exc:
-        logger.exception(
-            "Exa MCP SSE JSON parse error. Data: %s",
-            full_response[:MAX_ERROR_CHARS],
+        log_exception(
+            logger=logger,
+            message="Exa MCP SSE JSON parse error",
+            error=exc,
+            context={
+                "query": query,
+                "data_preview": full_response[:MAX_ERROR_CHARS],
+            },
         )
         return {"error": f"JSON parse error: {exc}", "query": query}
 
@@ -252,9 +258,14 @@ async def _parse_json_response(response: httpx.Response, query: str) -> dict:
     try:
         return json.loads(response_text)
     except json.JSONDecodeError as exc:
-        logger.exception(
-            "Exa MCP JSON parse error. Response: %s",
-            response_text[:MAX_ERROR_CHARS],
+        log_exception(
+            logger=logger,
+            message="Exa MCP JSON parse error",
+            error=exc,
+            context={
+                "query": query,
+                "response_preview": response_text[:MAX_ERROR_CHARS],
+            },
         )
         return {"error": f"JSON parse error: {exc}", "query": query}
 
@@ -487,10 +498,20 @@ async def exa_search(
             query,
         )
     except (httpx.TimeoutException, httpx.RequestError) as exc:
-        logger.exception("Exa MCP search error (direct) for query '%s'", query)
+        log_exception(
+            logger=logger,
+            message="Exa MCP search error (direct)",
+            error=exc,
+            context={"query": query, "tool": tool},
+        )
         return {"error": f"{type(exc).__name__}: {exc}", "query": query}
-    except Exception as exc:
-        logger.exception("Exa MCP search error for query '%s'", query)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        log_exception(
+            logger=logger,
+            message="Exa MCP search error",
+            error=exc,
+            context={"query": query, "tool": tool},
+        )
         return {"error": str(exc), "query": query}
 
     return result or {"error": "Retry attempts exhausted", "query": query}

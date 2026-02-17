@@ -11,6 +11,7 @@ import litellm
 
 from llmcord.core.config import ensure_list, get_config
 from llmcord.core.config.utils import is_gemini_model
+from llmcord.core.error_handling import log_exception
 from llmcord.services.database import KeyRotator, get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
@@ -171,8 +172,23 @@ async def _run_decider_once(
                     break
                 exhausted_keys = False
                 break
-        except Exception as exc:
-            logger.exception("Error in web search decider")
+        except (
+            TimeoutError,
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+            litellm.exceptions.OpenAIError,
+        ) as exc:
+            log_exception(
+                logger=logger,
+                message="Error in web search decider",
+                error=exc,
+                context={
+                    "provider": run_config.provider,
+                    "model": run_config.model,
+                },
+            )
             rotator.mark_current_bad(str(exc))
             continue
 

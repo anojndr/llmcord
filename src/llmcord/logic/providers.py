@@ -74,7 +74,7 @@ async def resolve_provider_settings(
 
     parsed_provider = parse_provider_slash_model(provider_slash_model)
     if parsed_provider is None:
-        logger.exception(
+        logger.error(
             "Invalid model format: %s. Expected 'provider/model'.",
             provider_slash_model,
         )

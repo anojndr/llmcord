@@ -1,9 +1,11 @@
 """Source related views and buttons."""
 
+import logging
 from collections.abc import Mapping
 
 import discord
 
+from llmcord.discord.error_handling import handle_ui_callback_error
 from llmcord.discord.ui.constants import (
     GROUNDING_SOURCES_ID,
     TAVILY_SOURCES_ID,
@@ -15,6 +17,8 @@ from llmcord.discord.ui.metadata import (
     build_grounding_sources_embed,
 )
 from llmcord.discord.ui.utils import build_error_embed, get_response_data
+
+logger = logging.getLogger(__name__)
 
 
 class SourceButton(discord.ui.Button):
@@ -256,6 +260,22 @@ class TavilySourcesView(discord.ui.View):
         modal = GoToPageModal(self)
         await interaction.response.send_modal(modal)
 
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[discord.ui.View],
+        /,
+    ) -> None:
+        """Handle uncaught sources-view callback exceptions."""
+        await handle_ui_callback_error(
+            interaction=interaction,
+            error=error,
+            surface="tavily_sources_view",
+            logger=logger,
+            context={"item_type": type(item).__name__},
+        )
+
 
 class GoToPageModal(discord.ui.Modal, title="Go to Page"):
     """Modal for entering a specific page number."""
@@ -304,6 +324,20 @@ class GoToPageModal(discord.ui.Modal, title="Go to Page"):
                 embed=build_error_embed("Please enter a valid number."),
                 ephemeral=True,
             )
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        /,
+    ) -> None:
+        """Handle uncaught modal submission exceptions."""
+        await handle_ui_callback_error(
+            interaction=interaction,
+            error=error,
+            surface="go_to_page_modal",
+            logger=logger,
+        )
 
 
 class TavilySourceButton(discord.ui.Button):
@@ -388,4 +422,20 @@ class SourceView(discord.ui.View):
             interaction.response.send_message,
             embed=embed,
             ephemeral=True,
+        )
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[discord.ui.View],
+        /,
+    ) -> None:
+        """Handle uncaught legacy sources-view callback exceptions."""
+        await handle_ui_callback_error(
+            interaction=interaction,
+            error=error,
+            surface="source_view",
+            logger=logger,
+            context={"item_type": type(item).__name__},
         )

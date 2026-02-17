@@ -11,6 +11,7 @@ from typing import cast
 
 import discord
 
+from llmcord.core.error_handling import log_exception
 from llmcord.logic.generation_types import (
     GeneratedImage,
     GenerationContext,
@@ -227,10 +228,14 @@ async def send_generated_images(
                 index + len(batch) - 1,
                 context.new_msg.id,
             )
-        except Exception:
-            logger.exception(
-                ("Failed to send Gemini-generated image batch %s-%s for message %s"),
-                index,
-                index + len(batch) - 1,
-                context.new_msg.id,
+        except (discord.HTTPException, OSError, RuntimeError, ValueError) as exc:
+            log_exception(
+                logger=logger,
+                message="Failed to send Gemini-generated image batch",
+                error=exc,
+                context={
+                    "start_index": index,
+                    "end_index": index + len(batch) - 1,
+                    "message_id": context.new_msg.id,
+                },
             )

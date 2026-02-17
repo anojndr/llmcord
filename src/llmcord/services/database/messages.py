@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 import libsql as libsql_module
 
+from llmcord.core.error_handling import log_exception
+
 libsql: Any = libsql_module
 LibsqlCursor = Any
 LibsqlConnection = Any
@@ -200,14 +202,16 @@ class MessageDataMixin(_Base):
                        lens_results = COALESCE(?, lens_results)""",
                 params,
             )
-        except ValueError:
+        except ValueError as exc:
             # Log parameter types to help debug "Unsupported parameter type" errors
             param_types = [
                 (i, type(p).__name__, repr(p)[:100]) for i, p in enumerate(params)
             ]
-            logger.exception(
-                "libsql parameter type error. Param types: %s",
-                param_types,
+            log_exception(
+                logger=logger,
+                message="libsql parameter type error",
+                error=exc,
+                context={"message_id": message_id, "param_types": param_types},
             )
             raise
 

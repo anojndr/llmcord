@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any, Concatenate, Protocol, cast
 
 import libsql as libsql_module
 
+from llmcord.core.error_handling import log_exception
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -55,10 +57,12 @@ def _with_reconnect[T_Database: DatabaseProtocol, **P, T](
                 self._reconnect()
             try:
                 return method(self, *args, **kwargs)
-            except (ValueError, LIBSQL_ERROR):
-                logger.exception(
-                    "Failed to reconnect to Turso after %d attempts",
-                    max_retries,
+            except (ValueError, LIBSQL_ERROR) as exc:
+                log_exception(
+                    logger=logger,
+                    message="Failed to reconnect to Turso",
+                    error=exc,
+                    context={"max_retries": max_retries},
                 )
                 raise
 
