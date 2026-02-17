@@ -8,6 +8,7 @@ dependencies = [
     "asyncpraw>=7.8.1",
     "beautifulsoup4>=4.14.3",
     "brotli>=1.2.0",
+    "curl-cffi>=0.14.0",
     "discord-py>=2.6.4",
     "httpx>=0.28.1",
     "libsql>=0.1.11",

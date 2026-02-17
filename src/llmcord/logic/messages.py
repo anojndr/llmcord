@@ -31,6 +31,7 @@ from llmcord.logic.utils import (
 )
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import TwitterApiProtocol
+from llmcord.services.facebook import maybe_download_facebook_videos
 from llmcord.services.tiktok import maybe_download_tiktok_videos
 
 logger = logging.getLogger(__name__)
@@ -185,6 +186,26 @@ async def _populate_node_if_needed(
             logger.info(
                 "Added %s downloaded TikTok video attachment(s) for Gemini processing",
                 len(tiktok_videos),
+            )
+
+        facebook_videos = await maybe_download_facebook_videos(
+            cleaned_content=cleaned_content,
+            actual_model=context.actual_model,
+            httpx_client=context.httpx_client,
+        )
+        if facebook_videos:
+            processed_attachments.extend(
+                {
+                    "content_type": facebook_video.content_type,
+                    "content": facebook_video.content,
+                    "text": None,
+                }
+                for facebook_video in facebook_videos
+            )
+            logger.info(
+                "Added %s downloaded Facebook video attachment(s) for Gemini "
+                "processing",
+                len(facebook_videos),
             )
 
     curr_node.text = _build_initial_text(
