@@ -256,6 +256,94 @@ async def test_googlelens_results_appended(
 
 
 @pytest.mark.asyncio
+async def test_googlelens_user_and_lens_duplicate_url_extracted_once(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    calls: list[str] = []
+
+    async def _fake_perform_yandex_lookup(*args: object, **kwargs: object):
+        return ["- [Duplicate](https://example.com/dupe) (example.com)"], []
+
+    async def _fake_perform_google_lens_lookup(*args: object, **kwargs: object):
+        return [], []
+
+    async def _fake_extract_url_content(
+        url: str,
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        calls.append(url)
+        return "duplicate url content"
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.content.perform_yandex_lookup",
+        _fake_perform_yandex_lookup,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content.perform_google_lens_lookup",
+        _fake_perform_google_lens_lookup,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content.extract_url_content",
+        _fake_extract_url_content,
+    )
+    monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=13,
+        content="at ai googlelens summarize https://example.com/dupe",
+        author=FakeUser(1234),
+        attachments=[
+            FakeAttachment(
+                url="https://cdn.discordapp.com/attachments/1/2/dupe.png",
+                content_type="image/png",
+                filename="dupe.png",
+            ),
+        ],
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-4o",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    assert calls == ["https://example.com/dupe"]
+    user_content = str(result.messages[0]["content"])
+    assert user_content.count("--- URL Content: https://example.com/dupe ---") == 1
+
+
+@pytest.mark.asyncio
 async def test_googlelens_keeps_image_payload_for_vision_capable_model(
     monkeypatch: pytest.MonkeyPatch,
     httpx_client: Any,
