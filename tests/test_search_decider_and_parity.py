@@ -360,6 +360,42 @@ async def test_decider_httpx_timeout_marks_exhausted(
 
 
 @pytest.mark.asyncio
+async def test_decider_retryable_litellm_error_marks_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRateLimitError(Exception):
+        def __init__(self) -> None:
+            super().__init__("rate limited")
+
+    async def _fake_get_decider_response_text(**_kwargs: object) -> str:
+        raise _FakeRateLimitError
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._get_decider_response_text",
+        _fake_get_decider_response_text,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.DECIDER_RETRYABLE_EXCEPTIONS",
+        (_FakeRateLimitError,),
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="openrouter",
+            model="free",
+            api_keys=["key"],
+            base_url="https://openrouter.ai/api/v1",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert result is None
+    assert exhausted is True
+
+
+@pytest.mark.asyncio
 async def test_decider_uses_custom_fallback_chain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

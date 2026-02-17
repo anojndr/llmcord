@@ -39,6 +39,20 @@ from llmcord.services.search.utils import (
 logger = logging.getLogger(__name__)
 
 _FALLBACK_MODEL_PARTS = 3
+DECIDER_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
+    litellm.exceptions.OpenAIError,
+)
+for _exception_name in (
+    "BadRequestError",
+    "RateLimitError",
+    "APIError",
+    "APIConnectionError",
+    "ServiceUnavailableError",
+    "NotFoundError",
+):
+    _exception_type = getattr(litellm.exceptions, _exception_name, None)
+    if _exception_type is not None:
+        DECIDER_RETRYABLE_EXCEPTIONS += (_exception_type,)
 
 
 @dataclass(slots=True)
@@ -217,7 +231,7 @@ async def _run_decider_once(
             TypeError,
             ValueError,
             httpx.HTTPError,
-            litellm.exceptions.OpenAIError,
+            *DECIDER_RETRYABLE_EXCEPTIONS,
         ) as exc:
             if (
                 run_config.provider == "google-gemini-cli"
