@@ -150,10 +150,12 @@ def _merge_reverse_image_results(
     return [*overlap_lines, *single_lines]
 
 
-async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[str]:
+async def _collect_youtube_transcripts(
+    context: ExternalContentContext,
+) -> tuple[list[str], list[str]]:
     video_ids = _YOUTUBE_ID_RE.findall(context.cleaned_content)
     if not video_ids or not context.enable_youtube_transcripts:
-        return []
+        return [], []
 
     # Deduplicate while preserving order
     unique_video_ids = list(OrderedDict.fromkeys(video_ids))
@@ -169,49 +171,60 @@ async def _collect_youtube_transcripts(context: ExternalContentContext) -> list[
         ],
     )
 
-    extracted = []
+    extracted: list[str] = []
+    failed_extractions: list[str] = []
     for vid, (res, failure_reason) in zip(unique_video_ids, results, strict=False):
         if res is not None:
             extracted.append(res)
             if "[Transcript not available]" in res:
-                context.curr_node.failed_extractions.append(
+                failed_extractions.append(
                     _format_youtube_failure(
                         vid,
                         failure_reason or "transcript unavailable",
                     ),
                 )
         else:
-            context.curr_node.failed_extractions.append(
+            failed_extractions.append(
                 _format_youtube_failure(vid, failure_reason),
             )
-    return extracted
+    return extracted, failed_extractions
 
 
 async def _collect_tweets(context: ExternalContentContext) -> list[str]:
-    tweets: list[str] = []
-    for tweet_id in _TWEET_ID_RE.findall(context.cleaned_content):
-        tweet_text = await fetch_tweet_with_replies(
-            context.twitter_api,
-            int(tweet_id),
-            max_replies=context.max_tweet_replies,
-            include_url=False,
-        )
-        if tweet_text:
-            tweets.append(tweet_text)
-    return tweets
+    tweet_ids = _TWEET_ID_RE.findall(context.cleaned_content)
+    if not tweet_ids:
+        return []
+
+    tweets = await asyncio.gather(
+        *[
+            fetch_tweet_with_replies(
+                context.twitter_api,
+                int(tweet_id),
+                max_replies=context.max_tweet_replies,
+                include_url=False,
+            )
+            for tweet_id in tweet_ids
+        ],
+    )
+    return [tweet for tweet in tweets if tweet]
 
 
 async def _collect_reddit_posts(context: ExternalContentContext) -> list[str]:
-    reddit_posts: list[str] = []
-    for post_url in _REDDIT_URL_RE.findall(context.cleaned_content):
-        post_text = await extract_reddit_post(
-            post_url,
-            context.httpx_client,
-            reddit_client,
-        )
-        if post_text:
-            reddit_posts.append(post_text)
-    return reddit_posts
+    post_urls = _REDDIT_URL_RE.findall(context.cleaned_content)
+    if not post_urls:
+        return []
+
+    reddit_posts = await asyncio.gather(
+        *[
+            extract_reddit_post(
+                post_url,
+                context.httpx_client,
+                reddit_client,
+            )
+            for post_url in post_urls
+        ],
+    )
+    return [post for post in reddit_posts if post]
 
 
 def _normalize_generic_urls(text: str) -> list[str]:
@@ -241,10 +254,12 @@ def _normalize_generic_urls(text: str) -> list[str]:
     return normalized
 
 
-async def _collect_generic_url_contents(context: ExternalContentContext) -> list[str]:
+async def _collect_generic_url_contents(
+    context: ExternalContentContext,
+) -> tuple[list[str], list[str]]:
     urls = _normalize_generic_urls(context.cleaned_content)
     if not urls:
-        return []
+        return [], []
 
     extracted = await asyncio.gather(
         *[
@@ -257,12 +272,13 @@ async def _collect_generic_url_contents(context: ExternalContentContext) -> list
     )
 
     results: list[str] = []
+    failed_extractions: list[str] = []
     for url, text in zip(urls, extracted, strict=False):
         if text:
             results.append(f"--- URL Content: {url} ---\n{text}")
         else:
-            context.curr_node.failed_extractions.append(url)
-    return results
+            failed_extractions.append(url)
+    return results, failed_extractions
 
 
 @dataclass(slots=True)
@@ -543,14 +559,27 @@ async def collect_external_content(
     context: ExternalContentContext,
 ) -> list[str]:
     """Collect content from external sources (YouTube, Twitter, Reddit, PDFs)."""
-    yt_transcripts = await _collect_youtube_transcripts(context)
-    tweets = await _collect_tweets(context)
-    reddit_posts = await _collect_reddit_posts(context)
-    generic_url_contents = await _collect_generic_url_contents(context)
-    pdf_texts = await _extract_pdf_texts(
-        processed_attachments=context.processed_attachments,
-        actual_model=context.actual_model,
+    (
+        youtube_result,
+        tweets,
+        reddit_posts,
+        generic_result,
+        pdf_texts,
+    ) = await asyncio.gather(
+        _collect_youtube_transcripts(context),
+        _collect_tweets(context),
+        _collect_reddit_posts(context),
+        _collect_generic_url_contents(context),
+        _extract_pdf_texts(
+            processed_attachments=context.processed_attachments,
+            actual_model=context.actual_model,
+        ),
     )
+
+    yt_transcripts, yt_failed_extractions = youtube_result
+    generic_url_contents, generic_failed_extractions = generic_result
+    context.curr_node.failed_extractions.extend(yt_failed_extractions)
+    context.curr_node.failed_extractions.extend(generic_failed_extractions)
 
     return yt_transcripts + tweets + reddit_posts + generic_url_contents + pdf_texts
 

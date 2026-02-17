@@ -309,6 +309,209 @@ async def test_multiple_youtube_urls_extracted_concurrently(
 
 
 @pytest.mark.asyncio
+async def test_multiple_twitter_urls_extracted_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    expected_ids = {1111111111111111111, 2222222222222222222, 3333333333333333333}
+    minimum_concurrency = 2
+    completed_ids: list[int] = []
+    in_flight = 0
+    max_in_flight = 0
+    lock = asyncio.Lock()
+
+    async def _fake_fetch_tweet_with_replies(
+        _twitter_api: object,
+        tweet_id: int,
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        nonlocal in_flight, max_in_flight
+        async with lock:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+
+        await asyncio.sleep(0.02)
+
+        async with lock:
+            in_flight -= 1
+        completed_ids.append(tweet_id)
+        return f"Tweet payload for {tweet_id}"
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.content.fetch_tweet_with_replies",
+        _fake_fetch_tweet_with_replies,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=7,
+        content=(
+            "at ai summarize "
+            "https://x.com/a/status/1111111111111111111 "
+            "https://twitter.com/b/status/2222222222222222222 "
+            "https://x.com/c/status/3333333333333333333"
+        ),
+        author=FakeUser(1234),
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-4o",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    user_content = str(result.messages[0]["content"])
+    assert "Tweet payload for 1111111111111111111" in user_content
+    assert "Tweet payload for 2222222222222222222" in user_content
+    assert "Tweet payload for 3333333333333333333" in user_content
+    assert set(completed_ids) == expected_ids
+    assert len(completed_ids) == len(expected_ids)
+    assert max_in_flight >= minimum_concurrency
+
+
+@pytest.mark.asyncio
+async def test_external_source_collectors_run_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    minimum_concurrency = 2
+    in_flight = 0
+    max_in_flight = 0
+    lock = asyncio.Lock()
+
+    async def _collector(name: str) -> str:
+        nonlocal in_flight, max_in_flight
+        async with lock:
+            in_flight += 1
+            max_in_flight = max(max_in_flight, in_flight)
+
+        await asyncio.sleep(0.02)
+
+        async with lock:
+            in_flight -= 1
+        return name
+
+    async def _fake_collect_youtube_transcripts(*args: object, **kwargs: object):
+        await _collector("youtube")
+        return ["YT transcript"], []
+
+    async def _fake_collect_tweets(*args: object, **kwargs: object):
+        await _collector("twitter")
+        return ["Tweet batch"]
+
+    async def _fake_collect_reddit_posts(*args: object, **kwargs: object):
+        await _collector("reddit")
+        return ["Reddit batch"]
+
+    async def _fake_collect_generic_url_contents(*args: object, **kwargs: object):
+        await _collector("generic")
+        return ["--- URL Content: https://example.com ---\nExample body"], []
+
+    async def _fake_extract_pdf_texts(*args: object, **kwargs: object):
+        await _collector("pdf")
+        return ["--- PDF Attachment 1 Content ---\nPDF body"]
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.content._collect_youtube_transcripts",
+        _fake_collect_youtube_transcripts,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content._collect_tweets",
+        _fake_collect_tweets,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content._collect_reddit_posts",
+        _fake_collect_reddit_posts,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content._collect_generic_url_contents",
+        _fake_collect_generic_url_contents,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.content._extract_pdf_texts",
+        _fake_extract_pdf_texts,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=8,
+        content="at ai summarize https://example.com",
+        author=FakeUser(1234),
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-4o",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    user_content = str(result.messages[0]["content"])
+    assert "YT transcript" in user_content
+    assert "Tweet batch" in user_content
+    assert "Reddit batch" in user_content
+    assert "Example body" in user_content
+    assert "PDF body" in user_content
+    assert max_in_flight >= minimum_concurrency
+
+
+@pytest.mark.asyncio
 async def test_youtube_failure_reason_is_in_warning(
     monkeypatch: pytest.MonkeyPatch,
     httpx_client: Any,
