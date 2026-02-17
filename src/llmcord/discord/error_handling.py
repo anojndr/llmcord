@@ -7,9 +7,10 @@ from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import discord
+import httpx
 from discord import app_commands
 
-from llmcord.core.error_handling import log_exception
+from llmcord.core.error_handling import COMMON_HANDLER_EXCEPTIONS, log_exception
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 
@@ -20,6 +21,12 @@ LOGGER = logging.getLogger(__name__)
 
 INTERNAL_ERROR_MESSAGE = (
     "An internal error occurred while processing your request. Please try again later."
+)
+MESSAGE_PROCESSING_EXCEPTIONS = (
+    ImportError,
+    *COMMON_HANDLER_EXCEPTIONS,
+    discord.DiscordException,
+    httpx.HTTPError,
 )
 
 
@@ -34,6 +41,15 @@ def _build_interaction_context(interaction: discord.Interaction) -> dict[str, ob
         "user_id": user_id,
         "channel_id": interaction.channel_id,
         "guild_id": interaction.guild_id,
+    }
+
+
+def build_message_context(message: discord.Message) -> dict[str, object]:
+    """Build structured context fields for message-processing logs."""
+    return {
+        "message_id": message.id,
+        "author_id": message.author.id,
+        "channel_id": message.channel.id,
     }
 
 

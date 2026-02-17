@@ -1,14 +1,14 @@
 """Web search and research command orchestration."""
 
-import json
 import logging
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
 import discord
 
 from llmcord.core.config import is_gemini_model
+from llmcord.core.config.utils import normalize_api_keys
 from llmcord.core.models import MsgNode
 from llmcord.logic.utils import (
     append_search_to_content,
@@ -25,29 +25,6 @@ from llmcord.services.search import (
 from llmcord.services.search.config import EXA_MCP_URL
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_decider_api_keys(raw_api_keys: object) -> list[str]:
-    if raw_api_keys is None:
-        return []
-    if isinstance(raw_api_keys, str):
-        return [raw_api_keys]
-    if isinstance(raw_api_keys, Mapping):
-        return [json.dumps(raw_api_keys, separators=(",", ":"))]
-
-    if not isinstance(raw_api_keys, Iterable):
-        return [str(raw_api_keys)]
-
-    result: list[str] = []
-    for value in raw_api_keys:
-        if isinstance(value, str):
-            result.append(value)
-            continue
-        if isinstance(value, Mapping):
-            result.append(json.dumps(value, separators=(",", ":")))
-            continue
-        result.append(str(value))
-    return result
 
 
 @dataclass(slots=True)
@@ -312,7 +289,7 @@ async def maybe_run_web_search(
             decider_provider,
             {},
         )
-        decider_api_keys = _normalize_decider_api_keys(
+        decider_api_keys = normalize_api_keys(
             decider_provider_config.get("api_key"),
         )
         decider_model_parameters = cast(

@@ -1,6 +1,7 @@
 """Discord slash commands for llmcord."""
 
 import logging
+from functools import partial
 
 import discord
 from discord.app_commands import Choice
@@ -16,9 +17,31 @@ from llmcord.utils.common import (
     _build_model_autocomplete,
     _handle_model_switch,
     get_channel_locked_model,
+    get_default_model,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _defer_for_channel_visibility(interaction: discord.Interaction) -> None:
+    """Defer command responses as ephemeral in DMs and public elsewhere."""
+    is_private_channel = (
+        interaction.channel is not None
+        and interaction.channel.type == discord.ChannelType.private
+    )
+    await interaction.response.defer(ephemeral=is_private_channel)
+
+
+def _get_default_search_decider_model(config_data: dict[str, object]) -> str | None:
+    """Return the configured decider default, falling back to the first model."""
+    models = config_data.get("models")
+    default = config_data.get(
+        "web_search_decider_model",
+        "gemini/gemini-3-flash-preview",
+    )
+    if isinstance(default, str) and isinstance(models, dict) and default in models:
+        return default
+    return get_default_model(config_data)
 
 
 # =============================================================================
@@ -32,10 +55,7 @@ logger = logging.getLogger(__name__)
 )
 async def model_command(interaction: discord.Interaction, model: str) -> None:
     """Handle the /model command."""
-    ephemeral = False
-    if interaction.channel and interaction.channel.type == discord.ChannelType.private:
-        ephemeral = True
-    await interaction.response.defer(ephemeral=ephemeral)
+    await _defer_for_channel_visibility(interaction)
 
     # Check if this channel has a locked model
     channel_id = interaction.channel_id
@@ -58,13 +78,10 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
     db = get_bad_keys_db()
     config_data = config_module.get_config()
 
-    def get_default() -> str | None:
-        return next(iter(config_data.get("models", {})), None)
-
     handlers = ModelSwitchHandlers(
         get_current=db.get_user_model,
         set_model=db.set_user_model,
-        get_default=get_default,
+        get_default=partial(get_default_model, config_data),
     )
     await _handle_model_switch(
         interaction=interaction,
@@ -83,15 +100,11 @@ async def model_autocomplete(
     config_data = config_module.get_config()
 
     db = get_bad_keys_db()
-    config_data = config_module.get_config()
     user_id = str(interaction.user.id)
-
-    def get_default() -> str | None:
-        return next(iter(config_data.get("models", {})), None)
 
     handlers = ModelAutocompleteHandlers(
         get_current=db.get_user_model,
-        get_default=get_default,
+        get_default=partial(get_default_model, config_data),
     )
     return _build_model_autocomplete(curr_str, handlers, user_id, config_data)
 
@@ -105,25 +118,15 @@ async def search_decider_model_command(
     model: str,
 ) -> None:
     """Handle the /searchdecidermodel command."""
-    ephemeral = False
-    if interaction.channel and interaction.channel.type == discord.ChannelType.private:
-        ephemeral = True
-    await interaction.response.defer(ephemeral=ephemeral)
+    await _defer_for_channel_visibility(interaction)
 
     db = get_bad_keys_db()
     config_data = config_module.get_config()
 
-    def get_default() -> str | None:
-        default = config_data.get(
-            "web_search_decider_model",
-            "gemini/gemini-3-flash-preview",
-        )
-        return default if default in config_data.get("models", {}) else None
-
     handlers = ModelSwitchHandlers(
         get_current=db.get_user_search_decider_model,
         set_model=db.set_user_search_decider_model,
-        get_default=get_default,
+        get_default=partial(_get_default_search_decider_model, config_data),
     )
     await _handle_model_switch(
         interaction=interaction,
@@ -144,18 +147,9 @@ async def search_decider_model_autocomplete(
     db = get_bad_keys_db()
     user_id = str(interaction.user.id)
 
-    def get_default() -> str | None:
-        default = config_data.get(
-            "web_search_decider_model",
-            "gemini/gemini-3-flash-preview",
-        )
-        if default in config_data.get("models", {}):
-            return default
-        return next(iter(config_data.get("models", {})), "") or None
-
     handlers = ModelAutocompleteHandlers(
         get_current=db.get_user_search_decider_model,
-        get_default=get_default,
+        get_default=partial(_get_default_search_decider_model, config_data),
     )
     return _build_model_autocomplete(curr_str, handlers, user_id, config_data)
 

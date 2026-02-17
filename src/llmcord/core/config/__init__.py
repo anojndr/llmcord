@@ -34,7 +34,7 @@ from llmcord.core.config.manager import (
     ensure_list,
     get_config,
 )
-from llmcord.core.config.utils import is_gemini_model
+from llmcord.core.config.utils import is_gemini_model, normalize_api_keys
 
 __all__ = [
     "BROWSER_HEADERS",
@@ -62,4 +62,5 @@ __all__ = [
     "get_config",
     "get_or_create_httpx_client",
     "is_gemini_model",
+    "normalize_api_keys",
 ]

@@ -5,36 +5,25 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 import discord
-import httpx
 
 from llmcord import config as config_module
 from llmcord import globals as app_globals
 from llmcord.core.error_handling import log_exception
-from llmcord.discord.error_handling import send_message_processing_error
+from llmcord.discord.error_handling import (
+    MESSAGE_PROCESSING_EXCEPTIONS,
+    build_message_context,
+    send_message_processing_error,
+)
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.pipeline import ProcessContext
 from llmcord.services.database import get_bad_keys_db
-from llmcord.utils.common import get_channel_locked_model
+from llmcord.utils.common import get_channel_locked_model, get_default_model
 
 if TYPE_CHECKING:
     from llmcord.services.extractors import TwitterApiProtocol
 
 logger = logging.getLogger(__name__)
-
-PROCESSING_HANDLER_EXCEPTIONS = (
-    AssertionError,
-    AttributeError,
-    ImportError,
-    LookupError,
-    OSError,
-    RuntimeError,
-    TimeoutError,
-    TypeError,
-    ValueError,
-    discord.DiscordException,
-    httpx.HTTPError,
-)
 
 
 async def _process_user_message(new_msg: discord.Message) -> None:
@@ -64,8 +53,8 @@ async def _process_user_message(new_msg: discord.Message) -> None:
 
         # Fall back to default model if user hasn't set a preference
         # or if their saved model is no longer valid.
-        default_model = next(iter(config_data.get("models", {})), "")
-        if not default_model:
+        default_model = get_default_model(config_data)
+        if default_model is None:
             logger.error("No models configured in config.yaml")
             return
 
@@ -92,16 +81,12 @@ async def _process_user_message(new_msg: discord.Message) -> None:
             new_msg=new_msg,
             context=context,
         )
-    except PROCESSING_HANDLER_EXCEPTIONS as exc:
+    except MESSAGE_PROCESSING_EXCEPTIONS as exc:
         log_exception(
             logger=logger,
             message="Error processing message",
             error=exc,
-            context={
-                "message_id": new_msg.id,
-                "author_id": new_msg.author.id,
-                "channel_id": new_msg.channel.id,
-            },
+            context=build_message_context(new_msg),
         )
         await send_message_processing_error(new_msg)
 

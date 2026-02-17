@@ -21,6 +21,59 @@ from llmcord.discord.ui.utils import build_error_embed, get_response_data
 logger = logging.getLogger(__name__)
 
 
+def _resolve_grounding_metadata(
+    metadata: object | None,
+    interaction: discord.Interaction,
+) -> object | None:
+    """Resolve grounding metadata from the button or persisted response data."""
+    if metadata is None and interaction.message:
+        response_data = get_response_data(interaction.message.id)
+        return response_data.grounding_metadata
+    return metadata
+
+
+async def _send_grounding_sources(
+    interaction: discord.Interaction,
+    metadata: object | None,
+) -> None:
+    """Send grounding sources embed or a standardized missing-data error."""
+    resolved_metadata = _resolve_grounding_metadata(metadata, interaction)
+    if not resolved_metadata:
+        await call_with_embed_limits(
+            interaction.response.send_message,
+            embed=build_error_embed(
+                "No source information available for this message.",
+            ),
+            ephemeral=True,
+        )
+        return
+
+    embed = build_grounding_sources_embed(resolved_metadata)
+    await call_with_embed_limits(
+        interaction.response.send_message,
+        embed=embed,
+        ephemeral=True,
+    )
+
+
+async def _handle_view_error(
+    *,
+    interaction: discord.Interaction,
+    error: Exception,
+    surface: str,
+    item: discord.ui.Item[discord.ui.View] | None = None,
+) -> None:
+    """Delegate uncaught view errors to centralized interaction handling."""
+    context = {"item_type": type(item).__name__} if item is not None else None
+    await handle_ui_callback_error(
+        interaction=interaction,
+        error=error,
+        surface=surface,
+        logger=logger,
+        context=context,
+    )
+
+
 class SourceButton(discord.ui.Button):
     """Button to show sources from grounding metadata."""
 
@@ -35,27 +88,7 @@ class SourceButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Show sources in an ephemeral embed."""
-        metadata = self.metadata
-        if metadata is None and interaction.message:
-            response_data = get_response_data(interaction.message.id)
-            metadata = response_data.grounding_metadata
-
-        if not metadata:
-            await call_with_embed_limits(
-                interaction.response.send_message,
-                embed=build_error_embed(
-                    "No source information available for this message.",
-                ),
-                ephemeral=True,
-            )
-            return
-
-        embed = build_grounding_sources_embed(metadata)
-        await call_with_embed_limits(
-            interaction.response.send_message,
-            embed=embed,
-            ephemeral=True,
-        )
+        await _send_grounding_sources(interaction, self.metadata)
 
 
 class TavilySourcesView(discord.ui.View):
@@ -268,12 +301,11 @@ class TavilySourcesView(discord.ui.View):
         /,
     ) -> None:
         """Handle uncaught sources-view callback exceptions."""
-        await handle_ui_callback_error(
+        await _handle_view_error(
             interaction=interaction,
             error=error,
             surface="tavily_sources_view",
-            logger=logger,
-            context={"item_type": type(item).__name__},
+            item=item,
         )
 
 
@@ -402,27 +434,7 @@ class SourceView(discord.ui.View):
         _button: discord.ui.Button,
     ) -> None:
         """Show sources for legacy responses."""
-        metadata = self.metadata
-        if metadata is None and interaction.message:
-            response_data = get_response_data(interaction.message.id)
-            metadata = response_data.grounding_metadata
-
-        if not metadata:
-            await call_with_embed_limits(
-                interaction.response.send_message,
-                embed=build_error_embed(
-                    "No source information available for this message.",
-                ),
-                ephemeral=True,
-            )
-            return
-
-        embed = build_grounding_sources_embed(metadata)
-        await call_with_embed_limits(
-            interaction.response.send_message,
-            embed=embed,
-            ephemeral=True,
-        )
+        await _send_grounding_sources(interaction, self.metadata)
 
     async def on_error(
         self,
@@ -432,10 +444,9 @@ class SourceView(discord.ui.View):
         /,
     ) -> None:
         """Handle uncaught legacy sources-view callback exceptions."""
-        await handle_ui_callback_error(
+        await _handle_view_error(
             interaction=interaction,
             error=error,
             surface="source_view",
-            logger=logger,
-            context={"item_type": type(item).__name__},
+            item=item,
         )

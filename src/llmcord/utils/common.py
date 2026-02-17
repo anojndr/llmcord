@@ -40,6 +40,11 @@ class ModelAutocompleteHandlers:
     get_default: GetDefaultFn
 
 
+def get_default_model(config_data: Mapping[str, Any]) -> str | None:
+    """Return the first configured model name, if any."""
+    return next(iter(config_data.get("models", {})), None)
+
+
 def get_channel_locked_model(channel_id: int) -> str | None:
     """Check whether a channel has a locked model override.
 

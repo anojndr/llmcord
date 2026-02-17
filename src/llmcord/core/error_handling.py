@@ -13,6 +13,16 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 LOGGER = logging.getLogger(__name__)
+COMMON_HANDLER_EXCEPTIONS = (
+    AssertionError,
+    AttributeError,
+    LookupError,
+    OSError,
+    RuntimeError,
+    TimeoutError,
+    TypeError,
+    ValueError,
+)
 
 
 def _format_context(context: Mapping[str, object]) -> str:

@@ -7,21 +7,12 @@ from collections.abc import Awaitable, Callable
 from aiohttp import web
 
 from llmcord.core.config import get_config
-from llmcord.core.error_handling import log_exception
+from llmcord.core.error_handling import COMMON_HANDLER_EXCEPTIONS, log_exception
 
 logger = logging.getLogger(__name__)
 
 RequestHandler = Callable[[web.Request], Awaitable[web.StreamResponse]]
-SERVER_HANDLER_EXCEPTIONS = (
-    AssertionError,
-    AttributeError,
-    LookupError,
-    OSError,
-    RuntimeError,
-    TimeoutError,
-    TypeError,
-    ValueError,
-)
+SERVER_HANDLER_EXCEPTIONS = COMMON_HANDLER_EXCEPTIONS
 
 
 @web.middleware

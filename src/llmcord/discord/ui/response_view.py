@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 
 import discord
 
@@ -23,6 +24,86 @@ from llmcord.discord.ui.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _UploadViewConfig:
+    """Static copy for rendering upload result states."""
+
+    title: str
+    success_intro: str
+    missing_error: str
+    upload_error: str
+
+
+_VIEW_RESPONSE_UPLOAD_CONFIG = _UploadViewConfig(
+    title="View Response",
+    success_intro="Your response has been uploaded for better viewing:",
+    missing_error="Missing response content for this message.",
+    upload_error="Failed to upload response to rentry.co. Please try again later.",
+)
+_THOUGHT_PROCESS_UPLOAD_CONFIG = _UploadViewConfig(
+    title="Thought Process",
+    success_intro="The hidden thought process has been uploaded for viewing:",
+    missing_error="No thought process is available for this response.",
+    upload_error="Failed to show thought process. Please try again later.",
+)
+
+
+async def _handle_view_error(
+    *,
+    interaction: discord.Interaction,
+    error: Exception,
+    surface: str,
+    item: discord.ui.Item[discord.ui.View],
+) -> None:
+    """Delegate uncaught view errors to centralized interaction handling."""
+    await handle_ui_callback_error(
+        interaction=interaction,
+        error=error,
+        surface=surface,
+        logger=logger,
+        context={"item_type": type(item).__name__},
+    )
+
+
+async def _send_uploaded_text_view(
+    interaction: discord.Interaction,
+    *,
+    content: str | None,
+    config: _UploadViewConfig,
+) -> None:
+    """Upload text to rentry and send a standardized result response."""
+    if not content:
+        await call_with_embed_limits(
+            interaction.followup.send,
+            embed=build_error_embed(config.missing_error),
+            ephemeral=True,
+        )
+        return
+
+    paste_url = await upload_to_rentry(content)
+    if not paste_url:
+        await call_with_embed_limits(
+            interaction.followup.send,
+            embed=build_error_embed(config.upload_error),
+            ephemeral=True,
+        )
+        return
+
+    embed = discord.Embed(
+        title=config.title,
+        description=(
+            f"{config.success_intro}\n\n**[Click here to view]({paste_url})**"
+        ),
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text="Powered by rentry.co")
+    await call_with_embed_limits(
+        interaction.followup.send,
+        embed=embed,
+        ephemeral=True,
+    )
 
 
 class RetryButton(discord.ui.Button):
@@ -121,41 +202,11 @@ class ViewResponseBetterButton(discord.ui.Button):
             response_data = get_response_data(interaction.message.id)
             full_response = response_data.full_response
 
-        if not full_response:
-            await call_with_embed_limits(
-                interaction.followup.send,
-                embed=build_error_embed(
-                    "Missing response content for this message.",
-                ),
-                ephemeral=True,
-            )
-            return
-
-        paste_url = await upload_to_rentry(full_response)
-
-        if paste_url:
-            embed = discord.Embed(
-                title="View Response",
-                description=(
-                    "Your response has been uploaded for better viewing:\n\n"
-                    f"**[Click here to view]({paste_url})**"
-                ),
-                color=discord.Color.green(),
-            )
-            embed.set_footer(text="Powered by rentry.co")
-            await call_with_embed_limits(
-                interaction.followup.send,
-                embed=embed,
-                ephemeral=True,
-            )
-        else:
-            await call_with_embed_limits(
-                interaction.followup.send,
-                embed=build_error_embed(
-                    ("Failed to upload response to rentry.co. Please try again later."),
-                ),
-                ephemeral=True,
-            )
+        await _send_uploaded_text_view(
+            interaction,
+            content=full_response,
+            config=_VIEW_RESPONSE_UPLOAD_CONFIG,
+        )
 
 
 class ShowThoughtProcessButton(discord.ui.Button):
@@ -180,40 +231,10 @@ class ShowThoughtProcessButton(discord.ui.Button):
             response_data = get_response_data(interaction.message.id)
             thought_process = response_data.thought_process
 
-        if not thought_process:
-            await call_with_embed_limits(
-                interaction.followup.send,
-                embed=build_error_embed(
-                    "No thought process is available for this response.",
-                ),
-                ephemeral=True,
-            )
-            return
-
-        paste_url = await upload_to_rentry(thought_process)
-        if paste_url:
-            embed = discord.Embed(
-                title="Thought Process",
-                description=(
-                    "The hidden thought process has been uploaded for viewing:\n\n"
-                    f"**[Click here to view]({paste_url})**"
-                ),
-                color=discord.Color.green(),
-            )
-            embed.set_footer(text="Powered by rentry.co")
-            await call_with_embed_limits(
-                interaction.followup.send,
-                embed=embed,
-                ephemeral=True,
-            )
-            return
-
-        await call_with_embed_limits(
-            interaction.followup.send,
-            embed=build_error_embed(
-                "Failed to show thought process. Please try again later.",
-            ),
-            ephemeral=True,
+        await _send_uploaded_text_view(
+            interaction,
+            content=thought_process,
+            config=_THOUGHT_PROCESS_UPLOAD_CONFIG,
         )
 
 
@@ -320,12 +341,11 @@ class ResponseView(discord.ui.View):
         /,
     ) -> None:
         """Handle uncaught response-view callback exceptions."""
-        await handle_ui_callback_error(
+        await _handle_view_error(
             interaction=interaction,
             error=error,
             surface="response_view",
-            logger=logger,
-            context={"item_type": type(item).__name__},
+            item=item,
         )
 
 
@@ -350,10 +370,9 @@ class PersistentResponseView(discord.ui.View):
         /,
     ) -> None:
         """Handle uncaught persistent-view callback exceptions."""
-        await handle_ui_callback_error(
+        await _handle_view_error(
             interaction=interaction,
             error=error,
             surface="persistent_response_view",
-            logger=logger,
-            context={"item_type": type(item).__name__},
+            item=item,
         )

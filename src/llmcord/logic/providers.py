@@ -1,43 +1,21 @@
 """Provider and model configuration logic."""
 
 import asyncio
-import json
 import logging
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 import discord
 
 from llmcord.core.config import get_config
+from llmcord.core.config.utils import normalize_api_keys
 
 logger = logging.getLogger(__name__)
 
 
 def _normalize_api_keys(raw_api_keys: object) -> list[str]:
-    """Normalize provider api_key config into a list of string keys."""
-    if raw_api_keys is None:
-        return []
-
-    if isinstance(raw_api_keys, str):
-        return [raw_api_keys]
-
-    if isinstance(raw_api_keys, Mapping):
-        return [json.dumps(raw_api_keys, separators=(",", ":"))]
-
-    if not isinstance(raw_api_keys, Iterable):
-        return [str(raw_api_keys)]
-
-    normalized: list[str] = []
-    for value in raw_api_keys:
-        if isinstance(value, str):
-            normalized.append(value)
-            continue
-        if isinstance(value, Mapping):
-            normalized.append(json.dumps(value, separators=(",", ":")))
-            continue
-        normalized.append(str(value))
-
-    return normalized
+    """Backward-compatible wrapper for API key normalization."""
+    return normalize_api_keys(raw_api_keys)
 
 
 @dataclass(slots=True)

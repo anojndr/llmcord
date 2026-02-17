@@ -12,6 +12,7 @@ import litellm
 from llmcord.core.config import ensure_list, get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
+from llmcord.logic.fallbacks import FallbackModel, build_default_fallback_chain
 from llmcord.services.database import KeyRotator, get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
@@ -203,30 +204,8 @@ def _get_next_decider_fallback(
     *,
     original_provider: str,
     original_model: str,
-) -> tuple[int, tuple[str, str, str] | None, str | None]:
-    openrouter_fallback = (
-        "openrouter",
-        "openrouter/free",
-        "openrouter/openrouter/free",
-    )
-    mistral_fallback = (
-        "mistral",
-        "mistral-large-latest",
-        "mistral/mistral-large-latest",
-    )
-    gemini_fallback = (
-        "gemini",
-        "gemma-3-27b-it",
-        "gemini/gemma-3-27b-it",
-    )
-
-    ordered_fallbacks = [openrouter_fallback, mistral_fallback, gemini_fallback]
-    original = (original_provider, original_model)
-    fallback_chain = [
-        fallback
-        for fallback in ordered_fallbacks
-        if (fallback[0], fallback[1]) != original
-    ]
+) -> tuple[int, FallbackModel | None, str | None]:
+    fallback_chain = build_default_fallback_chain(original_provider, original_model)
 
     if fallback_level < len(fallback_chain):
         next_fallback = fallback_chain[fallback_level]

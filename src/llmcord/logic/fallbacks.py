@@ -9,31 +9,23 @@ from llmcord.logic.generation_types import FallbackState
 logger = logging.getLogger(__name__)
 
 
-def _get_default_fallback_chain(
+FallbackModel = tuple[str, str, str]
+DEFAULT_FALLBACK_MODELS: tuple[FallbackModel, ...] = (
+    ("openrouter", "openrouter/free", "openrouter/openrouter/free"),
+    ("mistral", "mistral-large-latest", "mistral/mistral-large-latest"),
+    ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
+)
+
+
+def build_default_fallback_chain(
     original_provider: str,
     original_model: str,
-) -> list[tuple[str, str, str]]:
-    openrouter_fallback = (
-        "openrouter",
-        "openrouter/free",
-        "openrouter/openrouter/free",
-    )
-    mistral_fallback = (
-        "mistral",
-        "mistral-large-latest",
-        "mistral/mistral-large-latest",
-    )
-    gemini_fallback = (
-        "gemini",
-        "gemma-3-27b-it",
-        "gemini/gemma-3-27b-it",
-    )
-
-    ordered_fallbacks = [openrouter_fallback, mistral_fallback, gemini_fallback]
+) -> list[FallbackModel]:
+    """Build ordered default fallback models excluding the original pair."""
     original = (original_provider, original_model)
     return [
         fallback
-        for fallback in ordered_fallbacks
+        for fallback in DEFAULT_FALLBACK_MODELS
         if (fallback[0], fallback[1]) != original
     ]
 
@@ -41,10 +33,10 @@ def _get_default_fallback_chain(
 def get_next_fallback(
     *,
     state: FallbackState,
-    fallback_chain: list[tuple[str, str, str]],
+    fallback_chain: list[FallbackModel],
     provider: str,
     initial_key_count: int,
-) -> tuple[str, str, str] | None:
+) -> FallbackModel | None:
     """Determine the next fallback provider and model to try."""
     if state.use_custom_fallbacks:
         if state.fallback_index < len(fallback_chain):
@@ -59,7 +51,7 @@ def get_next_fallback(
             return next_fallback
         return None
 
-    default_fallbacks = _get_default_fallback_chain(
+    default_fallbacks = build_default_fallback_chain(
         state.original_provider,
         state.original_model,
     )
@@ -85,7 +77,7 @@ def get_next_fallback(
 
 def apply_fallback_config(
     *,
-    next_fallback: tuple[str, str, str],
+    next_fallback: FallbackModel,
     config: dict[str, Any],
 ) -> tuple[str, str, str, str | None, list[str]]:
     """Extract configuration values for a fallback provider."""

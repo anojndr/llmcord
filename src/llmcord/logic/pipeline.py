@@ -18,7 +18,11 @@ from llmcord.core.config import (
 )
 from llmcord.core.error_handling import log_exception
 from llmcord.core.models import MsgNode
-from llmcord.discord.error_handling import edit_processing_message_error
+from llmcord.discord.error_handling import (
+    MESSAGE_PROCESSING_EXCEPTIONS,
+    build_message_context,
+    edit_processing_message_error,
+)
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.response_view import (
     ResponseView,
@@ -40,20 +44,6 @@ from llmcord.services.extractors import TwitterApiProtocol
 from llmcord.services.search import get_current_datetime_strings
 
 logger = logging.getLogger(__name__)
-
-PIPELINE_HANDLER_EXCEPTIONS = (
-    AssertionError,
-    AttributeError,
-    ImportError,
-    LookupError,
-    OSError,
-    RuntimeError,
-    TimeoutError,
-    TypeError,
-    ValueError,
-    discord.DiscordException,
-    httpx.HTTPError,
-)
 
 
 @dataclass(slots=True)
@@ -358,16 +348,12 @@ async def process_message(
             fallback_chain=fallback_chain,
         )
         await generate_response(generation_context)
-    except PIPELINE_HANDLER_EXCEPTIONS as exc:
+    except MESSAGE_PROCESSING_EXCEPTIONS as exc:
         log_exception(
             logger=logger,
             message="Error processing message",
             error=exc,
-            context={
-                "message_id": new_msg.id,
-                "author_id": new_msg.author.id,
-                "channel_id": new_msg.channel.id,
-            },
+            context=build_message_context(new_msg),
         )
         await edit_processing_message_error(
             processing_msg,
