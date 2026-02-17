@@ -4,9 +4,6 @@ from typing import Any, cast
 
 from llmcord.core.config import is_gemini_model
 from llmcord.services.llm.providers.gemini import configure_gemini_kwargs
-from llmcord.services.llm.providers.github import (
-    configure_github_copilot_kwargs,
-)
 from llmcord.services.llm.types import LiteLLMOptions
 
 
@@ -40,7 +37,7 @@ def build_litellm_model_name(provider: str, model: str) -> str:
     """Build the LiteLLM model name with proper provider prefix.
 
     Args:
-        provider: Provider name (e.g., "gemini", "openai", "github_copilot")
+        provider: Provider name (e.g., "gemini", "openai")
         model: Model name
 
     Returns:
@@ -49,8 +46,6 @@ def build_litellm_model_name(provider: str, model: str) -> str:
     """
     if provider == "gemini":
         return f"gemini/{model}"
-    if provider == "github_copilot":
-        return f"github_copilot/{model}"
     if provider == "mistral":
         return f"mistral/{model}"
     if provider == "openrouter":
@@ -74,7 +69,7 @@ def prepare_litellm_kwargs(
     both the main model handler and search decider.
 
     Args:
-        provider: Provider name (e.g., "gemini", "openai", "github_copilot")
+        provider: Provider name (e.g., "gemini", "openai")
         model: Model name (actual model, after any aliasing)
         messages: List of message dicts
         api_key: API key to use
@@ -102,9 +97,8 @@ def prepare_litellm_kwargs(
     if options.temperature is not None:
         kwargs["temperature"] = options.temperature
 
-    # Add base_url for OpenAI-compatible providers (not Gemini or GitHub
-    # Copilot).
-    if options.base_url and provider not in ("gemini", "github_copilot"):
+    # Add base_url for OpenAI-compatible providers (not Gemini).
+    if options.base_url and provider != "gemini":
         kwargs["base_url"] = options.base_url
 
     # Provider-specific configuration
@@ -118,8 +112,6 @@ def prepare_litellm_kwargs(
             enable_grounding=options.enable_grounding,
             contains_audio_or_video_input=has_media_inputs,
         )
-    elif provider == "github_copilot":
-        configure_github_copilot_kwargs(kwargs, api_key, options.extra_headers)
 
     # Merge extra headers if provided (after provider-specific headers)
     if options.extra_headers and "extra_headers" not in kwargs:

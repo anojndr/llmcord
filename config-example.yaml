@@ -135,8 +135,6 @@ models:
 
   mistral/mistral-large-latest:
 
-  github_copilot/gpt-5-mini:
-
   # Example: disable system prompt for models that reject developer instructions
   # some-provider/some-model:
   #   disable_system_prompt: true

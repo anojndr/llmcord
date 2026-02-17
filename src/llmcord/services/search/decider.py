@@ -234,7 +234,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     {"needs_search": False}.
 
     decider_config should contain:
-        - provider: "gemini", "github_copilot", or other (OpenAI-compatible)
+        - provider: "gemini" or other (OpenAI-compatible)
         - model: model name
         - api_keys: list of API keys
         - base_url: (optional) for OpenAI-compatible providers

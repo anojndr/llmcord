@@ -76,7 +76,7 @@ Or run local models with:
 - **Entry point:** [src/llmcord/__main__.py](src/llmcord/__main__.py) starts the bot via [src/llmcord/bot.py](src/llmcord/bot.py).
 - **Discord layer:** [src/llmcord/bot.py](src/llmcord/bot.py) wires slash commands, events, and health check server.
 - **Message pipeline:** [src/llmcord/logic/processor.py](src/llmcord/logic/processor.py) builds conversation context, fetches attachments, runs web search, and streams model responses.
-- **Provider glue:** [src/llmcord/services/llm.py](src/llmcord/services/llm.py) centralizes LiteLLM provider setup (Gemini, GitHub Copilot, OpenAI-compatible).
+- **Provider glue:** [src/llmcord/services/llm.py](src/llmcord/services/llm.py) centralizes LiteLLM provider setup (Gemini and OpenAI-compatible).
 - **Persistence:** [src/llmcord/services/database.py](src/llmcord/services/database.py) tracks bad API keys and user model preferences in Turso/libSQL or local SQLite.
 - **UI components:** [src/llmcord/ui/views.py](src/llmcord/ui/views.py) renders the “View Response Better” and “Show Sources” buttons.
 
