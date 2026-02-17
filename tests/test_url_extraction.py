@@ -6,6 +6,8 @@ from typing import Any
 import pytest
 
 from llmcord.logic.messages import MessageBuildContext, build_messages
+from llmcord.services.facebook import DownloadedFacebookVideo, FacebookDownloadResult
+from llmcord.services.tiktok import DownloadedTikTokVideo, TikTokDownloadResult
 
 from ._fakes import DummyTwitterApi, FakeMessage, FakeUser
 
@@ -648,3 +650,161 @@ async def test_general_url_extraction_appended(
     ) in user_content
     assert "Elephants are large mammals" in user_content
     assert calls == ["https://en.wikipedia.org/wiki/Elephant"]
+
+
+@pytest.mark.asyncio
+async def test_tiktok_and_facebook_not_failed_when_mp4_download_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    tiktok_url = "https://www.tiktok.com/@creator/video/7602846033332292894"
+    facebook_url = "https://www.facebook.com/share/r/18ZA4xvsak/"
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _fake_maybe_download_tiktok_videos_with_failures(**kwargs: object):
+        return TikTokDownloadResult(
+            videos=[
+                DownloadedTikTokVideo(
+                    content=b"tiktok-mp4-bytes",
+                    content_type="video/mp4",
+                ),
+            ],
+            failed_urls=[],
+        )
+
+    async def _fake_maybe_download_facebook_videos_with_failures(**kwargs: object):
+        return FacebookDownloadResult(
+            videos=[
+                DownloadedFacebookVideo(
+                    content=b"facebook-mp4-bytes",
+                    content_type="video/mp4",
+                ),
+            ],
+            failed_urls=[],
+        )
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_tiktok_videos_with_failures",
+        _fake_maybe_download_tiktok_videos_with_failures,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_facebook_videos_with_failures",
+        _fake_maybe_download_facebook_videos_with_failures,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=9,
+        content=f"at ai summarize {tiktok_url} and {facebook_url}",
+        author=FakeUser(1234),
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gemini-2.0-flash",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    assert result.failed_extractions == []
+    assert not any(
+        warning.startswith("⚠️ failed to extract from some urls.")
+        for warning in result.user_warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_tiktok_and_facebook_failed_only_when_mp4_download_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    tiktok_url = "https://www.tiktok.com/@creator/video/7602846033332292894"
+    facebook_url = "https://www.facebook.com/share/r/18ZA4xvsak/"
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        return [], [], []
+
+    async def _fake_maybe_download_tiktok_videos_with_failures(**kwargs: object):
+        return TikTokDownloadResult(videos=[], failed_urls=[tiktok_url])
+
+    async def _fake_maybe_download_facebook_videos_with_failures(**kwargs: object):
+        return FacebookDownloadResult(videos=[], failed_urls=[facebook_url])
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_tiktok_videos_with_failures",
+        _fake_maybe_download_tiktok_videos_with_failures,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_facebook_videos_with_failures",
+        _fake_maybe_download_facebook_videos_with_failures,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=10,
+        content=f"at ai summarize {tiktok_url} and {facebook_url}",
+        author=FakeUser(1234),
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gemini-2.0-flash",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    assert set(result.failed_extractions) == {tiktok_url, facebook_url}
+    assert any(
+        warning.startswith("⚠️ failed to extract from some urls.")
+        for warning in result.user_warnings
+    )

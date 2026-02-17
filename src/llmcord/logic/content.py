@@ -245,6 +245,13 @@ def _normalize_generic_urls(text: str) -> list[str]:
                 "youtu.be",
                 "reddit.com",
                 "redd.it",
+                "tiktok.com",
+                "vm.tiktok.com",
+                "m.tiktok.com",
+                "vt.tiktok.com",
+                "facebook.com",
+                "m.facebook.com",
+                "fb.watch",
             ]
         ):
             continue

@@ -47,6 +47,14 @@ class DownloadedFacebookVideo:
 
 
 @dataclass(frozen=True, slots=True)
+class FacebookDownloadResult:
+    """Facebook downloader result with successful payloads and failed source URLs."""
+
+    videos: list[DownloadedFacebookVideo]
+    failed_urls: list[str]
+
+
+@dataclass(frozen=True, slots=True)
 class _FDownloaderParams:
     search_url: str
     k_exp: str
@@ -221,21 +229,36 @@ async def maybe_download_facebook_videos(
     httpx_client: httpx.AsyncClient,
 ) -> list[DownloadedFacebookVideo]:
     """Download Facebook videos via FDownloader for Gemini requests."""
+    result = await maybe_download_facebook_videos_with_failures(
+        cleaned_content=cleaned_content,
+        actual_model=actual_model,
+        httpx_client=httpx_client,
+    )
+    return result.videos
+
+
+async def maybe_download_facebook_videos_with_failures(
+    *,
+    cleaned_content: str,
+    actual_model: str,
+    httpx_client: httpx.AsyncClient,
+) -> FacebookDownloadResult:
+    """Download Facebook videos and return URLs that did not yield a video payload."""
     if not is_gemini_model(actual_model):
-        return []
+        return FacebookDownloadResult(videos=[], failed_urls=[])
 
     facebook_urls = _extract_facebook_urls(cleaned_content)
     if not facebook_urls:
-        return []
+        return FacebookDownloadResult(videos=[], failed_urls=[])
 
     async with AsyncSession(impersonate="chrome120") as session:
         params = await _fetch_fdownloader_params(session=session)
         if not params:
-            return []
+            return FacebookDownloadResult(videos=[], failed_urls=facebook_urls)
 
         async def _download_for_url(
             facebook_url: str,
-        ) -> DownloadedFacebookVideo | None:
+        ) -> tuple[str, DownloadedFacebookVideo | None]:
             try:
                 result_html = await _fetch_fdownloader_result_html(
                     facebook_url=facebook_url,
@@ -243,17 +266,17 @@ async def maybe_download_facebook_videos(
                     session=session,
                 )
                 if not result_html:
-                    return None
+                    return facebook_url, None
 
                 token = _extract_first_snapcdn_token(result_html)
                 if not token:
-                    return None
+                    return facebook_url, None
 
                 download_url = _extract_download_url_from_snapcdn_token(token)
                 if not download_url:
-                    return None
+                    return facebook_url, None
 
-                return await _download_video_payload(
+                return facebook_url, await _download_video_payload(
                     download_url=download_url,
                     httpx_client=httpx_client,
                 )
@@ -264,12 +287,15 @@ async def maybe_download_facebook_videos(
                     error=exc,
                     context={"facebook_url": facebook_url},
                 )
-                return None
+                return facebook_url, None
 
-        downloaded_videos = await asyncio.gather(
+        download_results = await asyncio.gather(
             *(_download_for_url(url) for url in facebook_urls),
         )
-        return [video for video in downloaded_videos if video is not None]
+
+        videos = [video for _, video in download_results if video is not None]
+        failed_urls = [url for url, video in download_results if video is None]
+        return FacebookDownloadResult(videos=videos, failed_urls=failed_urls)
 
 
 async def maybe_download_facebook_video(

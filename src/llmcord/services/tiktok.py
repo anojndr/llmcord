@@ -49,6 +49,14 @@ class DownloadedTikTokVideo:
     content_type: str
 
 
+@dataclass(slots=True)
+class TikTokDownloadResult:
+    """TikTok downloader result with successful payloads and failed source URLs."""
+
+    videos: list[DownloadedTikTokVideo]
+    failed_urls: list[str]
+
+
 def _extract_tiktok_urls(text: str) -> list[str]:
     unique_urls: list[str] = []
     seen_urls: set[str] = set()
@@ -185,23 +193,40 @@ async def maybe_download_tiktok_videos(
     httpx_client: httpx.AsyncClient,
 ) -> list[DownloadedTikTokVideo]:
     """Download TikTok videos via Snaptik for Gemini requests when URLs are present."""
+    result = await maybe_download_tiktok_videos_with_failures(
+        cleaned_content=cleaned_content,
+        actual_model=actual_model,
+        httpx_client=httpx_client,
+    )
+    return result.videos
+
+
+async def maybe_download_tiktok_videos_with_failures(
+    *,
+    cleaned_content: str,
+    actual_model: str,
+    httpx_client: httpx.AsyncClient,
+) -> TikTokDownloadResult:
+    """Download TikTok videos and return URLs that did not yield a video payload."""
     if not is_gemini_model(actual_model):
-        return []
+        return TikTokDownloadResult(videos=[], failed_urls=[])
 
     tiktok_urls = _extract_tiktok_urls(cleaned_content)
     if not tiktok_urls:
-        return []
+        return TikTokDownloadResult(videos=[], failed_urls=[])
 
-    async def _download_for_url(tiktok_url: str) -> DownloadedTikTokVideo | None:
+    async def _download_for_url(
+        tiktok_url: str,
+    ) -> tuple[str, DownloadedTikTokVideo | None]:
         try:
             download_url = await _fetch_snaptik_download_url(
                 tiktok_url=tiktok_url,
                 httpx_client=httpx_client,
             )
             if not download_url:
-                return None
+                return tiktok_url, None
 
-            return await _download_video_payload(
+            return tiktok_url, await _download_video_payload(
                 download_url=download_url,
                 httpx_client=httpx_client,
             )
@@ -212,12 +237,15 @@ async def maybe_download_tiktok_videos(
                 error=exc,
                 context={"tiktok_url": tiktok_url},
             )
-            return None
+            return tiktok_url, None
 
-    downloaded_videos = await asyncio.gather(
+    download_results = await asyncio.gather(
         *(_download_for_url(url) for url in tiktok_urls),
     )
-    return [video for video in downloaded_videos if video is not None]
+
+    videos = [video for _, video in download_results if video is not None]
+    failed_urls = [url for url, video in download_results if video is None]
+    return TikTokDownloadResult(videos=videos, failed_urls=failed_urls)
 
 
 async def maybe_download_tiktok_video(

@@ -31,8 +31,8 @@ from llmcord.logic.utils import (
 )
 from llmcord.services.database import get_bad_keys_db
 from llmcord.services.extractors import TwitterApiProtocol
-from llmcord.services.facebook import maybe_download_facebook_videos
-from llmcord.services.tiktok import maybe_download_tiktok_videos
+from llmcord.services.facebook import maybe_download_facebook_videos_with_failures
+from llmcord.services.tiktok import maybe_download_tiktok_videos_with_failures
 
 logger = logging.getLogger(__name__)
 
@@ -169,44 +169,12 @@ async def _populate_node_if_needed(
     )
 
     if is_gemini_model(context.actual_model):
-        tiktok_videos = await maybe_download_tiktok_videos(
+        await _add_social_video_attachments(
             cleaned_content=cleaned_content,
-            actual_model=context.actual_model,
-            httpx_client=context.httpx_client,
+            context=context,
+            curr_node=curr_node,
+            processed_attachments=processed_attachments,
         )
-        if tiktok_videos:
-            processed_attachments.extend(
-                {
-                    "content_type": tiktok_video.content_type,
-                    "content": tiktok_video.content,
-                    "text": None,
-                }
-                for tiktok_video in tiktok_videos
-            )
-            logger.info(
-                "Added %s downloaded TikTok video attachment(s) for Gemini processing",
-                len(tiktok_videos),
-            )
-
-        facebook_videos = await maybe_download_facebook_videos(
-            cleaned_content=cleaned_content,
-            actual_model=context.actual_model,
-            httpx_client=context.httpx_client,
-        )
-        if facebook_videos:
-            processed_attachments.extend(
-                {
-                    "content_type": facebook_video.content_type,
-                    "content": facebook_video.content,
-                    "text": None,
-                }
-                for facebook_video in facebook_videos
-            )
-            logger.info(
-                "Added %s downloaded Facebook video attachment(s) for Gemini "
-                "processing",
-                len(facebook_videos),
-            )
 
     curr_node.text = _build_initial_text(
         cleaned_content=cleaned_content,
@@ -296,6 +264,56 @@ def _should_omit_googlelens_image_inputs(
     if not is_googlelens_query(curr_msg, context.discord_bot):
         return False
     return not _supports_provider_model_image_input(context=context)
+
+
+async def _add_social_video_attachments(
+    *,
+    cleaned_content: str,
+    context: MessageBuildContext,
+    curr_node: MsgNode,
+    processed_attachments: list[dict[str, bytes | str | None]],
+) -> None:
+    tiktok_result = await maybe_download_tiktok_videos_with_failures(
+        cleaned_content=cleaned_content,
+        actual_model=context.actual_model,
+        httpx_client=context.httpx_client,
+    )
+    if tiktok_result.failed_urls:
+        curr_node.failed_extractions.extend(tiktok_result.failed_urls)
+    if tiktok_result.videos:
+        processed_attachments.extend(
+            {
+                "content_type": tiktok_video.content_type,
+                "content": tiktok_video.content,
+                "text": None,
+            }
+            for tiktok_video in tiktok_result.videos
+        )
+        logger.info(
+            "Added %s downloaded TikTok video attachment(s) for Gemini processing",
+            len(tiktok_result.videos),
+        )
+
+    facebook_result = await maybe_download_facebook_videos_with_failures(
+        cleaned_content=cleaned_content,
+        actual_model=context.actual_model,
+        httpx_client=context.httpx_client,
+    )
+    if facebook_result.failed_urls:
+        curr_node.failed_extractions.extend(facebook_result.failed_urls)
+    if facebook_result.videos:
+        processed_attachments.extend(
+            {
+                "content_type": facebook_video.content_type,
+                "content": facebook_video.content,
+                "text": None,
+            }
+            for facebook_video in facebook_result.videos
+        )
+        logger.info(
+            "Added %s downloaded Facebook video attachment(s) for Gemini processing",
+            len(facebook_result.videos),
+        )
 
 
 def _supports_provider_model_image_input(*, context: MessageBuildContext) -> bool:

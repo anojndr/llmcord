@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from llmcord.logic.messages import MessageBuildContext, build_messages
-from llmcord.services.tiktok import DownloadedTikTokVideo
+from llmcord.services.tiktok import DownloadedTikTokVideo, TikTokDownloadResult
 
 from ._fakes import DummyTwitterApi, FakeAttachment, FakeMessage, FakeUser
 
@@ -246,12 +246,15 @@ async def test_tiktok_query_adds_video_file_for_gemini(
         return [], [], []
 
     async def _fake_maybe_download_tiktok_videos(**kwargs: object):
-        return [
-            DownloadedTikTokVideo(
-                content=b"fake-mp4-bytes",
-                content_type="video/mp4",
-            ),
-        ]
+        return TikTokDownloadResult(
+            videos=[
+                DownloadedTikTokVideo(
+                    content=b"fake-mp4-bytes",
+                    content_type="video/mp4",
+                ),
+            ],
+            failed_urls=[],
+        )
 
     async def _noop_set_parent_message(**kwargs: object) -> None:
         return None
@@ -261,7 +264,7 @@ async def test_tiktok_query_adds_video_file_for_gemini(
         _fake_download_and_process_attachments,
     )
     monkeypatch.setattr(
-        "llmcord.logic.messages.maybe_download_tiktok_videos",
+        "llmcord.logic.messages.maybe_download_tiktok_videos_with_failures",
         _fake_maybe_download_tiktok_videos,
     )
     monkeypatch.setattr(
@@ -336,7 +339,7 @@ async def test_tiktok_download_not_used_for_non_gemini(
         _fake_download_and_process_attachments,
     )
     monkeypatch.setattr(
-        "llmcord.logic.messages.maybe_download_tiktok_videos",
+        "llmcord.logic.messages.maybe_download_tiktok_videos_with_failures",
         _failing_tiktok_download,
     )
     monkeypatch.setattr(
