@@ -58,20 +58,19 @@ from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 
 logger = logging.getLogger(__name__)
 
-LITELLM_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
-    litellm.exceptions.OpenAIError,
-)
-for _exception_name in (
-    "BadRequestError",
-    "RateLimitError",
-    "APIError",
-    "APIConnectionError",
-    "ServiceUnavailableError",
-    "NotFoundError",
-):
-    _exception_type = getattr(litellm.exceptions, _exception_name, None)
-    if _exception_type is not None:
-        LITELLM_RETRYABLE_ERRORS += (_exception_type,)
+
+def _collect_litellm_exceptions() -> tuple[type[Exception], ...]:
+    return tuple(
+        dict.fromkeys(
+            exception_type
+            for exception_type in vars(litellm.exceptions).values()
+            if isinstance(exception_type, type)
+            and issubclass(exception_type, Exception)
+        ),
+    )
+
+
+LITELLM_RETRYABLE_ERRORS = _collect_litellm_exceptions()
 
 GENERATION_EXCEPTIONS = (
     FirstTokenTimeoutError,

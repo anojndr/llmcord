@@ -39,20 +39,20 @@ from llmcord.services.search.utils import (
 logger = logging.getLogger(__name__)
 
 _FALLBACK_MODEL_PARTS = 3
-DECIDER_RETRYABLE_EXCEPTIONS: tuple[type[Exception], ...] = (
-    litellm.exceptions.OpenAIError,
-)
-for _exception_name in (
-    "BadRequestError",
-    "RateLimitError",
-    "APIError",
-    "APIConnectionError",
-    "ServiceUnavailableError",
-    "NotFoundError",
-):
-    _exception_type = getattr(litellm.exceptions, _exception_name, None)
-    if _exception_type is not None:
-        DECIDER_RETRYABLE_EXCEPTIONS += (_exception_type,)
+
+
+def _collect_litellm_exceptions() -> tuple[type[Exception], ...]:
+    return tuple(
+        dict.fromkeys(
+            exception_type
+            for exception_type in vars(litellm.exceptions).values()
+            if isinstance(exception_type, type)
+            and issubclass(exception_type, Exception)
+        ),
+    )
+
+
+DECIDER_RETRYABLE_EXCEPTIONS = _collect_litellm_exceptions()
 
 
 @dataclass(slots=True)
