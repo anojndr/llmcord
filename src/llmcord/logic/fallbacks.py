@@ -16,6 +16,33 @@ DEFAULT_FALLBACK_MODELS: tuple[FallbackModel, ...] = (
     ("gemini", "gemma-3-27b-it", "gemini/gemma-3-27b-it"),
 )
 
+GOOGLE_GEMINI_CLI_FALLBACKS: dict[tuple[str, str], FallbackModel] = {
+    (
+        "google-gemini-cli",
+        "gemini-3-flash-preview-low",
+    ): (
+        "gemini",
+        "gemini-3-flash-preview-low",
+        "gemini/gemini-3-flash-preview-low",
+    ),
+    (
+        "google-gemini-cli",
+        "gemini-3-flash-preview-minimal",
+    ): (
+        "gemini",
+        "gemini-3-flash-preview-minimal",
+        "gemini/gemini-3-flash-preview-minimal",
+    ),
+    (
+        "google-gemini-cli",
+        "gemini-3-flash-preview-high",
+    ): (
+        "gemini",
+        "gemini-3-flash-preview-high",
+        "gemini/gemini-3-flash-preview-high",
+    ),
+}
+
 
 def build_default_fallback_chain(
     original_provider: str,
@@ -23,11 +50,21 @@ def build_default_fallback_chain(
 ) -> list[FallbackModel]:
     """Build ordered default fallback models excluding the original pair."""
     original = (original_provider, original_model)
-    return [
+
+    fallback_chain = [
         fallback
         for fallback in DEFAULT_FALLBACK_MODELS
         if (fallback[0], fallback[1]) != original
     ]
+
+    preferred_first_fallback = GOOGLE_GEMINI_CLI_FALLBACKS.get(original)
+    if (
+        preferred_first_fallback is not None
+        and preferred_first_fallback not in fallback_chain
+    ):
+        fallback_chain.insert(0, preferred_first_fallback)
+
+    return fallback_chain
 
 
 def get_next_fallback(
