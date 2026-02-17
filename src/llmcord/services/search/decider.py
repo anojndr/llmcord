@@ -9,10 +9,15 @@ from typing import Any
 
 import litellm
 
-from llmcord.core.config import ensure_list, get_config
+from llmcord.core.config import get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
-from llmcord.logic.fallbacks import FallbackModel, build_default_fallback_chain
+from llmcord.logic.fallbacks import (
+    FallbackModel,
+    apply_fallback_config,
+    get_next_fallback,
+)
+from llmcord.logic.generation_types import FallbackState
 from llmcord.services.database import KeyRotator, get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
@@ -26,6 +31,8 @@ from llmcord.services.search.utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+_FALLBACK_MODEL_PARTS = 3
 
 
 @dataclass(slots=True)
@@ -199,29 +206,24 @@ async def _run_decider_once(
     return None, exhausted_keys
 
 
-def _get_next_decider_fallback(
-    fallback_level: int,
-    *,
-    original_provider: str,
-    original_model: str,
-) -> tuple[int, FallbackModel | None, str | None]:
-    fallback_chain = build_default_fallback_chain(original_provider, original_model)
+def _normalize_fallback_chain(raw_chain: object) -> list[FallbackModel]:
+    if not isinstance(raw_chain, list):
+        return []
 
-    if fallback_level < len(fallback_chain):
-        next_fallback = fallback_chain[fallback_level]
-        next_level = fallback_level + 1
-        if fallback_level == 0:
-            log_message = (
-                "Search decider exhausted all keys for provider "
-                f"'{original_provider}'. Falling back to {next_fallback[2]}..."
-            )
-        else:
-            log_message = (
-                f"Search decider fallback failed. Falling back to {next_fallback[2]}..."
-            )
-        return next_level, next_fallback, log_message
-
-    return fallback_level, None, None
+    normalized: list[FallbackModel] = []
+    for item in raw_chain:
+        if isinstance(item, tuple) and len(item) == _FALLBACK_MODEL_PARTS:
+            provider = item[0]
+            model = item[1]
+            provider_slash_model = item[2]
+            if not (
+                isinstance(provider, str)
+                and isinstance(model, str)
+                and isinstance(provider_slash_model, str)
+            ):
+                continue
+            normalized.append((provider, model, provider_slash_model))
+    return normalized
 
 
 async def decide_web_search(messages: list, decider_config: dict) -> dict:
@@ -248,10 +250,18 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
 
     default_result = {"needs_search": False}
     config = get_config()
+    models_config = config.get("models")
+    if not isinstance(models_config, dict):
+        models_config = {}
 
-    fallback_level = 0
-    original_provider = provider
-    original_model = model
+    fallback_chain = _normalize_fallback_chain(decider_config.get("fallback_chain"))
+    fallback_state = FallbackState(
+        fallback_level=0,
+        fallback_index=0,
+        use_custom_fallbacks=bool(fallback_chain),
+        original_provider=provider,
+        original_model=model,
+    )
 
     while True:
         runner = _get_decider_runner()
@@ -271,28 +281,30 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
         if not exhausted_keys:
             return default_result
 
-        fallback_level, next_fallback, log_message = _get_next_decider_fallback(
-            fallback_level,
-            original_provider=original_provider,
-            original_model=original_model,
+        next_fallback = get_next_fallback(
+            state=fallback_state,
+            fallback_chain=fallback_chain,
+            provider=provider,
+            initial_key_count=len(api_keys),
         )
-        if log_message:
-            logger.warning(log_message)
         if not next_fallback:
             logger.error(
                 ("Search decider fallback options exhausted, skipping web search"),
             )
             return default_result
 
-        new_provider, new_model, _ = next_fallback
-        provider = new_provider
-        model = new_model
-
+        provider, model, provider_slash_model, base_url, api_keys = (
+            apply_fallback_config(
+                next_fallback=next_fallback,
+                config=config,
+            )
+        )
         fallback_provider_config = config.get("providers", {}).get(provider, {})
-        base_url = fallback_provider_config.get("base_url")
-        api_keys = ensure_list(fallback_provider_config.get("api_key"))
         extra_headers = fallback_provider_config.get("extra_headers")
-        model_parameters = None
+        model_parameters_raw = models_config.get(provider_slash_model)
+        model_parameters = (
+            model_parameters_raw if isinstance(model_parameters_raw, dict) else None
+        )
 
         if api_keys:
             continue

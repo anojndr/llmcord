@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_metadata
-from llmcord.services.search.decider import DeciderRunConfig, _run_decider_once
+from llmcord.services.search.decider import (
+    DeciderRunConfig,
+    _run_decider_once,
+    decide_web_search,
+)
 from llmcord.services.search.utils import convert_messages_to_openai_format
 
 from ._fakes import FakeMessage, FakeUser
@@ -268,3 +272,61 @@ async def test_decider_google_gemini_cli_uses_native_stream(
 
     assert exhausted is False
     assert result == {"needs_search": False}
+
+
+@pytest.mark.asyncio
+async def test_decider_uses_custom_fallback_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_models: list[str] = []
+
+    async def _fake_runner(
+        _messages: list[object],
+        run_config: DeciderRunConfig,
+    ) -> tuple[dict[str, object] | None, bool]:
+        attempted_models.append(f"{run_config.provider}/{run_config.model}")
+        if len(attempted_models) == 1:
+            return None, True
+        return {"needs_search": False}, False
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._get_decider_runner",
+        lambda: _fake_runner,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.get_config",
+        lambda: {
+            "providers": {
+                "mistral": {
+                    "api_key": ["mistral-key"],
+                    "base_url": "https://api.mistral.ai/v1",
+                },
+            },
+            "models": {},
+        },
+    )
+
+    result = await decide_web_search(
+        [{"role": "user", "content": "hello"}],
+        {
+            "provider": "gemini",
+            "model": "gemini-3-flash-preview",
+            "api_keys": ["gemini-key"],
+            "base_url": None,
+            "extra_headers": None,
+            "model_parameters": None,
+            "fallback_chain": [
+                (
+                    "mistral",
+                    "mistral-large-latest",
+                    "mistral/mistral-large-latest",
+                ),
+            ],
+        },
+    )
+
+    assert result == {"needs_search": False}
+    assert attempted_models == [
+        "gemini/gemini-3-flash-preview",
+        "mistral/mistral-large-latest",
+    ]
