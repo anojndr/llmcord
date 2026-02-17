@@ -84,6 +84,64 @@ async def test_googlelens_url_content_extraction_uses_fast_fail_settings(
 
 
 @pytest.mark.asyncio
+async def test_googlelens_reuses_shared_twitter_url_extractor(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+) -> None:
+    extractor_calls: list[str] = []
+
+    def _fake_extract_tweet_id_from_url(url: str) -> int | None:
+        extractor_calls.append(url)
+        if url.endswith("/status/2019995898894520711"):
+            return 2019995898894520711
+        return None
+
+    async def _fake_extract_url_content(
+        _url: str,
+        _httpx_client: Any,
+        *,
+        timeout_seconds: float = 20,
+        retries: int = 2,
+        **_kwargs: object,
+    ) -> str | None:
+        del timeout_seconds, retries
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.services.extractors._extract_tweet_id_from_url",
+        _fake_extract_tweet_id_from_url,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.extractors.extract_url_content",
+        _fake_extract_url_content,
+    )
+
+    visual_matches = [
+        {
+            "title": "Tweet Result",
+            "link": "https://x.com/cb_doge/status/2019995898894520711",
+            "source": "x.com",
+        },
+        {
+            "title": "Regular Result",
+            "link": "https://example.com/post/1",
+            "source": "example.com",
+        },
+    ]
+
+    _lens_results, twitter_urls_found = await _process_google_lens_results(
+        visual_matches,
+        httpx_client,
+    )
+
+    assert extractor_calls == [
+        "https://x.com/cb_doge/status/2019995898894520711",
+        "https://example.com/post/1",
+    ]
+    assert twitter_urls_found == ["https://x.com/cb_doge/status/2019995898894520711"]
+
+
+@pytest.mark.asyncio
 async def test_googlelens_twitter_url_parsing_extracts_status_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -579,12 +579,7 @@ async def _process_yandex_results(
             result_line += f"\n  Content: {content}"
         lens_results.append(result_line)
 
-        # Check if the link is a Twitter/X URL and extract for later
-        # processing.
-        if link and re.search(
-            r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
-            link,
-        ):
+        if link and _extract_tweet_id_from_url(link) is not None:
             twitter_urls_found.append(link)
 
     return lens_results, twitter_urls_found
@@ -622,10 +617,7 @@ async def _process_google_lens_results(
             result_line += f"\n  Content: {content}"
         lens_results.append(result_line)
 
-        if link and re.search(
-            r"(?:twitter\.com|x\.com)/[a-zA-Z0-9_]+/status/[0-9]+",
-            link,
-        ):
+        if link and _extract_tweet_id_from_url(link) is not None:
             twitter_urls_found.append(link)
 
     return lens_results, twitter_urls_found
