@@ -36,14 +36,14 @@ llmcord supports remote models from:
 - [OpenAI API](https://platform.openai.com/docs/models)
 - [xAI API](https://docs.x.ai/docs/models)
 - [Google Gemini API](https://ai.google.dev/gemini-api/docs/models)
-- Google Cloud Code Assist (Gemini CLI OAuth)
+- **Google Cloud Code Assist (Gemini CLI OAuth)**
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
 - [OpenRouter](https://openrouter.ai/models)
 
 Or run local models with:
 - [Ollama](https://ollama.com)
-- [LM Studio](https://lmstudio.ai)
+- [LM Studio](LM Studio)
 - [vLLM](https://github.com/vllm-project/vllm)
 
 ...Or use any other OpenAI compatible API server.
@@ -51,66 +51,49 @@ Or run local models with:
 ---
 
 ### And more:
-- **Web Search**: Automatic web search with Tavily or Exa MCP (for non-Gemini models) or native Gemini grounding. Uses an LLM to intelligently decide when search is needed. Exa MCP is hardcoded and used when no Tavily API keys are provided.
-- **"View Response Better" button**: Upload long responses to rentry.co for easier reading
-- **"Show Sources" button**: View search queries and source URLs when web search was used
-- Supports image attachments when using a vision model (like gpt-5, grok-4, claude-4, etc.)
-- Supports Reverse Image Search (Google Lens via SerpApi + Yandex) (start your message with "googlelens" and attach an image)
-- Supports YouTube video transcripts (just paste a YouTube link)
-- Supports Twitter/X link expansion (automatically fetches tweet content and replies)
-- Supports Reddit link expansion (automatically fetches post content and comments)
-- Supports text file attachments (.txt, .py, .c, etc.)
-- Supports PDF attachments (text extraction for all models; native handling for Gemini)
-- Supports audio and video attachments (Gemini only)
-- Customizable personality (aka system prompt)
-- User identity aware (OpenAI API and xAI API only)
-- Streamed responses (turns green when complete, automatically splits into separate messages when too long)
-- Hot reloading config (you can change settings without restarting the bot)
-- Displays helpful warnings when appropriate (like "⚠️ Only using last 25 messages" when the customizable message limit is exceeded)
-- Caches message data in a size-managed (no memory leaks) and mutex-protected (no race conditions) global dictionary to maximize efficiency and minimize Discord API calls
-- Fully asynchronous
-- Modular codebase for easy customization
+- **Web Search**: Automatic web search with Tavily or Exa MCP (for non-Gemini models) or native Gemini grounding. Uses an LLM to intelligently decide when search is needed.
+- **Research Commands**: Use `researchpro` or `researchmini` for deep multi-step research via Tavily.
+- **"View Response Better" button**: Upload long responses to rentry.co for easier reading.
+- **"Show Sources" button**: View search queries and source URLs with pagination for web searches.
+- **"Show Thought Process" button**: Reveal the hidden chain-of-thought for reasoning models (e.g., Gemini 3, o1, o3).
+- Supports image attachments when using a vision model.
+- Supports Reverse Image Search (Google Lens via SerpApi + Yandex) (start your message with `googlelens` and attach an image).
+- Supports YouTube video transcripts (just paste a YouTube link).
+- Supports Twitter/X and Reddit link expansion.
+- **Social Video Support**: Automatically downloads and processes TikTok and Facebook video links (Gemini only).
+- Supports text file attachments (.txt, .py, .c, etc.) and PDF attachments (native for Gemini, text extraction for others).
+- Customizable personality (aka system prompt) with `{date}` and `{time}` support.
+- Hot reloading config (change settings without restarting the bot).
+- Fully asynchronous and mutex-protected message caching to minimize Discord API calls.
 
 ## Architecture overview
 
-- **Entry point:** [src/llmcord/__main__.py](src/llmcord/__main__.py) starts the bot via [src/llmcord/bot.py](src/llmcord/bot.py).
-- **Discord layer:** [src/llmcord/bot.py](src/llmcord/bot.py) wires slash commands, events, and health check server.
-- **Message pipeline:** [src/llmcord/logic/processor.py](src/llmcord/logic/processor.py) builds conversation context, fetches attachments, runs web search, and streams model responses.
-- **Provider glue:** [src/llmcord/services/llm.py](src/llmcord/services/llm.py) centralizes LiteLLM provider setup (Gemini and OpenAI-compatible).
-- **Persistence:** [src/llmcord/services/database.py](src/llmcord/services/database.py) tracks bad API keys and user model preferences in Turso/libSQL or local SQLite.
-- **UI components:** [src/llmcord/ui/views.py](src/llmcord/ui/views.py) renders the “View Response Better” and “Show Sources” buttons.
+- **Entry point:** [src/llmcord/__main__.py](src/llmcord/__main__.py) starts the bot via [src/llmcord/entrypoint.py](src/llmcord/entrypoint.py).
+- **Discord layer:** [src/llmcord/discord/](src/llmcord/discord/) handles slash commands, events, and UI interactions.
+- **Message pipeline:** [src/llmcord/logic/pipeline.py](src/llmcord/logic/pipeline.py) orchestrates context building, web search, and response generation.
+- **Provider glue:** [src/llmcord/services/llm/](src/llmcord/services/llm/) centralizes LiteLLM integration and provider-specific configurations.
+- **Persistence:** [src/llmcord/services/database/](src/llmcord/services/database/) manages user preferences and bad API key tracking using Turso/libSQL.
+- **External Services:** [src/llmcord/services/](src/llmcord/services/) contains logic for scraping TikTok, Facebook, Twitter, and performing web searches.
 
 ## Commands
 
-- `/model` — view or change your active model.
-- `/searchdecidermodel` — view or change the model used to decide when web search is needed.
-- `/resetallpreferences` — owner-only reset for saved model preferences.
+- `/model` — View or switch your active model.
+- `/searchdecidermodel` — View or switch the model used to decide when web search is needed.
+- `/resetallpreferences` — [Owner only] Reset all saved user model preferences to defaults.
 
 ## Configuration notes
 
 ### Profiles
-`config.yaml` supports two profiles: `main` and `test`. Set `profile: main` (or `test`) to select which profile to run. The only profile-specific settings are `port` and `bot_token`.
+`config.yaml` supports `main` and `test` profiles. Set `profile: main` to select which one to run. Profile-specific settings include `port` and `bot_token`.
 
-### Provider/model naming
-- Models are configured as `provider/model` keys under `models:` in [config-example.yaml](config-example.yaml).
-- The first entry in `models` becomes the default.
-- Add `:vision` at the end of the model key when you want to force image support.
+### Web Search
+- **Tavily** (requires API key) and **Exa MCP** are supported.
+- Set `web_search_provider: auto` to prefer Tavily when keys exist, falling back to Exa.
+- The `web_search_decider_model` dictates which LLM determines search necessity.
 
-### Channel model overrides
-You can lock a channel to a specific model via `channel_model_overrides` in config. When set, `/model` is disabled in that channel.
-
-### Web search
-- **Tavily** (API keys) and **Exa MCP** (endpoint) are supported.
-- `web_search_provider: auto` prefers Tavily when keys exist, otherwise Exa.
-- A separate “search decider” model decides when search is needed.
-
-### Attachments
-- Images are supported for vision-capable models.
-- PDFs are extracted for non-Gemini models; Gemini models handle PDFs natively.
-- Gemini models can also accept audio/video files.
-
-### Health check
-A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default port is taken from the selected profile in `config.yaml` and can be overridden by the `PORT` environment variable.
+### Provider naming
+- Models are configured as `provider/model` (e.g., `gemini/gemini-2.5-pro`).
+- Add `:vision` to a model key to force vision support if not auto-detected.
 
 ## Instructions
 
@@ -120,60 +103,26 @@ A small HTTP server responds on `HOST`/`PORT` for liveness checks. The default p
    cd llmcord
    ```
 
-2. Create a virtual environment and install dependencies:
+2. Install dependencies (using [uv](https://github.com/astral-sh/uv) is recommended):
   ```bash
-  python -m venv .venv
-  .\.venv\Scripts\activate
-  python -m pip install -U -r requirements.txt
-  python -m pip install -e .
+  uv venv
+  # Windows:
+  .venv\Scripts\activate
+  # Linux/macOS:
+  source .venv/bin/activate
+
+  uv pip install -r pyproject.toml
+  uv pip install -e .
   ```
 
-3. Create a copy of "config-example.yaml" named "config.yaml" and set it up:
+3. Create a copy of `config-example.yaml` named `config.yaml` and set your `bot_token`, `providers`, and `models`.
 
-### Discord settings:
-
-| Setting | Description |
-| --- | --- |
-| **profile** | Select which profile to run: `main` or `test`. |
-| **main.bot_token** | Bot token for the `main` profile. Create a new Discord bot at [discord.com/developers/applications](https://discord.com/developers/applications) and generate a token under the "Bot" tab. Also enable "MESSAGE CONTENT INTENT". |
-| **main.port** | Health-check server port for the `main` profile. |
-| **test.bot_token** | Bot token for the `test` profile. |
-| **test.port** | Health-check server port for the `test` profile. |
-| **client_id** | Found under the "OAuth2" tab of the Discord bot you just made. |
-| **status_message** | Set a custom message that displays on the bot's Discord profile.<br /><br />**Max 128 characters.** |
-| **tavily_api_key** | Optional. API key(s) for [Tavily Search](https://tavily.com/) to enable web search for non-Gemini models. Can be a single key or a list of keys for rotation. |
-| **web_search_provider** | Which web search provider to use: `tavily`, `exa`, or `auto`. Auto prefers Tavily if keys are available, otherwise falls back to Exa. (Default: `tavily`) |
-| **web_search_max_chars_per_url** | Maximum number of characters kept per URL result snippet for Tavily/Exa web search output. (Default: `4000`) |
-| **web_search_decider_model** | The model used to decide if a query needs web search. Format: `provider/model`. (Default: `gemini/gemini-3-flash-preview`) |
-| **serpapi_api_key** | Optional. SerpApi key used to fetch Google Lens reverse image matches for `googlelens` queries. When set, results are combined with Yandex for better accuracy. |
-| **googlelens_prefer_overlapping_matches** | Optional. When `true`, reverse image matches that appear in both Google Lens and Yandex are ranked ahead of single-source matches. (Default: `true`) |
-| **reddit_client_id** | Optional. Reddit API client ID for expanding Reddit links. |
-| **reddit_client_secret** | Optional. Reddit API client secret. |
-| **reddit_user_agent** | Optional. User agent string for Reddit API requests. |
-| **twitter_accounts** | Optional. A list of Twitter/X accounts to use for tweet extraction. Each account requires a `username`, `password`, `email`, `email_password`, and `cookies` entry. |
-| **enable_youtube_transcripts** | Enable or disable YouTube transcript extraction. Useful when running on blocked cloud IPs.<br /><br />Default: `true` |
-| **max_tweet_replies** | The maximum number of tweet replies to fetch when a Twitter/X link is detected.<br /><br />Default: `50` |
-| **max_text** | The maximum amount of text allowed in a single message, including text from file attachments.<br /><br />Default: `100,000` |
-| **max_images** | The maximum number of image attachments allowed in a single message.<br /><br />Default: `5`<br /><br />**Only applicable when using a vision model.** |
-| **max_messages** | The maximum number of messages allowed in a reply chain. When exceeded, the oldest messages are dropped.<br /><br />Default: `25` |
-| **allow_dms** | Set to `false` to disable direct message access.<br /><br />Default: `true` |
-| **permissions** | Configure access permissions for `users`, `roles` and `channels`, each with a list of `allowed_ids` and `blocked_ids`.<br /><br />Control which `users` are admins with `admin_ids`. Admins can change the model with `/model` and DM the bot even if `allow_dms` is `false`.<br /><br />**Leave `allowed_ids` empty to allow ALL in that category.**<br /><br />**Role and channel permissions do not affect DMs.**<br /><br />**You can use [category](https://support.discord.com/hc/en-us/articles/115001580171-Channel-Categories-101) IDs to control channel permissions in groups.** |
-
-### LLM settings:
-
-| Setting | Description |
-| --- | --- |
-| **providers** | Add the LLM providers you want to use, each with a `base_url` and optional `api_key` entry. Popular providers (`openai`, `ollama`, etc.) are already included.<br /><br />**Only supports OpenAI compatible APIs.**<br /><br />**Some providers may need `extra_headers` / `extra_query` / `extra_body` entries for extra HTTP data. See the included `azure-openai` provider for an example.** |
-| **models** | Add the models you want to use in `<provider>/<model>: <parameters>` format (examples are included). When you run `/model` these models will show up as autocomplete suggestions.<br /><br />**Refer to each provider's documentation for supported parameters.**<br /><br />**The first model in your `models` list will be the default model at startup.**<br /><br />**Some vision models may need `:vision` added to the end of their name to enable image support.** |
-| **system_prompt** | Write anything you want to customize the bot's behavior!<br /><br />**Leave blank for no system prompt.**<br /><br />**You can use the `{date}` and `{time}` tags in your system prompt to insert the current date and time, based on your host computer's time zone.** |
-
-For `google-gemini-cli`, run:
-
+#### For Google Gemini CLI support:
+Run the login helper to generate your API key JSON:
 ```bash
 uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_main; raise SystemExit(cli_login_main())"
 ```
-
-Then paste the printed JSON into `providers.google-gemini-cli.api_key`.
+Paste the resulting JSON into `providers.google-gemini-cli.api_key`.
 
 4. Run the bot:
   ```bash
@@ -182,18 +131,15 @@ Then paste the printed JSON into `providers.google-gemini-cli.api_key`.
 
 ## Development
 
-- Run tests with `pytest`.
-- Lint with `ruff check --select ALL .`.
+- Run tests: `pytest`
+- Linting: `ruff check --select ALL . --fix`
+- Type checking: `ty check`
 
 ## Notes
 
-- If you're having issues, try my suggestions [here](https://github.com/jakobdylanc/llmcord/issues/19)
-
-- For improved PDF layout analysis, install [pymupdf-layout](https://pypi.org/project/pymupdf-layout/) and the bot will auto-activate it during PDF extraction.
-
-- Only models from OpenAI API and xAI API are "user identity aware" because only they support the "name" parameter in the message object. Hopefully more providers support this in the future.
-
-- PRs are welcome :)
+- For improved PDF layout analysis, install [pymupdf-layout](https://pypi.org/project/pymupdf-layout/).
+- User identity awareness (the `name` parameter) is currently supported for OpenAI and xAI providers.
+- PRs are welcome!
 
 ## Star History
 
