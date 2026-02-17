@@ -1,11 +1,12 @@
 """Web search decision logic."""
 
+import asyncio
 import importlib
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import litellm
@@ -13,6 +14,10 @@ import litellm
 from llmcord.core.config import get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
+from llmcord.core.exceptions import (
+    GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
+    FirstTokenTimeoutError,
+)
 from llmcord.logic.fallbacks import (
     FallbackModel,
     apply_fallback_config,
@@ -56,6 +61,26 @@ def _get_decider_runner() -> Callable[
     return search_module.run_decider_once
 
 
+async def _iter_stream_with_first_chunk(
+    stream_iter: AsyncIterator[object],
+    *,
+    timeout_seconds: int,
+) -> AsyncIterator[object]:
+    try:
+        first_chunk = await asyncio.wait_for(
+            stream_iter.__anext__(),
+            timeout=timeout_seconds,
+        )
+    except StopAsyncIteration:
+        return
+    except TimeoutError as exc:
+        raise FirstTokenTimeoutError(timeout_seconds=timeout_seconds) from exc
+
+    yield first_chunk
+    async for chunk in stream_iter:
+        yield chunk
+
+
 async def _get_decider_response_text(
     *,
     run_config: DeciderRunConfig,
@@ -64,18 +89,22 @@ async def _get_decider_response_text(
 ) -> str:
     if run_config.provider == "google-gemini-cli":
         response_chunks: list[str] = []
-        async for (
-            delta_content,
-            _chunk_finish_reason,
-            is_thinking,
-        ) in stream_google_gemini_cli(
+        stream = stream_google_gemini_cli(
             model=run_config.model,
             messages=litellm_messages,
             api_key=current_api_key,
             base_url=run_config.base_url,
             extra_headers=run_config.extra_headers,
             model_parameters=run_config.model_parameters,
+        )
+        async for chunk in _iter_stream_with_first_chunk(
+            stream,
+            timeout_seconds=GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
         ):
+            delta_content, _chunk_finish_reason, is_thinking = cast(
+                "tuple[str, object | None, bool]",
+                chunk,
+            )
             if delta_content and not is_thinking:
                 response_chunks.append(delta_content)
         return "".join(response_chunks).strip()
@@ -190,6 +219,16 @@ async def _run_decider_once(
             httpx.HTTPError,
             litellm.exceptions.OpenAIError,
         ) as exc:
+            if (
+                run_config.provider == "google-gemini-cli"
+                and isinstance(exc, FirstTokenTimeoutError)
+                and exc.timeout_seconds == GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
+            ):
+                logger.warning(
+                    "Search decider first-token timeout exceeded 10s for "
+                    "google-gemini-cli; continuing key rotation and falling "
+                    "back to fallback chain if keys are exhausted.",
+                )
             log_exception(
                 logger=logger,
                 message="Error in web search decider",

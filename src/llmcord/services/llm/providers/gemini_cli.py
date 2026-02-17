@@ -688,7 +688,7 @@ async def stream_google_gemini_cli(
     while True:
         attempt += 1
         async with (
-            httpx.AsyncClient(timeout=5) as client,
+            httpx.AsyncClient(timeout=30) as client,
             client.stream(
                 "POST",
                 url,

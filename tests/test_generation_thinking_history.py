@@ -6,7 +6,8 @@ from typing import cast
 
 import pytest
 
-from llmcord.logic.generation import _stream_response
+from llmcord.core.exceptions import GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
+from llmcord.logic.generation import _get_stream, _stream_response
 from llmcord.logic.generation_types import (
     GenerationContext,
     GenerationState,
@@ -94,3 +95,60 @@ async def test_thinking_chunks_hidden_but_preserved_in_history(
     assert "private-thought-2" in state.full_history_response
     assert "answer " in state.full_history_response
     assert "done" in state.full_history_response
+
+
+@pytest.mark.asyncio
+async def test_google_gemini_cli_stream_uses_first_token_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_timeout: int | None = None
+
+    async def _fake_google_stream(
+        **_kwargs: object,
+    ) -> AsyncIterator[tuple[str, object | None, bool]]:
+        yield "hello", "stop", False
+
+    async def _fake_iter_stream_with_first_chunk(
+        stream_iter: AsyncIterator[tuple[str, object | None, bool]],
+        *,
+        timeout_seconds: int,
+    ) -> AsyncIterator[tuple[str, object | None, bool]]:
+        nonlocal captured_timeout
+        captured_timeout = timeout_seconds
+        async for chunk in stream_iter:
+            yield chunk
+
+    monkeypatch.setattr(
+        "llmcord.logic.generation.stream_google_gemini_cli",
+        _fake_google_stream,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.generation._iter_stream_with_first_chunk",
+        _fake_iter_stream_with_first_chunk,
+    )
+
+    context = cast(
+        "GenerationContext",
+        SimpleNamespace(
+            messages=[{"role": "user", "content": "hello"}],
+            new_msg=SimpleNamespace(content="hello"),
+        ),
+    )
+
+    stream = _get_stream(
+        context=context,
+        stream_config=StreamConfig(
+            provider="google-gemini-cli",
+            actual_model="gemini-3-flash-preview",
+            api_key="dummy-key",
+            base_url=None,
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+    chunk = await anext(stream)
+
+    assert chunk[0] == "hello"
+    assert chunk[1] == "stop"
+    assert chunk[4] is False
+    assert captured_timeout == GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
