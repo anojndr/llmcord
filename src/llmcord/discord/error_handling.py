@@ -91,7 +91,12 @@ async def edit_processing_message_error(
     """Update the processing placeholder message with a standardized error."""
     with suppress(Exception):
         if use_plain_responses:
-            await processing_msg.edit(content=description, embed=None, view=None)
+            await call_with_embed_limits(
+                processing_msg.edit,
+                content=description,
+                embed=None,
+                view=None,
+            )
             return
         await call_with_embed_limits(
             processing_msg.edit,
