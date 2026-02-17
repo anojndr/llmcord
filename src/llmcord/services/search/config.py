@@ -25,7 +25,7 @@ knowledge, math, coding):
 If web search IS needed (e.g., current events, recent news, product
 specs, prices, real-time info):
 {"needs_search": true, "queries": ["query1", "query2", ...],
-"tool": "optional_tool_name"}
+"tool": "web_search_exa"}
 
 AVAILABLE TOOLS (only when using Exa):
 - "web_search_exa": Default for general web search, news, and facts.
