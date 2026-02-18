@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
+from typing import cast
 
 import httpx
 import pytest
@@ -13,6 +15,8 @@ from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_m
 from llmcord.services.search.decider import (
     DeciderRunConfig,
     _get_decider_response_text,
+    _google_gemini_cli_chunk_has_token,
+    _iter_stream_with_first_chunk,
     _run_decider_once,
     decide_web_search,
 )
@@ -297,9 +301,11 @@ async def test_decider_google_gemini_cli_uses_first_token_timeout(
         stream_iter: AsyncIterator[tuple[str, object | None, bool]],
         *,
         timeout_seconds: int,
+        chunk_has_token: object | None = None,
     ) -> AsyncIterator[tuple[str, object | None, bool]]:
         nonlocal captured_timeout
         captured_timeout = timeout_seconds
+        assert chunk_has_token is not None
         async for chunk in stream_iter:
             yield chunk
 
@@ -327,6 +333,26 @@ async def test_decider_google_gemini_cli_uses_first_token_timeout(
 
     assert response == '{"needs_search":false}'
     assert captured_timeout == FIRST_TOKEN_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_decider_iter_stream_timeout_accepts_first_thinking_token() -> None:
+    async def _stream() -> AsyncIterator[tuple[str, object | None, bool]]:
+        await asyncio.sleep(0.01)
+        yield '{"needs_search":', None, True
+        await asyncio.sleep(1.1)
+        yield "false}", None, False
+
+    received_chunks: list[tuple[str, object | None, bool]] = []
+    async for chunk in _iter_stream_with_first_chunk(
+        _stream(),
+        timeout_seconds=1,
+        chunk_has_token=_google_gemini_cli_chunk_has_token,
+    ):
+        received_chunks.append(cast("tuple[str, object | None, bool]", chunk))
+        break
+
+    assert received_chunks == [('{"needs_search":', None, True)]
 
 
 @pytest.mark.asyncio

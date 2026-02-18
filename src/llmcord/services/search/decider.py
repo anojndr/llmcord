@@ -79,20 +79,41 @@ async def _iter_stream_with_first_chunk(
     stream_iter: AsyncIterator[object],
     *,
     timeout_seconds: int,
+    chunk_has_token: Callable[[object], bool] | None = None,
 ) -> AsyncIterator[object]:
+    start_time = asyncio.get_running_loop().time()
+    buffered_chunks: list[object] = []
+
     try:
-        first_chunk = await asyncio.wait_for(
-            stream_iter.__anext__(),
-            timeout=timeout_seconds,
-        )
+        while True:
+            elapsed = asyncio.get_running_loop().time() - start_time
+            remaining_timeout = max(timeout_seconds - elapsed, 0.0)
+            chunk = await asyncio.wait_for(
+                stream_iter.__anext__(),
+                timeout=remaining_timeout,
+            )
+            buffered_chunks.append(chunk)
+            if chunk_has_token is None or chunk_has_token(chunk):
+                break
     except StopAsyncIteration:
+        for buffered_chunk in buffered_chunks:
+            yield buffered_chunk
         return
     except TimeoutError as exc:
         raise FirstTokenTimeoutError(timeout_seconds=timeout_seconds) from exc
 
-    yield first_chunk
+    for buffered_chunk in buffered_chunks:
+        yield buffered_chunk
     async for chunk in stream_iter:
         yield chunk
+
+
+def _google_gemini_cli_chunk_has_token(chunk: object) -> bool:
+    delta_content, _chunk_finish_reason, _is_thinking = cast(
+        "tuple[str, object | None, bool]",
+        chunk,
+    )
+    return bool(delta_content)
 
 
 async def _get_decider_response_text(
@@ -114,6 +135,7 @@ async def _get_decider_response_text(
         async for chunk in _iter_stream_with_first_chunk(
             stream,
             timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
+            chunk_has_token=_google_gemini_cli_chunk_has_token,
         ):
             delta_content, _chunk_finish_reason, is_thinking = cast(
                 "tuple[str, object | None, bool]",

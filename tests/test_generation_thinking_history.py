@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace, TracebackType
 from typing import cast
@@ -7,7 +8,12 @@ from typing import cast
 import pytest
 
 from llmcord.core.exceptions import FIRST_TOKEN_TIMEOUT_SECONDS
-from llmcord.logic.generation import _get_stream, _stream_response
+from llmcord.logic.generation import (
+    _get_stream,
+    _iter_stream_with_first_chunk,
+    _litellm_chunk_has_token,
+    _stream_response,
+)
 from llmcord.logic.generation_types import (
     GenerationContext,
     GenerationState,
@@ -152,3 +158,34 @@ async def test_google_gemini_cli_stream_uses_first_token_timeout(
     assert chunk[1] == "stop"
     assert chunk[4] is False
     assert captured_timeout == FIRST_TOKEN_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_iter_stream_timeout_accepts_first_thinking_token() -> None:
+    thinking_chunk = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content="", reasoning_content="thinking-token"),
+            ),
+        ],
+    )
+    answer_chunk = SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(content="answer"))],
+    )
+
+    async def _stream() -> AsyncIterator[object]:
+        await asyncio.sleep(0.01)
+        yield thinking_chunk
+        await asyncio.sleep(1.1)
+        yield answer_chunk
+
+    received_chunks: list[object] = []
+    async for chunk in _iter_stream_with_first_chunk(
+        _stream(),
+        timeout_seconds=1,
+        chunk_has_token=_litellm_chunk_has_token,
+    ):
+        received_chunks.append(chunk)
+        break
+
+    assert received_chunks == [thinking_chunk]
