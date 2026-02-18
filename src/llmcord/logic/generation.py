@@ -19,7 +19,6 @@ from llmcord.core.config import (
 from llmcord.core.error_handling import log_exception
 from llmcord.core.exceptions import (
     FIRST_TOKEN_TIMEOUT_SECONDS,
-    GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
     LITELLM_TIMEOUT_SECONDS,
     FirstTokenTimeoutError,
     _raise_empty_response,
@@ -371,7 +370,7 @@ async def _get_stream(
         )
         async for chunk in _iter_stream_with_first_chunk(
             stream,
-            timeout_seconds=GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
+            timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
         ):
             delta_content, chunk_finish_reason, is_thinking = cast(
                 "tuple[str, object | None, bool]",
@@ -713,15 +712,6 @@ def _handle_generation_exception(
                 timeout_seconds,
                 provider,
             )
-            if (
-                provider == "google-gemini-cli"
-                and timeout_seconds == GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
-            ):
-                logger.warning(
-                    "google-gemini-cli first-token timeout exceeded 10s; "
-                    "continuing key rotation and falling back to fallback chain "
-                    "if keys are exhausted.",
-                )
         else:
             logger.warning(special_case_message, provider)
         _remove_key(good_keys, current_api_key)

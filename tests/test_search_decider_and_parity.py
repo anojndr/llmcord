@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from llmcord.core.exceptions import (
-    GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
+    FIRST_TOKEN_TIMEOUT_SECONDS,
     FirstTokenTimeoutError,
 )
 from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_metadata
@@ -326,7 +326,7 @@ async def test_decider_google_gemini_cli_uses_first_token_timeout(
     )
 
     assert response == '{"needs_search":false}'
-    assert captured_timeout == GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
+    assert captured_timeout == FIRST_TOKEN_TIMEOUT_SECONDS
 
 
 @pytest.mark.asyncio
@@ -464,7 +464,7 @@ async def test_decider_first_token_timeout_triggers_fallback_chain(
     ) -> str:
         if run_config.provider == "google-gemini-cli":
             raise FirstTokenTimeoutError(
-                timeout_seconds=GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
+                timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
             )
         return '{"needs_search":false}'
 

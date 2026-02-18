@@ -15,7 +15,7 @@ from llmcord.core.config import get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
 from llmcord.core.exceptions import (
-    GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
+    FIRST_TOKEN_TIMEOUT_SECONDS,
     FirstTokenTimeoutError,
 )
 from llmcord.logic.fallbacks import (
@@ -113,7 +113,7 @@ async def _get_decider_response_text(
         )
         async for chunk in _iter_stream_with_first_chunk(
             stream,
-            timeout_seconds=GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS,
+            timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
         ):
             delta_content, _chunk_finish_reason, is_thinking = cast(
                 "tuple[str, object | None, bool]",
@@ -233,15 +233,14 @@ async def _run_decider_once(
             httpx.HTTPError,
             *DECIDER_RETRYABLE_EXCEPTIONS,
         ) as exc:
-            if (
-                run_config.provider == "google-gemini-cli"
-                and isinstance(exc, FirstTokenTimeoutError)
-                and exc.timeout_seconds == GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
-            ):
+            if isinstance(exc, FirstTokenTimeoutError):
                 logger.warning(
-                    "Search decider first-token timeout exceeded 10s for "
-                    "google-gemini-cli; continuing key rotation and falling "
+                    "Search decider first-token timeout exceeded %ss "
+                    "for provider '%s'; "
+                    "continuing key rotation and falling "
                     "back to fallback chain if keys are exhausted.",
+                    exc.timeout_seconds,
+                    run_config.provider,
                 )
             log_exception(
                 logger=logger,

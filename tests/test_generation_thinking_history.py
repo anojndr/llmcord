@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from llmcord.core.exceptions import GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
+from llmcord.core.exceptions import FIRST_TOKEN_TIMEOUT_SECONDS
 from llmcord.logic.generation import _get_stream, _stream_response
 from llmcord.logic.generation_types import (
     GenerationContext,
@@ -151,4 +151,4 @@ async def test_google_gemini_cli_stream_uses_first_token_timeout(
     assert chunk[0] == "hello"
     assert chunk[1] == "stop"
     assert chunk[4] is False
-    assert captured_timeout == GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS
+    assert captured_timeout == FIRST_TOKEN_TIMEOUT_SECONDS

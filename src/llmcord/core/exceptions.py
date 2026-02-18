@@ -4,8 +4,7 @@ from typing import NoReturn
 
 EMPTY_RESPONSE_MESSAGE = "Response stream ended with no content"
 FIRST_RESPONSE_TIMEOUT_MESSAGE = "No first token received within timeout window"
-FIRST_TOKEN_TIMEOUT_SECONDS = 60
-GOOGLE_GEMINI_CLI_FIRST_TOKEN_TIMEOUT_SECONDS = 10
+FIRST_TOKEN_TIMEOUT_SECONDS = 30
 LITELLM_TIMEOUT_SECONDS = 60
 
 
