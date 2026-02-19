@@ -5,16 +5,11 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import libsql as libsql_module
-
 from llmcord.core.error_handling import log_exception
-
-libsql: Any = libsql_module
-LibsqlCursor = Any
-LibsqlConnection = Any
 
 if TYPE_CHECKING:
     from .core import DatabaseProtocol as _Base
@@ -22,11 +17,6 @@ else:
     _Base = object
 
 logger = logging.getLogger(__name__)
-LIBSQL_ERROR = getattr(
-    libsql,
-    "LibsqlError",
-    getattr(libsql, "Error", Exception),
-)
 
 
 @dataclass(slots=True)
@@ -83,12 +73,12 @@ class MessageDataMixin(_Base):
 
     def _run_message_migrations(
         self,
-        cursor: LibsqlCursor,
-        conn: LibsqlConnection,
+        cursor: sqlite3.Cursor,
+        conn: sqlite3.Connection,
     ) -> None:
         """Run migrations for message tables."""
         # Migration: ensure message_response_data has the expected schema.
-        with contextlib.suppress(LIBSQL_ERROR, ValueError):
+        with contextlib.suppress(sqlite3.Error, ValueError):
             cursor.execute("PRAGMA table_info(message_response_data)")
             columns = {row[1] for row in cursor.fetchall()}
 
@@ -130,7 +120,7 @@ class MessageDataMixin(_Base):
             conn.commit()
 
         # Migration: Add lens_results column if it doesn't exist.
-        with contextlib.suppress(LIBSQL_ERROR, ValueError):
+        with contextlib.suppress(sqlite3.Error, ValueError):
             cursor.execute(
                 "ALTER TABLE message_search_data ADD COLUMN lens_results TEXT",
             )
@@ -148,7 +138,7 @@ class MessageDataMixin(_Base):
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Ensure all parameters are primitive types that libsql can handle
+        # Ensure all parameters are primitive SQLite-compatible types.
         # (str, int, float, None) - convert any non-primitive types to strings
         # Use int() first to strip any subclass metadata (e.g., Discord Snowflake)
         try:
@@ -209,7 +199,7 @@ class MessageDataMixin(_Base):
             ]
             log_exception(
                 logger=logger,
-                message="libsql parameter type error",
+                message="SQLite parameter type error",
                 error=exc,
                 context={"message_id": message_id, "param_types": param_types},
             )
@@ -219,7 +209,7 @@ class MessageDataMixin(_Base):
         # Sync in background to avoid blocking
         try:
             self._sync()
-        except LIBSQL_ERROR as exc:
+        except sqlite3.Error as exc:
             logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved search data for message %s", message_id)
 
@@ -314,7 +304,7 @@ class MessageDataMixin(_Base):
         conn.commit()
         try:
             self._sync()
-        except LIBSQL_ERROR as exc:
+        except sqlite3.Error as exc:
             logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved response data for message %s", message_id)
 

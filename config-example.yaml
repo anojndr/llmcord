@@ -77,10 +77,6 @@ twitter_accounts:
     email_password: 
     cookies: 
 
-# Turso database settings (for persistent bad API keys tracking):
-turso_database_url:  # e.g., libsql://your-db.turso.io
-turso_auth_token:    # Your Turso authentication token
-
 # LLM settings:
 
 providers:

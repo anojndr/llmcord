@@ -73,7 +73,7 @@ Or run local models with:
 - **Discord layer:** [src/llmcord/discord/](src/llmcord/discord/) handles slash commands, events, and UI interactions.
 - **Message pipeline:** [src/llmcord/logic/pipeline.py](src/llmcord/logic/pipeline.py) orchestrates context building, web search, and response generation.
 - **Provider glue:** [src/llmcord/services/llm/](src/llmcord/services/llm/) centralizes LiteLLM integration and provider-specific configurations.
-- **Persistence:** [src/llmcord/services/database/](src/llmcord/services/database/) manages user preferences and bad API key tracking using Turso/libSQL.
+- **Persistence:** [src/llmcord/services/database/](src/llmcord/services/database/) manages user preferences and bad API key tracking with local SQLite.
 - **External Services:** [src/llmcord/services/](src/llmcord/services/) contains logic for scraping TikTok, Facebook, Twitter, and performing web searches.
 
 ## Commands

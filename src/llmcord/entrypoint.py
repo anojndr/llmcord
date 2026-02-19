@@ -14,9 +14,7 @@ async def main() -> None:
     importlib.import_module("llmcord.discord.commands")
     importlib.import_module("llmcord.discord.events")
 
-    # Initialize Turso database with credentials from config
-    turso_url = config.get("turso_database_url")
-    turso_token = config.get("turso_auth_token")
-    init_db(db_url=turso_url, auth_token=turso_token)
+    # Initialize SQLite database
+    init_db()
 
     await asyncio.gather(start_server(), discord_bot.start(config["bot_token"]))

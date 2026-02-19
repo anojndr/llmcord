@@ -11,7 +11,6 @@ dependencies = [
     "curl-cffi>=0.14.0",
     "discord-py>=2.6.4",
     "httpx>=0.28.1",
-    "libsql>=0.1.11",
     "litellm>=1.81.10",
     "lxml>=6.0.2",
     "pillow>=12.1.1",
