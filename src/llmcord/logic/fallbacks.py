@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from llmcord.core.config import ensure_list
+from llmcord.core.config import normalize_api_keys
 from llmcord.logic.generation_types import FallbackState
 
 logger = logging.getLogger(__name__)
@@ -150,5 +150,5 @@ def apply_fallback_config(
     if not isinstance(provider_config, dict):
         provider_config = {}
     base_url = provider_config.get("base_url")
-    api_keys = ensure_list(provider_config.get("api_key"))
+    api_keys = normalize_api_keys(provider_config.get("api_key"))
     return provider, model, provider_slash_model, base_url, api_keys

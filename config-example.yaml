@@ -92,6 +92,9 @@ providers:
     # uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_main; raise SystemExit(cli_login_main())"
     # Example value:
     # {"refresh":"...","access":"...","expires":1700000000000,"projectId":"my-project"}
+    # Multiple keys are supported:
+    # - {"refresh":"...","projectId":"project-a"}
+    # - {"refresh":"...","projectId":"project-b"}
     api_key: 
     base_url: https://cloudcode-pa.googleapis.com
 
@@ -100,6 +103,9 @@ providers:
     # uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_antigravity_main; raise SystemExit(cli_login_antigravity_main())"
     # Example value:
     # {"refresh":"...","access":"...","expires":1700000000000,"projectId":"rising-fact-p41fc"}
+    # Multiple keys are supported:
+    # - {"refresh":"...","projectId":"project-a"}
+    # - {"refresh":"...","projectId":"project-b"}
     api_key:
     # Optional override endpoint. Default uses daily sandbox with prod fallback.
     # base_url: https://daily-cloudcode-pa.sandbox.googleapis.com
