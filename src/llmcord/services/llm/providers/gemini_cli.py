@@ -1442,10 +1442,11 @@ async def stream_google_gemini_cli(
                                         ValueError,
                                         httpx.HTTPError,
                                     ) as exc:
-                                        tool_result_text = (
+                                        msg = (
                                             "Image tool call failed: "
                                             f"{str(exc).strip() or type(exc).__name__}"
                                         )
+                                        raise RuntimeError(msg) from exc
                                     if tool_result_text:
                                         yield tool_result_text, None, False
 

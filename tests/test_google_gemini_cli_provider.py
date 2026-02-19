@@ -1,5 +1,5 @@
 import json
-from typing import cast
+from typing import Self, cast
 
 import pytest
 
@@ -11,11 +11,69 @@ from llmcord.services.llm.providers.gemini_cli import (
     _execute_antigravity_image_tool_call,
     credentials_to_api_key,
     parse_api_key_credentials,
+    stream_google_gemini_cli,
 )
 
 EXPECTED_EXPIRES_MS = 1_700_000_000_000
 EXPECTED_CONTENT_COUNT = 2
 EXPECTED_IMAGE_CONTEXT_MESSAGES = 3
+
+
+def _build_antigravity_function_call_sse(prompt: str) -> str:
+    event_payload = {
+        "response": {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "functionCall": {
+                                    "name": "generate_image",
+                                    "args": {"prompt": prompt},
+                                },
+                            },
+                        ],
+                    },
+                },
+            ],
+        },
+    }
+    return f"data: {json.dumps(event_payload)}"
+
+
+def _build_fake_async_client_class(sse_line: str) -> type[object]:
+    class _FakeStreamResponse:
+        def __init__(self) -> None:
+            self.is_success = True
+            self.status_code = 200
+            self.headers: dict[str, str] = {}
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        async def aread(self) -> bytes:
+            return b""
+
+        async def aiter_lines(self):
+            yield sse_line
+
+    class _FakeAsyncClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> Self:
+            return self
+
+        async def __aexit__(self, *_: object) -> None:
+            return None
+
+        def stream(self, *_: object, **__: object) -> _FakeStreamResponse:
+            return _FakeStreamResponse()
+
+    return _FakeAsyncClient
 
 
 def test_parse_google_gemini_cli_api_key_json_roundtrip() -> None:
@@ -329,3 +387,49 @@ async def test_antigravity_image_tool_includes_prior_generated_images(
     assert isinstance(last_user_parts, list)
     assert {"text": "Put a hat on me"} in last_user_parts
     assert all(content.get("role") == "user" for content in captured_contents)
+
+
+@pytest.mark.asyncio
+async def test_antigravity_image_tool_failure_raises_runtime_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials = GeminiCliCredentials(
+        refresh="refresh",
+        access="access",
+        expires=0,
+        project_id="project-id",
+    )
+
+    async def _fake_credentials(_: str, __: str) -> GeminiCliCredentials:
+        return credentials
+
+    async def _fake_tool_call(**_: object) -> str:
+        msg = "Antigravity image generation failed (503): MODEL_CAPACITY_EXHAUSTED"
+        raise RuntimeError(msg)
+
+    sse_line = _build_antigravity_function_call_sse("Make tea")
+
+    monkeypatch.setattr(
+        "llmcord.services.llm.providers.gemini_cli.get_valid_cloud_code_assist_credentials",
+        _fake_credentials,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.llm.providers.gemini_cli._execute_antigravity_image_tool_call",
+        _fake_tool_call,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.llm.providers.gemini_cli.httpx.AsyncClient",
+        _build_fake_async_client_class(sse_line),
+    )
+
+    with pytest.raises(RuntimeError, match="Image tool call failed"):
+        async for _ in stream_google_gemini_cli(
+            provider_id=GOOGLE_ANTIGRAVITY_PROVIDER,
+            model="gemini-3-flash",
+            messages=[{"role": "user", "content": "make me a cup of tea"}],
+            api_key="api-key",
+            base_url="https://example.test",
+            extra_headers=None,
+            model_parameters=None,
+        ):
+            pass
