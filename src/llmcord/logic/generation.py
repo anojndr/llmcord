@@ -51,7 +51,7 @@ from llmcord.logic.images import (
 from llmcord.logic.utils import (
     count_conversation_tokens,
 )
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
@@ -99,36 +99,6 @@ GENERATION_EXCEPTIONS = (
     ValueError,
     *LITELLM_RETRYABLE_ERRORS,
 )
-
-
-def _get_good_keys(provider: str, api_keys: list[str]) -> list[str]:
-    try:
-        return get_bad_keys_db().get_good_keys_synced(provider, api_keys)
-    except (OSError, RuntimeError, ValueError) as exc:
-        log_exception(
-            logger=logger,
-            message="Failed to get good keys, falling back to all keys",
-            error=exc,
-            context={"provider": provider, "configured_keys": len(api_keys)},
-        )
-        return api_keys.copy()
-
-
-def _reset_provider_keys(provider: str, api_keys: list[str]) -> list[str]:
-    logger.warning(
-        ("All API keys for provider '%s' (synced) are marked as bad. Resetting..."),
-        provider,
-    )
-    try:
-        get_bad_keys_db().reset_provider_keys_synced(provider)
-    except (OSError, RuntimeError, ValueError) as exc:
-        log_exception(
-            logger=logger,
-            message="Failed to reset provider keys",
-            error=exc,
-            context={"provider": provider, "configured_keys": len(api_keys)},
-        )
-    return api_keys.copy()
 
 
 def _format_display_model(provider: str, actual_model: str) -> str:
@@ -260,7 +230,7 @@ async def _persist_response_payload(
             tavily_metadata=context.tavily_metadata,
             failed_extractions=context.failed_extractions or None,
         )
-        get_bad_keys_db().save_message_response_data(
+        get_db().save_message_response_data(
             message_id=str(state.response_msgs[last_msg_index].id),
             payload=payload,
         )
@@ -774,7 +744,6 @@ def _handle_generation_exception(
         return good_keys, last_error_msg
 
     _handle_key_rotation_error(
-        error=error,
         provider=provider,
         current_api_key=current_api_key,
         good_keys=good_keys,
@@ -791,7 +760,6 @@ def _remove_key(good_keys: list[str], current_api_key: str) -> None:
 
 def _handle_key_rotation_error(
     *,
-    error: Exception,
     provider: str,
     current_api_key: str,
     good_keys: list[str],
@@ -799,24 +767,9 @@ def _handle_key_rotation_error(
 ) -> None:
     is_key_error, is_timeout_error = error_flags
     if is_key_error:
-        error_msg = str(error)[:200] if error else "Unknown error"
-        try:
-            get_bad_keys_db().mark_key_bad_synced(
-                provider,
-                current_api_key,
-                error_msg,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            log_exception(
-                logger=logger,
-                message="Failed to mark key as bad",
-                error=exc,
-                context={"provider": provider},
-            )
-
         _remove_key(good_keys, current_api_key)
         logger.info(
-            "Removed bad key for '%s', %s keys remaining",
+            "Removed failed key for '%s', %s keys remaining",
             provider,
             len(good_keys),
         )
@@ -854,9 +807,7 @@ def _initialize_loop_state(context: GenerationContext) -> GenerationLoopState:
         original_model=actual_model,
     )
 
-    good_keys = _get_good_keys(provider, context.api_keys)
-    if not good_keys:
-        good_keys = _reset_provider_keys(provider, context.api_keys)
+    good_keys = context.api_keys.copy()
 
     return GenerationLoopState(
         provider=provider,
@@ -1054,9 +1005,7 @@ async def _run_generation_loop(
                 continue
             break
 
-        current_api_key = loop_state.good_keys[
-            (loop_state.attempt_count - 1) % len(loop_state.good_keys)
-        ]
+        current_api_key = loop_state.good_keys[0]
 
         try:
             stream_config = StreamConfig(
@@ -1077,12 +1026,11 @@ async def _run_generation_loop(
         except GENERATION_EXCEPTIONS as exc:
             if (
                 not loop_state.developer_instruction_removed
-                and _is_developer_instruction_error(cast("Exception", exc))
+                and _is_developer_instruction_error(exc)
                 and _remove_system_messages(context.messages)
             ):
                 loop_state.developer_instruction_removed = True
                 loop_state.last_error_msg = str(exc)
-                loop_state.attempt_count -= 1
                 logger.warning(
                     "Retrying without system prompt after developer instruction "
                     "provider error: %s",
@@ -1092,7 +1040,7 @@ async def _run_generation_loop(
 
             if (
                 not loop_state.image_input_removed
-                and _is_image_input_error(cast("Exception", exc))
+                and _is_image_input_error(exc)
                 and _remove_images_from_messages(context.messages)
             ):
                 loop_state.image_input_removed = True
@@ -1100,7 +1048,6 @@ async def _run_generation_loop(
                 state.image_removal_warning = (
                     "⚠️ Image removed from input due to provider error."
                 )
-                loop_state.attempt_count -= 1
                 logger.warning(
                     "Retrying without image input after provider error: %s",
                     exc,
@@ -1111,7 +1058,7 @@ async def _run_generation_loop(
                 loop_state.good_keys,
                 loop_state.last_error_msg,
             ) = _handle_generation_exception(
-                error=cast("Exception", exc),
+                error=exc,
                 provider=loop_state.provider,
                 current_api_key=current_api_key,
                 good_keys=loop_state.good_keys,

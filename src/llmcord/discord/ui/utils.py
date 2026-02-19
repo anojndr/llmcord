@@ -16,7 +16,7 @@ from llmcord.core.config import (
 from llmcord.core.error_handling import log_exception
 from llmcord.discord.ui.constants import HTTP_OK
 from llmcord.discord.ui.embed_limits import enforce_embed_limits
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 
 LOGGER = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class ResponseData:
 
 def get_response_data(message_id: int) -> ResponseData:
     """Get response data from the database."""
-    db = get_bad_keys_db()
+    db = get_db()
     (
         full_response,
         thought_process,

@@ -1,8 +1,8 @@
 accounts.db
-bad_keys.db
-bad_keys.db-info
-bad_keys.db-shm
-bad_keys.db-wal
+llmcord.db
+llmcord.db-info
+llmcord.db-shm
+llmcord.db-wal
 .venv
 .vscode
 config.yaml

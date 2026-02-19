@@ -14,7 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 from llmcord.core.config import get_config, is_gemini_model
 from llmcord.core.error_handling import log_exception
 from llmcord.globals import reddit_client
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 from llmcord.services.extractors import (
     TwitterApiProtocol,
     download_attachments,
@@ -322,7 +322,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
         return cleaned_content
 
     cleaned_content = cleaned_content[10:].strip()
-    _, _, cached_lens_results = get_bad_keys_db().get_message_search_data(
+    _, _, cached_lens_results = get_db().get_message_search_data(
         str(context.curr_msg.id),
     )
     if cached_lens_results:
@@ -422,7 +422,7 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             cleaned_content += all_results_text + instruction_text
 
             context.curr_node.lens_results = all_results_text
-            get_bad_keys_db().save_message_search_data(
+            get_db().save_message_search_data(
                 str(context.curr_msg.id),
                 lens_results=all_results_text,
             )

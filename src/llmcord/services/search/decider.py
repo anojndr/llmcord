@@ -24,7 +24,6 @@ from llmcord.logic.fallbacks import (
     get_next_fallback,
 )
 from llmcord.logic.generation_types import FallbackState
-from llmcord.services.database import KeyRotator, get_bad_keys_db
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 from llmcord.services.search.config import (
@@ -166,16 +165,9 @@ async def _run_decider_once(
     if not run_config.api_keys:
         return None, True
 
-    # Use KeyRotator for consistent key rotation with synced bad key tracking
-    rotator = KeyRotator(
-        run_config.provider,
-        run_config.api_keys,
-        db=get_bad_keys_db(),
-    )
-
     exhausted_keys = True
 
-    async for current_api_key in rotator.get_keys_async():
+    for current_api_key in run_config.api_keys:
         try:
             date_str, time_str = get_current_datetime_strings()
             system_prompt_with_date = (
@@ -274,7 +266,6 @@ async def _run_decider_once(
                     "model": run_config.model,
                 },
             )
-            rotator.mark_current_bad(str(exc))
             continue
 
         exhausted_keys = False
@@ -306,8 +297,7 @@ def _normalize_fallback_chain(raw_chain: object) -> list[FallbackModel]:
 async def decide_web_search(messages: list, decider_config: dict) -> dict:
     """Decide whether web search is needed and generate optimized queries.
 
-    Uses LiteLLM for unified API access across all providers. Uses KeyRotator
-    for consistent key rotation and bad key tracking.
+    Uses LiteLLM for unified API access across all providers.
 
     Returns: {"needs_search": bool, "queries": list[str]} or
     {"needs_search": False}.

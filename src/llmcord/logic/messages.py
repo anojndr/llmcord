@@ -29,7 +29,7 @@ from llmcord.logic.utils import (
     append_search_to_content,
     build_node_text_parts,
 )
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 from llmcord.services.extractors import TwitterApiProtocol
 from llmcord.services.facebook import maybe_download_facebook_videos_with_failures
 from llmcord.services.tiktok import maybe_download_tiktok_videos_with_failures
@@ -550,7 +550,7 @@ def _load_cached_search_data(
         stored_search_results,
         stored_tavily_metadata,
         stored_lens_results,
-    ) = get_bad_keys_db().get_message_search_data(str(curr_msg.id))
+    ) = get_db().get_message_search_data(str(curr_msg.id))
     if stored_search_results and curr_node.search_results is None:
         curr_node.search_results = stored_search_results
         curr_node.tavily_metadata = stored_tavily_metadata

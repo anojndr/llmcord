@@ -5,17 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
-from llmcord.services.database import get_bad_keys_db
 from llmcord.services.search.config import EXA_MCP_URL
 from llmcord.services.search.exa import exa_search
 from llmcord.services.search.tavily import tavily_search
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from llmcord.services.database import BadKeysDB
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +31,6 @@ async def _search_single_query_tavily(
     depth: str,
     keys: list[str],
     max_results_per_query: int,
-    db: BadKeysDB,
 ) -> dict:
     """Search with Tavily using retry logic and key rotation."""
     for key in keys:
@@ -44,9 +38,6 @@ async def _search_single_query_tavily(
 
         if "error" not in result:
             return result
-
-        error_msg = result.get("error", "Unknown error")[:200]
-        db.mark_key_bad_synced("tavily", key, error_msg)
 
     logger.error("All Tavily API keys failed for query '%s'", query)
     return {"error": "All API keys exhausted", "query": query}
@@ -57,21 +48,16 @@ async def _run_tavily_searches(
     api_keys: list[str],
     search_depth: str,
     max_results_per_query: int,
-    db: BadKeysDB,
 ) -> list[dict]:
     """Execute Tavily searches with key rotation."""
-    good_keys = db.get_good_keys_synced("tavily", api_keys)
-    if not good_keys:
-        db.reset_provider_keys_synced("tavily")
-        good_keys = api_keys.copy()
+    keys = api_keys.copy()
 
     search_tasks = [
         _search_single_query_tavily(
             query,
             search_depth,
-            good_keys,
+            keys,
             max_results_per_query,
-            db,
         )
         for query in queries
     ]
@@ -211,8 +197,7 @@ async def perform_web_search(
 
     Best practices applied:
     - Concurrent requests with asyncio.gather()
-        - KeyRotator for synced bad key tracking with database persistence
-            (Tavily only)
+        - Exhaustive key retry for Tavily (tries each provided key once)
         - Configurable search depth (Tavily: "basic", "advanced", "fast",
             "ultra-fast")
 
@@ -231,7 +216,6 @@ async def perform_web_search(
         return "", {}
 
     opts = options or WebSearchOptions()
-    db = get_bad_keys_db()
     provider_name = opts.web_search_provider.capitalize()
 
     if opts.web_search_provider == "tavily":
@@ -244,7 +228,6 @@ async def perform_web_search(
             api_keys,
             opts.search_depth,
             opts.max_results_per_query,
-            db,
         )
     else:
         results = await _run_exa_searches(
@@ -277,7 +260,6 @@ async def perform_web_search(
                 api_keys,
                 opts.search_depth,
                 opts.max_results_per_query,
-                db,
             )
             opts = WebSearchOptions(
                 max_results_per_query=opts.max_results_per_query,

@@ -86,7 +86,7 @@ async def test_web_search_decider_appends_results(
         "llmcord.logic.search_logic.perform_web_search",
         _fake_perform_web_search,
     )
-    monkeypatch.setattr("llmcord.logic.search_logic.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.search_logic.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(id=20, content="at ai latest news", author=FakeUser(1234))
@@ -205,7 +205,7 @@ async def test_web_search_decider_normalizes_mapping_api_key(
         "llmcord.logic.search_logic.decide_web_search",
         _fake_decide_web_search,
     )
-    monkeypatch.setattr("llmcord.logic.search_logic.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.search_logic.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(id=21, content="at ai hi", author=FakeUser(1234))

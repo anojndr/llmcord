@@ -10,7 +10,7 @@ from llmcord import config as config_module
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.globals import discord_bot
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 from llmcord.utils.common import (
     ModelAutocompleteHandlers,
     ModelSwitchHandlers,
@@ -75,7 +75,7 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
         )
         return
 
-    db = get_bad_keys_db()
+    db = get_db()
     config_data = config_module.get_config()
 
     handlers = ModelSwitchHandlers(
@@ -99,7 +99,7 @@ async def model_autocomplete(
     """Provide autocomplete for /model."""
     config_data = config_module.get_config()
 
-    db = get_bad_keys_db()
+    db = get_db()
     user_id = str(interaction.user.id)
 
     handlers = ModelAutocompleteHandlers(
@@ -120,7 +120,7 @@ async def search_decider_model_command(
     """Handle the /searchdecidermodel command."""
     await _defer_for_channel_visibility(interaction)
 
-    db = get_bad_keys_db()
+    db = get_db()
     config_data = config_module.get_config()
 
     handlers = ModelSwitchHandlers(
@@ -144,7 +144,7 @@ async def search_decider_model_autocomplete(
     """Provide autocomplete for /searchdecidermodel."""
     config_data = config_module.get_config()
 
-    db = get_bad_keys_db()
+    db = get_db()
     user_id = str(interaction.user.id)
 
     handlers = ModelAutocompleteHandlers(
@@ -178,7 +178,7 @@ async def reset_all_preferences_command(
     if not interaction.response.is_done():
         await interaction.response.defer(ephemeral=True)
 
-    db = get_bad_keys_db()
+    db = get_db()
 
     # Reset both preferences
     model_count = db.reset_all_user_model_preferences()

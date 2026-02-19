@@ -54,7 +54,7 @@ async def test_x_url_extraction_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -124,7 +124,7 @@ async def test_reddit_url_extraction_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -187,7 +187,7 @@ async def test_youtube_url_extraction_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -269,7 +269,7 @@ async def test_multiple_youtube_urls_extracted_concurrently(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -359,7 +359,7 @@ async def test_multiple_twitter_urls_extracted_concurrently(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -477,7 +477,7 @@ async def test_external_source_collectors_run_concurrently(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -540,7 +540,7 @@ async def test_youtube_failure_reason_is_in_warning(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -615,7 +615,7 @@ async def test_general_url_extraction_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -705,7 +705,7 @@ async def test_tiktok_and_facebook_not_failed_when_mp4_download_succeeds(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -776,7 +776,7 @@ async def test_tiktok_and_facebook_failed_only_when_mp4_download_fails(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(

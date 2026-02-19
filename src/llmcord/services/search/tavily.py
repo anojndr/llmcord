@@ -15,7 +15,6 @@ from llmcord.core.config import (
     get_or_create_httpx_client,
 )
 from llmcord.core.error_handling import log_exception
-from llmcord.services.database import get_bad_keys_db
 from llmcord.services.http import request_with_retries
 from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
 
@@ -466,19 +465,9 @@ async def perform_tavily_research(
             "keys_exhausted": True,
         }
 
-    db = get_bad_keys_db()
-    good_keys = db.get_good_keys_synced("tavily", api_keys)
-    if not good_keys:
-        db.reset_provider_keys_synced("tavily")
-        good_keys = api_keys.copy()
-
-    for key in good_keys:
+    for key in api_keys:
         create_result = await tavily_research_create(query, model, key)
         if "error" in create_result:
-            error_msg = str(
-                create_result.get("detail") or create_result["error"],
-            )[:200]
-            db.mark_key_bad_synced("tavily", key, error_msg)
             continue
 
         request_id = create_result.get("request_id")
@@ -497,12 +486,7 @@ async def perform_tavily_research(
         )
 
         if "error" in status_result:
-            if status_result.get("status_code"):
-                error_msg = str(
-                    status_result.get("detail") or status_result["error"],
-                )[:200]
-                db.mark_key_bad_synced("tavily", key, error_msg)
-            else:
+            if not status_result.get("status_code"):
                 logger.warning(
                     "Tavily research error for request %s: %s",
                     request_id,

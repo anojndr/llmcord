@@ -15,7 +15,7 @@ from llmcord.logic.utils import (
     extract_research_command,
     replace_content_text,
 )
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 from llmcord.services.search import (
     WebSearchOptions,
     decide_web_search,
@@ -232,7 +232,7 @@ async def run_research_command(
 
                 logger.info("Tavily research results appended to user message")
 
-                get_bad_keys_db().save_message_search_data(
+                get_db().save_message_search_data(
                     str(context.new_msg.id),
                     research_results,
                     search_metadata,
@@ -260,7 +260,7 @@ async def maybe_run_web_search(
         and not context.is_googlelens_query
         and not context.has_existing_search
     ):
-        db = get_bad_keys_db()
+        db = get_db()
         user_id = str(context.new_msg.author.id)
         user_decider_model = db.get_user_search_decider_model(user_id)
         default_decider = str(
@@ -360,7 +360,7 @@ async def maybe_run_web_search(
                                 "Web search results appended to user message",
                             )
 
-                            get_bad_keys_db().save_message_search_data(
+                            get_db().save_message_search_data(
                                 str(context.new_msg.id),
                                 search_results,
                                 search_metadata,

@@ -76,7 +76,7 @@ class DatabaseCore:
         self,
         db_url: str | None = None,
         auth_token: str | None = None,
-        local_db_path: str = "bad_keys.db",
+        local_db_path: str = "llmcord.db",
     ) -> None:
         """Initialize the Turso database connection.
 

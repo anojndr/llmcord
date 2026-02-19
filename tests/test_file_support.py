@@ -58,7 +58,7 @@ async def test_text_attachment_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -128,7 +128,7 @@ async def test_pdf_text_extracted_and_appended_for_non_gemini(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -191,7 +191,7 @@ async def test_image_attachment_included(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -271,7 +271,7 @@ async def test_tiktok_query_adds_video_file_for_gemini(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -346,7 +346,7 @@ async def test_tiktok_download_not_used_for_non_gemini(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(

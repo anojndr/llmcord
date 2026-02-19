@@ -17,7 +17,7 @@ from llmcord.discord.error_handling import (
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.logic.pipeline import ProcessContext
-from llmcord.services.database import get_bad_keys_db
+from llmcord.services.database import get_db
 from llmcord.utils.common import get_channel_locked_model, get_default_model
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
     else:
         # Get user's model preference from database (or use default)
         user_id = str(new_msg.author.id)
-        db = get_bad_keys_db()
+        db = get_db()
         user_model = db.get_user_model(user_id)
 
         # Fall back to default model if user hasn't set a preference

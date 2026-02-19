@@ -204,7 +204,7 @@ async def test_googlelens_results_appended(
         "llmcord.logic.content.perform_google_lens_lookup",
         _fake_perform_google_lens_lookup,
     )
-    monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.content.get_db", lambda: _FakeDB())
     monkeypatch.setattr(
         "llmcord.logic.messages.download_and_process_attachments",
         _fake_download_and_process_attachments,
@@ -213,7 +213,7 @@ async def test_googlelens_results_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -295,7 +295,7 @@ async def test_googlelens_user_and_lens_duplicate_url_extracted_once(
         "llmcord.logic.content.extract_url_content",
         _fake_extract_url_content,
     )
-    monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.content.get_db", lambda: _FakeDB())
     monkeypatch.setattr(
         "llmcord.logic.messages.download_and_process_attachments",
         _fake_download_and_process_attachments,
@@ -304,7 +304,7 @@ async def test_googlelens_user_and_lens_duplicate_url_extracted_once(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -380,7 +380,7 @@ async def test_googlelens_keeps_image_payload_for_vision_capable_model(
         "llmcord.logic.content.perform_google_lens_lookup",
         _fake_perform_google_lens_lookup,
     )
-    monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.content.get_db", lambda: _FakeDB())
     monkeypatch.setattr(
         "llmcord.logic.messages.download_and_process_attachments",
         _fake_download_and_process_attachments,
@@ -389,7 +389,7 @@ async def test_googlelens_keeps_image_payload_for_vision_capable_model(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -481,7 +481,7 @@ async def test_googlelens_omits_image_payload_for_non_vision_model(
         "llmcord.logic.content.perform_google_lens_lookup",
         _fake_perform_google_lens_lookup,
     )
-    monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.content.get_db", lambda: _FakeDB())
     monkeypatch.setattr(
         "llmcord.logic.messages.download_and_process_attachments",
         _fake_download_and_process_attachments,
@@ -490,7 +490,7 @@ async def test_googlelens_omits_image_payload_for_non_vision_model(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
@@ -564,7 +564,7 @@ async def test_googlelens_multiple_images_results_appended(
         "llmcord.logic.content.perform_google_lens_lookup",
         _fake_perform_google_lens_lookup,
     )
-    monkeypatch.setattr("llmcord.logic.content.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.content.get_db", lambda: _FakeDB())
     monkeypatch.setattr(
         "llmcord.logic.messages.download_and_process_attachments",
         _fake_download_and_process_attachments,
@@ -573,7 +573,7 @@ async def test_googlelens_multiple_images_results_appended(
         "llmcord.logic.messages._set_parent_message",
         _noop_set_parent_message,
     )
-    monkeypatch.setattr("llmcord.logic.messages.get_bad_keys_db", lambda: _FakeDB())
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
 
     bot = _DummyBot()
     msg = FakeMessage(
