@@ -7,7 +7,6 @@ from typing import cast
 
 import pytest
 
-from llmcord.core.exceptions import FIRST_TOKEN_TIMEOUT_SECONDS
 from llmcord.logic.generation import (
     _get_stream,
     _iter_stream_with_first_chunk,
@@ -108,6 +107,7 @@ async def test_google_gemini_cli_stream_uses_first_token_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_timeout: int | None = None
+    configured_timeout = 47
 
     async def _fake_google_stream(
         **_kwargs: object,
@@ -131,6 +131,10 @@ async def test_google_gemini_cli_stream_uses_first_token_timeout(
     monkeypatch.setattr(
         "llmcord.logic.generation._iter_stream_with_first_chunk",
         _fake_iter_stream_with_first_chunk,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.generation.get_first_token_timeout_seconds",
+        lambda: configured_timeout,
     )
 
     context = cast(
@@ -157,7 +161,7 @@ async def test_google_gemini_cli_stream_uses_first_token_timeout(
     assert chunk[0] == "hello"
     assert chunk[1] == "stop"
     assert chunk[4] is False
-    assert captured_timeout == FIRST_TOKEN_TIMEOUT_SECONDS
+    assert captured_timeout == configured_timeout
 
 
 @pytest.mark.asyncio

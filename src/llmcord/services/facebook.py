@@ -29,6 +29,7 @@ _FACEBOOK_URL_RE = re.compile(
 )
 
 _FDOWNLOADER_URL = "https://fdownloader.net/en"
+_FDOWNLOADER_REQUEST_TIMEOUT_SECONDS = 12.0
 _K_URL_SEARCH_RE = re.compile(r'k_url_search="(?P<url>https://[^"]+/api/ajaxSearch)"')
 _K_EXP_RE = re.compile(r'k_exp="(?P<exp>\d+)"')
 _K_TOKEN_RE = re.compile(r'k_token="(?P<token>[0-9a-f]{64})"', re.IGNORECASE)
@@ -96,7 +97,14 @@ async def _fetch_fdownloader_params(
         response = await session.get(
             _FDOWNLOADER_URL,
             headers={"user-agent": DEFAULT_USER_AGENT},
+            timeout=_FDOWNLOADER_REQUEST_TIMEOUT_SECONDS,
         )
+    except curl_requests_exceptions.Timeout:
+        logger.warning(
+            "FDownloader homepage request timed out after %.1fs",
+            _FDOWNLOADER_REQUEST_TIMEOUT_SECONDS,
+        )
+        return None
     except curl_requests_exceptions.RequestException as exc:
         log_exception(
             logger=logger,
@@ -147,7 +155,15 @@ async def _fetch_fdownloader_result_html(
             params.search_url,
             data=request_data,
             headers=headers,
+            timeout=_FDOWNLOADER_REQUEST_TIMEOUT_SECONDS,
         )
+    except curl_requests_exceptions.Timeout:
+        logger.warning(
+            "FDownloader ajaxSearch request timed out after %.1fs url=%s",
+            _FDOWNLOADER_REQUEST_TIMEOUT_SECONDS,
+            facebook_url,
+        )
+        return None
     except curl_requests_exceptions.RequestException as exc:
         log_exception(
             logger=logger,

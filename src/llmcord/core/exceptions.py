@@ -2,10 +2,32 @@
 
 from typing import NoReturn
 
+from llmcord.core.config import get_config
+
 EMPTY_RESPONSE_MESSAGE = "Response stream ended with no content"
 FIRST_RESPONSE_TIMEOUT_MESSAGE = "No first token received within timeout window"
 FIRST_TOKEN_TIMEOUT_SECONDS = 30
 LITELLM_TIMEOUT_SECONDS = 60
+
+
+def get_first_token_timeout_seconds() -> int:
+    """Return configured first-token timeout seconds with safe fallback."""
+    raw_value = get_config().get(
+        "first_token_timeout_seconds",
+        FIRST_TOKEN_TIMEOUT_SECONDS,
+    )
+
+    if isinstance(raw_value, bool):
+        return FIRST_TOKEN_TIMEOUT_SECONDS
+
+    try:
+        timeout_seconds = int(raw_value)
+    except (TypeError, ValueError):
+        return FIRST_TOKEN_TIMEOUT_SECONDS
+
+    if timeout_seconds <= 0:
+        return FIRST_TOKEN_TIMEOUT_SECONDS
+    return timeout_seconds
 
 
 class EmptyResponseError(RuntimeError):

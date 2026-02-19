@@ -18,10 +18,10 @@ from llmcord.core.config import (
 )
 from llmcord.core.error_handling import log_exception
 from llmcord.core.exceptions import (
-    FIRST_TOKEN_TIMEOUT_SECONDS,
     LITELLM_TIMEOUT_SECONDS,
     FirstTokenTimeoutError,
     _raise_empty_response,
+    get_first_token_timeout_seconds,
 )
 from llmcord.core.models import MsgNode
 from llmcord.discord.ui import metadata as ui_metadata
@@ -381,6 +381,8 @@ async def _get_stream(
     tuple[str, object | None, object | None, list[GeneratedImage], bool]
 ]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
+    first_token_timeout_seconds = get_first_token_timeout_seconds()
+
     if stream_config.provider in {"google-gemini-cli", "google-antigravity"}:
         stream = stream_google_gemini_cli(
             provider_id=stream_config.provider,
@@ -393,7 +395,7 @@ async def _get_stream(
         )
         async for chunk in _iter_stream_with_first_chunk(
             stream,
-            timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
+            timeout_seconds=first_token_timeout_seconds,
         ):
             (
                 delta_content,
@@ -450,7 +452,7 @@ async def _get_stream(
 
     async for chunk in _iter_stream_with_first_chunk(
         stream,
-        timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
+        timeout_seconds=first_token_timeout_seconds,
         chunk_has_token=_litellm_chunk_has_token,
     ):
         choices = getattr(chunk, "choices", None)
@@ -732,7 +734,7 @@ def _handle_generation_exception(
         if is_first_token_timeout:
             timeout_seconds = getattr(error, "timeout_seconds", None)
             if not isinstance(timeout_seconds, int):
-                timeout_seconds = FIRST_TOKEN_TIMEOUT_SECONDS
+                timeout_seconds = get_first_token_timeout_seconds()
             logger.warning(
                 special_case_message,
                 timeout_seconds,

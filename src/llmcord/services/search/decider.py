@@ -15,8 +15,8 @@ from llmcord.core.config import get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
 from llmcord.core.exceptions import (
-    FIRST_TOKEN_TIMEOUT_SECONDS,
     FirstTokenTimeoutError,
+    get_first_token_timeout_seconds,
 )
 from llmcord.logic.fallbacks import (
     FallbackModel,
@@ -121,6 +121,8 @@ async def _get_decider_response_text(
     current_api_key: str,
     litellm_messages: list[dict[str, object]],
 ) -> str:
+    first_token_timeout_seconds = get_first_token_timeout_seconds()
+
     if run_config.provider in {"google-gemini-cli", "google-antigravity"}:
         response_chunks: list[str] = []
         stream = stream_google_gemini_cli(
@@ -134,7 +136,7 @@ async def _get_decider_response_text(
         )
         async for chunk in _iter_stream_with_first_chunk(
             stream,
-            timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
+            timeout_seconds=first_token_timeout_seconds,
             chunk_has_token=_google_gemini_cli_chunk_has_token,
         ):
             delta_content, _chunk_finish_reason, is_thinking = cast(

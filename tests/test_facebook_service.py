@@ -8,6 +8,8 @@ from curl_cffi.requests import exceptions as curl_requests_exceptions
 
 from llmcord.services.facebook import (
     DownloadedFacebookVideo,
+    _FDownloaderParams,
+    _fetch_fdownloader_result_html,
     maybe_download_facebook_video,
     maybe_download_facebook_videos,
     maybe_download_facebook_videos_with_failures,
@@ -208,3 +210,36 @@ async def test_maybe_download_facebook_videos_handles_fdownloader_timeout(
 
     assert result.videos == []
     assert result.failed_urls == [facebook_url]
+
+
+@pytest.mark.asyncio
+async def test_fetch_fdownloader_result_html_timeout_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    facebook_url = "https://www.facebook.com/share/v/1DLByQ2gr6/"
+    session = AsyncMock()
+    session.post = AsyncMock(
+        side_effect=curl_requests_exceptions.Timeout(
+            "timed out",
+            code=0,
+        ),
+    )
+
+    caplog.set_level("WARNING", logger="llmcord.services.facebook")
+
+    result = await _fetch_fdownloader_result_html(
+        facebook_url=facebook_url,
+        params=_FDownloaderParams(
+            search_url="https://example.com/api/ajaxSearch",
+            k_exp="123",
+            k_token="a" * 64,
+        ),
+        session=session,
+    )
+
+    assert result is None
+    assert any(
+        "FDownloader ajaxSearch request timed out" in record.message
+        for record in caplog.records
+    )
+    assert not any(record.levelname == "ERROR" for record in caplog.records)

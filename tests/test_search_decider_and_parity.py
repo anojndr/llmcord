@@ -381,6 +381,7 @@ async def test_decider_google_gemini_cli_uses_first_token_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured_timeout: int | None = None
+    configured_timeout = 53
 
     async def _fake_stream_google_gemini_cli(
         **_kwargs: object,
@@ -407,6 +408,10 @@ async def test_decider_google_gemini_cli_uses_first_token_timeout(
         "llmcord.services.search.decider._iter_stream_with_first_chunk",
         _fake_iter_stream_with_first_chunk,
     )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.get_first_token_timeout_seconds",
+        lambda: configured_timeout,
+    )
 
     response = await _get_decider_response_text(
         run_config=DeciderRunConfig(
@@ -422,7 +427,7 @@ async def test_decider_google_gemini_cli_uses_first_token_timeout(
     )
 
     assert response == '{"needs_search":false}'
-    assert captured_timeout == FIRST_TOKEN_TIMEOUT_SECONDS
+    assert captured_timeout == configured_timeout
 
 
 @pytest.mark.asyncio
