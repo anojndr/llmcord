@@ -250,6 +250,58 @@ async def test_web_search_decider_normalizes_mapping_api_key(
 
 
 @pytest.mark.asyncio
+async def test_web_search_decider_runs_for_google_antigravity_non_preview_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decider_called = False
+
+    async def _fake_decide_web_search(
+        _messages: list[dict[str, object]],
+        _decider_config: dict,
+    ) -> dict[str, object]:
+        nonlocal decider_called
+        decider_called = True
+        return {"needs_search": False}
+
+    def _fake_is_googlelens_query(*args: object, **kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "llmcord.logic.search_logic.decide_web_search",
+        _fake_decide_web_search,
+    )
+    monkeypatch.setattr("llmcord.logic.search_logic.get_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(id=22, content="at ai latest news", author=FakeUser(1234))
+    messages: list[dict[str, object]] = [{"role": "user", "content": "latest news"}]
+
+    await resolve_search_metadata(
+        SearchResolutionContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            msg_nodes={},
+            messages=messages,
+            user_warnings=set(),
+            tavily_api_keys=["tvly-TEST"],
+            config={
+                "web_search_provider": "tavily",
+                "web_search_decider_model": "google-antigravity/gemini-3-pro",
+                "providers": {"google-antigravity": {"api_key": ["k"]}},
+                "models": {"google-antigravity/gemini-3-pro": {}},
+            },
+            web_search_available=True,
+            web_search_provider="tavily",
+            actual_model="gemini-3-pro",
+            actual_provider="google-antigravity",
+        ),
+        is_googlelens_query_func=_fake_is_googlelens_query,
+    )
+
+    assert decider_called is True
+
+
+@pytest.mark.asyncio
 async def test_decider_google_gemini_cli_uses_native_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

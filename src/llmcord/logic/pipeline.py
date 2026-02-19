@@ -317,6 +317,7 @@ async def process_message(
                 web_search_available=web_search_available,
                 web_search_provider=web_search_provider,
                 actual_model=provider_settings.actual_model,
+                actual_provider=provider_settings.provider,
             ),
             is_googlelens_query_func=is_googlelens_query,
         )

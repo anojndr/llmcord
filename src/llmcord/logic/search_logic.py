@@ -53,6 +53,7 @@ class WebSearchContext:
     tavily_api_keys: list[str]
     is_googlelens_query: bool
     actual_model: str
+    actual_provider: str | None
     has_existing_search: bool
     search_metadata: dict[str, object] | None
 
@@ -71,6 +72,7 @@ class SearchResolutionContext:
     web_search_available: bool
     web_search_provider: str
     actual_model: str
+    actual_provider: str | None = None
 
 
 def resolve_web_search_provider(
@@ -167,6 +169,7 @@ async def resolve_search_metadata(
                 tavily_api_keys=context.tavily_api_keys,
                 is_googlelens_query=is_googlelens_query,
                 actual_model=context.actual_model,
+                actual_provider=context.actual_provider,
                 has_existing_search=has_existing_search,
                 search_metadata=search_metadata,
             ),
@@ -183,6 +186,7 @@ async def resolve_search_metadata(
                 tavily_api_keys=context.tavily_api_keys,
                 is_googlelens_query=is_googlelens_query,
                 actual_model=context.actual_model,
+                actual_provider=context.actual_provider,
                 has_existing_search=has_existing_search,
                 search_metadata=search_metadata,
             ),
@@ -254,9 +258,10 @@ async def maybe_run_web_search(
     search_metadata = context.search_metadata
     is_preview_model = "preview" in context.actual_model.lower()
     is_non_gemini = not is_gemini_model(context.actual_model)
+    is_google_antigravity = context.actual_provider == "google-antigravity"
     if (
         context.web_search_provider
-        and (is_non_gemini or is_preview_model)
+        and (is_non_gemini or is_preview_model or is_google_antigravity)
         and not context.is_googlelens_query
         and not context.has_existing_search
     ):
