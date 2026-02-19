@@ -122,9 +122,10 @@ async def _get_decider_response_text(
     current_api_key: str,
     litellm_messages: list[dict[str, object]],
 ) -> str:
-    if run_config.provider == "google-gemini-cli":
+    if run_config.provider in {"google-gemini-cli", "google-antigravity"}:
         response_chunks: list[str] = []
         stream = stream_google_gemini_cli(
+            provider_id=run_config.provider,
             model=run_config.model,
             messages=litellm_messages,
             api_key=current_api_key,

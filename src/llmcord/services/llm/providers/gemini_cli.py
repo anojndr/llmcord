@@ -21,22 +21,49 @@ from typing import Any, cast
 
 import httpx
 
-CLIENT_ID = base64.b64decode(
+GOOGLE_GEMINI_CLI_PROVIDER = "google-gemini-cli"
+GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity"
+
+GEMINI_CLI_CLIENT_ID = base64.b64decode(
     "NjgxMjU1ODA5Mzk1LW9vOGZ0Mm9wcmRybnA5ZTNhcWY2YXYzaG1kaWIxMzVqLmFwcHMuZ29vZ2xldXNlcmNvbnRlbnQuY29t",
 ).decode("utf-8")
-CLIENT_SECRET = base64.b64decode(
+GEMINI_CLI_CLIENT_SECRET = base64.b64decode(
     "R09DU1BYLTR1SGdNUG0tMW83U2stZ2VWNkN1NWNsWEZzeGw=",
 ).decode("utf-8")
-REDIRECT_URI = "http://localhost:8085/oauth2callback"
-SCOPES = (
+GEMINI_CLI_REDIRECT_URI = "http://localhost:8085/oauth2callback"
+GEMINI_CLI_CALLBACK_HOST = "127.0.0.1"
+GEMINI_CLI_CALLBACK_PORT = 8085
+GEMINI_CLI_CALLBACK_PATH = "/oauth2callback"
+GEMINI_CLI_SCOPES = (
     "https://www.googleapis.com/auth/cloud-platform",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 )
+
+ANTIGRAVITY_CLIENT_ID = base64.b64decode(
+    "MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
+).decode("utf-8")
+ANTIGRAVITY_CLIENT_SECRET = base64.b64decode(
+    "R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQWY=",
+).decode("utf-8")
+ANTIGRAVITY_REDIRECT_URI = "http://localhost:51121/oauth-callback"
+ANTIGRAVITY_CALLBACK_HOST = "127.0.0.1"
+ANTIGRAVITY_CALLBACK_PORT = 51121
+ANTIGRAVITY_CALLBACK_PATH = "/oauth-callback"
+ANTIGRAVITY_SCOPES = (
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/cclog",
+    "https://www.googleapis.com/auth/experimentsandconfigs",
+)
+
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 DEFAULT_ENDPOINT = "https://cloudcode-pa.googleapis.com"
+ANTIGRAVITY_DAILY_ENDPOINT = "https://daily-cloudcode-pa.sandbox.googleapis.com"
+ANTIGRAVITY_DEFAULT_PROJECT_ID = "rising-fact-p41fc"
 TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000
 TIER_FREE = "free-tier"
 TIER_LEGACY = "legacy-tier"
@@ -52,6 +79,33 @@ GEMINI_CLI_HEADERS = {
         },
     ),
 }
+
+DEFAULT_ANTIGRAVITY_VERSION = "1.15.8"
+ANTIGRAVITY_SYSTEM_INSTRUCTION = (
+    "You are Antigravity, a powerful agentic AI coding assistant designed by the "
+    "Google Deepmind team working on Advanced Agentic Coding."
+    "You are pair programming with a USER to solve their coding task. The task may "
+    "require creating a new codebase, modifying or debugging an existing codebase, "
+    "or simply answering a question."
+    "**Absolute paths only**"
+    "**Proactiveness**"
+)
+
+
+def _get_antigravity_headers() -> dict[str, str]:
+    version = os.environ.get("PI_AI_ANTIGRAVITY_VERSION") or DEFAULT_ANTIGRAVITY_VERSION
+    return {
+        "User-Agent": f"antigravity/{version} darwin/arm64",
+        "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+        "Client-Metadata": json.dumps(
+            {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            },
+        ),
+    }
+
 
 _CREDENTIAL_CACHE: dict[str, GeminiCliCredentials] = {}
 
@@ -80,7 +134,10 @@ def _is_expired(expires_ms: int | None) -> bool:
     return _now_ms() >= expires_ms - TOKEN_EXPIRY_BUFFER_MS
 
 
-def parse_api_key_credentials(api_key: str) -> GeminiCliCredentials:
+def parse_api_key_credentials(
+    api_key: str,
+    provider_id: str = GOOGLE_GEMINI_CLI_PROVIDER,
+) -> GeminiCliCredentials:
     """Parse a provider api_key value into structured credentials.
 
     Supported formats:
@@ -89,7 +146,7 @@ def parse_api_key_credentials(api_key: str) -> GeminiCliCredentials:
     """
     value = api_key.strip()
     if not value:
-        msg = "google-gemini-cli provider requires api_key credentials"
+        msg = f"{provider_id} provider requires api_key credentials"
         raise ValueError(msg)
 
     if not value.startswith("{"):
@@ -104,11 +161,11 @@ def parse_api_key_credentials(api_key: str) -> GeminiCliCredentials:
     try:
         payload = json.loads(value)
     except json.JSONDecodeError as exc:
-        msg = "Invalid JSON in google-gemini-cli api_key"
+        msg = f"Invalid JSON in {provider_id} api_key"
         raise ValueError(msg) from exc
 
     if not isinstance(payload, dict):
-        msg = "google-gemini-cli api_key JSON must be an object"
+        msg = f"{provider_id} api_key JSON must be an object"
         raise ValueError(msg)
 
     expires_raw = payload.get("expires") or payload.get("expires_at")
@@ -365,8 +422,8 @@ def _get_default_tier(allowed_tiers: object) -> str:
     return TIER_LEGACY
 
 
-async def discover_project(access_token: str) -> str:
-    """Discover or provision a Cloud Code Assist project id."""
+async def _discover_project_gemini_cli(access_token: str) -> str:
+    """Discover or provision a Cloud Code Assist project id for Gemini CLI."""
     env_project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get(
         "GOOGLE_CLOUD_PROJECT_ID",
     )
@@ -486,16 +543,89 @@ async def discover_project(access_token: str) -> str:
     raise RuntimeError(msg)
 
 
+async def _discover_project_antigravity(access_token: str) -> str:
+    """Discover antigravity project id, falling back to a known default."""
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "User-Agent": "google-api-nodejs-client/9.15.1",
+        "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+        "Client-Metadata": json.dumps(
+            {
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            },
+        ),
+    }
+    load_body = {
+        "metadata": {
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI",
+        },
+    }
+    endpoints = (CODE_ASSIST_ENDPOINT, ANTIGRAVITY_DAILY_ENDPOINT)
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        for endpoint in endpoints:
+            try:
+                load_response = await client.post(
+                    f"{endpoint}/v1internal:loadCodeAssist",
+                    headers=headers,
+                    json=load_body,
+                )
+            except httpx.HTTPError:
+                continue
+
+            if not load_response.is_success:
+                continue
+
+            body = load_response.json()
+            if not isinstance(body, dict):
+                continue
+
+            companion = body.get("cloudaicompanionProject")
+            if isinstance(companion, str) and companion:
+                return companion
+            if isinstance(companion, dict):
+                companion_dict = cast("dict[str, object]", companion)
+                project_id = companion_dict.get("id")
+                if isinstance(project_id, str) and project_id:
+                    return project_id
+
+    return ANTIGRAVITY_DEFAULT_PROJECT_ID
+
+
+async def discover_project(
+    access_token: str,
+    *,
+    provider_id: str = GOOGLE_GEMINI_CLI_PROVIDER,
+) -> str:
+    """Discover or provision a Cloud Code Assist project id."""
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+        return await _discover_project_antigravity(access_token)
+    return await _discover_project_gemini_cli(access_token)
+
+
 async def _refresh_google_cloud_token(
     refresh_token: str,
     project_id: str | None,
+    provider_id: str,
     oauth_client_id: str | None,
     oauth_client_secret: str | None,
     oauth_token_url: str | None,
 ) -> GeminiCliCredentials:
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+        default_client_id = ANTIGRAVITY_CLIENT_ID
+        default_client_secret = ANTIGRAVITY_CLIENT_SECRET
+    else:
+        default_client_id = GEMINI_CLI_CLIENT_ID
+        default_client_secret = GEMINI_CLI_CLIENT_SECRET
+
     token_url = oauth_token_url or TOKEN_URL
-    client_id = oauth_client_id or CLIENT_ID
-    client_secret = oauth_client_secret or CLIENT_SECRET
+    client_id = oauth_client_id or default_client_id
+    client_secret = oauth_client_secret or default_client_secret
     request_data: dict[str, str] = {
         "client_id": client_id,
         "refresh_token": refresh_token,
@@ -531,7 +661,10 @@ async def _refresh_google_cloud_token(
             msg = "Token refresh did not return expires_in"
             raise RuntimeError(msg)
 
-        resolved_project = project_id or await discover_project(access_token)
+        resolved_project = project_id or await discover_project(
+            access_token,
+            provider_id=provider_id,
+        )
         returned_refresh = payload.get("refresh_token")
         refresh_value = (
             returned_refresh if isinstance(returned_refresh, str) else refresh_token
@@ -571,6 +704,7 @@ async def get_valid_google_gemini_cli_credentials(api_key: str) -> GeminiCliCred
     refreshed = await _refresh_google_cloud_token(
         credentials.refresh,
         credentials.project_id,
+        GOOGLE_GEMINI_CLI_PROVIDER,
         credentials.oauth_client_id,
         credentials.oauth_client_secret,
         credentials.oauth_token_url,
@@ -582,8 +716,48 @@ async def get_valid_google_gemini_cli_credentials(api_key: str) -> GeminiCliCred
     return refreshed
 
 
+async def get_valid_cloud_code_assist_credentials(
+    api_key: str,
+    provider_id: str,
+) -> GeminiCliCredentials:
+    """Return valid access credentials for Cloud Code Assist providers."""
+    cache_key = f"{provider_id}:{api_key}"
+    cached = _CREDENTIAL_CACHE.get(cache_key)
+    credentials = cached or parse_api_key_credentials(api_key, provider_id)
+
+    has_access = isinstance(credentials.access, str) and bool(credentials.access)
+    has_project = isinstance(credentials.project_id, str) and bool(
+        credentials.project_id,
+    )
+    if has_access and has_project and not _is_expired(credentials.expires):
+        _CREDENTIAL_CACHE[cache_key] = credentials
+        return credentials
+
+    if not credentials.refresh:
+        msg = (
+            f"{provider_id} api_key must include a refresh token if access token "
+            "is missing or expired"
+        )
+        raise RuntimeError(msg)
+
+    refreshed = await _refresh_google_cloud_token(
+        credentials.refresh,
+        credentials.project_id,
+        provider_id,
+        credentials.oauth_client_id,
+        credentials.oauth_client_secret,
+        credentials.oauth_token_url,
+    )
+    if credentials.email and not refreshed.email:
+        refreshed.email = credentials.email
+
+    _CREDENTIAL_CACHE[cache_key] = refreshed
+    return refreshed
+
+
 def _build_cloudcode_request(
     *,
+    provider_id: str,
     model: str,
     project_id: str,
     messages: list[dict[str, object]],
@@ -599,17 +773,49 @@ def _build_cloudcode_request(
             "parts": [{"text": system_prompt}],
         }
 
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+        existing_parts = []
+        existing_instruction = request_body.get("systemInstruction")
+        if isinstance(existing_instruction, dict):
+            instruction_dict = cast("dict[str, object]", existing_instruction)
+            parts = instruction_dict.get("parts")
+            if isinstance(parts, list):
+                existing_parts = parts
+        request_body["systemInstruction"] = {
+            "role": "user",
+            "parts": [
+                {"text": ANTIGRAVITY_SYSTEM_INSTRUCTION},
+                {
+                    "text": (
+                        "Please ignore following [ignore]"
+                        f"{ANTIGRAVITY_SYSTEM_INSTRUCTION}"
+                        "[/ignore]"
+                    ),
+                },
+                *existing_parts,
+            ],
+        }
+
     generation_config = _build_generation_config(model, model_parameters)
     if generation_config:
         request_body["generationConfig"] = generation_config
 
-    return {
+    request_payload: dict[str, object] = {
         "project": project_id,
         "model": clean_model,
         "request": request_body,
-        "userAgent": "llmcord",
-        "requestId": f"llmcord-{int(time.time() * 1000)}-{secrets.token_hex(5)}",
+        "userAgent": (
+            "antigravity" if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER else "llmcord"
+        ),
+        "requestId": (
+            f"agent-{int(time.time() * 1000)}-{secrets.token_hex(5)}"
+            if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER
+            else f"llmcord-{int(time.time() * 1000)}-{secrets.token_hex(5)}"
+        ),
     }
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+        request_payload["requestType"] = "agent"
+    return request_payload
 
 
 def _extract_retry_delay_ms(response: httpx.Response, response_text: str) -> int | None:
@@ -651,6 +857,7 @@ def _extract_retry_delay_ms(response: httpx.Response, response_text: str) -> int
 
 async def stream_google_gemini_cli(
     *,
+    provider_id: str = GOOGLE_GEMINI_CLI_PROVIDER,
     model: str,
     messages: list[dict[str, object]],
     api_key: str,
@@ -659,26 +866,39 @@ async def stream_google_gemini_cli(
     model_parameters: dict[str, object] | None,
 ) -> AsyncIterator[tuple[str, object | None, bool]]:
     """Stream text deltas from Cloud Code Assist SSE endpoint."""
-    credentials = await get_valid_google_gemini_cli_credentials(api_key)
+    credentials = await get_valid_cloud_code_assist_credentials(api_key, provider_id)
     if not credentials.access or not credentials.project_id:
-        msg = "Missing access token or project id for google-gemini-cli"
+        msg = f"Missing access token or project id for {provider_id}"
         raise RuntimeError(msg)
 
     body = _build_cloudcode_request(
+        provider_id=provider_id,
         model=model,
         project_id=credentials.project_id,
         messages=messages,
         model_parameters=model_parameters,
     )
 
-    endpoint = (base_url or DEFAULT_ENDPOINT).rstrip("/")
-    url = f"{endpoint}/v1internal:streamGenerateContent?alt=sse"
+    endpoints = [
+        (base_url or DEFAULT_ENDPOINT).rstrip("/"),
+    ]
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER and not base_url:
+        endpoints = [
+            ANTIGRAVITY_DAILY_ENDPOINT,
+            DEFAULT_ENDPOINT,
+        ]
+
+    provider_headers = (
+        _get_antigravity_headers()
+        if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER
+        else GEMINI_CLI_HEADERS
+    )
 
     headers = {
         "Authorization": f"Bearer {credentials.access}",
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
-        **GEMINI_CLI_HEADERS,
+        **provider_headers,
     }
     if extra_headers:
         headers.update(extra_headers)
@@ -687,6 +907,8 @@ async def stream_google_gemini_cli(
     attempt = 0
     while True:
         attempt += 1
+        endpoint = endpoints[min(attempt - 1, len(endpoints) - 1)]
+        url = f"{endpoint}/v1internal:streamGenerateContent?alt=sse"
         async with (
             httpx.AsyncClient(timeout=30) as client,
             client.stream(
@@ -764,14 +986,20 @@ def _generate_pkce() -> tuple[str, str]:
     return verifier, challenge
 
 
-def _wait_for_auth_code(timeout_seconds: int = 300) -> tuple[str, str]:
+def _wait_for_auth_code(
+    *,
+    callback_host: str,
+    callback_port: int,
+    callback_path: str,
+    timeout_seconds: int = 300,
+) -> tuple[str, str]:
     code_holder: dict[str, str] = {}
     event = Event()
 
     class CallbackHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
-            if parsed.path != "/oauth2callback":
+            if parsed.path != callback_path:
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -807,7 +1035,7 @@ def _wait_for_auth_code(timeout_seconds: int = 300) -> tuple[str, str]:
         def log_message(self, format: str, *args: Any) -> None:
             _ = (format, args)
 
-    server = HTTPServer(("127.0.0.1", 8085), CallbackHandler)
+    server = HTTPServer((callback_host, callback_port), CallbackHandler)
 
     async def run_server() -> None:
         await asyncio.to_thread(server.serve_forever)
@@ -848,13 +1076,57 @@ async def _get_user_email(access_token: str) -> str | None:
 
 async def login_gemini_cli() -> GeminiCliCredentials:
     """Interactive browser login that returns reusable credentials."""
+    return await _login_cloud_code_assist_provider(GOOGLE_GEMINI_CLI_PROVIDER)
+
+
+async def login_antigravity() -> GeminiCliCredentials:
+    """Interactive browser login that returns reusable antigravity credentials."""
+    return await _login_cloud_code_assist_provider(GOOGLE_ANTIGRAVITY_PROVIDER)
+
+
+def _oauth_provider_config(
+    provider_id: str,
+) -> tuple[str, str, str, tuple[str, ...], str, int, str]:
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+        return (
+            ANTIGRAVITY_CLIENT_ID,
+            ANTIGRAVITY_CLIENT_SECRET,
+            ANTIGRAVITY_REDIRECT_URI,
+            ANTIGRAVITY_SCOPES,
+            ANTIGRAVITY_CALLBACK_HOST,
+            ANTIGRAVITY_CALLBACK_PORT,
+            ANTIGRAVITY_CALLBACK_PATH,
+        )
+    return (
+        GEMINI_CLI_CLIENT_ID,
+        GEMINI_CLI_CLIENT_SECRET,
+        GEMINI_CLI_REDIRECT_URI,
+        GEMINI_CLI_SCOPES,
+        GEMINI_CLI_CALLBACK_HOST,
+        GEMINI_CLI_CALLBACK_PORT,
+        GEMINI_CLI_CALLBACK_PATH,
+    )
+
+
+async def _login_cloud_code_assist_provider(provider_id: str) -> GeminiCliCredentials:
+    """Interactive browser login for Google Cloud Code Assist providers."""
+    (
+        client_id,
+        client_secret,
+        redirect_uri,
+        scopes,
+        callback_host,
+        callback_port,
+        callback_path,
+    ) = _oauth_provider_config(provider_id)
+
     verifier, challenge = _generate_pkce()
     params = urllib.parse.urlencode(
         {
-            "client_id": CLIENT_ID,
+            "client_id": client_id,
             "response_type": "code",
-            "redirect_uri": REDIRECT_URI,
-            "scope": " ".join(SCOPES),
+            "redirect_uri": redirect_uri,
+            "scope": " ".join(scopes),
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "state": verifier,
@@ -865,7 +1137,12 @@ async def login_gemini_cli() -> GeminiCliCredentials:
     auth_url = f"{AUTH_URL}?{params}"
     webbrowser.open(auth_url)
 
-    code, state = await asyncio.to_thread(_wait_for_auth_code)
+    code, state = await asyncio.to_thread(
+        _wait_for_auth_code,
+        callback_host=callback_host,
+        callback_port=callback_port,
+        callback_path=callback_path,
+    )
     if state != verifier:
         msg = "OAuth state mismatch"
         raise RuntimeError(msg)
@@ -875,11 +1152,11 @@ async def login_gemini_cli() -> GeminiCliCredentials:
             TOKEN_URL,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "code": code,
                 "grant_type": "authorization_code",
-                "redirect_uri": REDIRECT_URI,
+                "redirect_uri": redirect_uri,
                 "code_verifier": verifier,
             },
         )
@@ -900,15 +1177,15 @@ async def login_gemini_cli() -> GeminiCliCredentials:
             raise RuntimeError(msg)
 
         email = await _get_user_email(access_token)
-        project_id = await discover_project(access_token)
+        project_id = await discover_project(access_token, provider_id=provider_id)
         return GeminiCliCredentials(
             refresh=refresh_token,
             access=access_token,
             expires=_now_ms() + (expires_in * 1000),
             project_id=project_id,
             email=email,
-            oauth_client_id=CLIENT_ID,
-            oauth_client_secret=CLIENT_SECRET,
+            oauth_client_id=client_id,
+            oauth_client_secret=client_secret,
             oauth_token_url=TOKEN_URL,
         )
 
@@ -917,5 +1194,13 @@ def cli_login_main() -> int:
     """CLI entrypoint for obtaining google-gemini-cli credentials JSON."""
     credentials = asyncio.run(login_gemini_cli())
     print("Login complete. Use this JSON as providers.google-gemini-cli.api_key:")
+    print(credentials_to_api_key(credentials))
+    return 0
+
+
+def cli_login_antigravity_main() -> int:
+    """CLI entrypoint for obtaining google-antigravity credentials JSON."""
+    credentials = asyncio.run(login_antigravity())
+    print("Login complete. Use this JSON as providers.google-antigravity.api_key:")
     print(credentials_to_api_key(credentials))
     return 0

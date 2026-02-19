@@ -392,8 +392,9 @@ async def _get_stream(
     tuple[str, object | None, object | None, list[GeneratedImage], bool]
 ]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
-    if stream_config.provider == "google-gemini-cli":
+    if stream_config.provider in {"google-gemini-cli", "google-antigravity"}:
         stream = stream_google_gemini_cli(
+            provider_id=stream_config.provider,
             model=stream_config.actual_model,
             messages=context.messages[::-1],
             api_key=stream_config.api_key,

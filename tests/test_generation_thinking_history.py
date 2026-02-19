@@ -161,6 +161,50 @@ async def test_google_gemini_cli_stream_uses_first_token_timeout(
 
 
 @pytest.mark.asyncio
+async def test_google_antigravity_stream_uses_native_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_provider: str | None = None
+
+    async def _fake_google_stream(
+        **kwargs: object,
+    ) -> AsyncIterator[tuple[str, object | None, bool]]:
+        nonlocal captured_provider
+        captured_provider = cast("str", kwargs.get("provider_id"))
+        yield "hello", "stop", False
+
+    monkeypatch.setattr(
+        "llmcord.logic.generation.stream_google_gemini_cli",
+        _fake_google_stream,
+    )
+
+    context = cast(
+        "GenerationContext",
+        SimpleNamespace(
+            messages=[{"role": "user", "content": "hello"}],
+            new_msg=SimpleNamespace(content="hello"),
+        ),
+    )
+
+    stream = _get_stream(
+        context=context,
+        stream_config=StreamConfig(
+            provider="google-antigravity",
+            actual_model="gemini-3-pro",
+            api_key="dummy-key",
+            base_url=None,
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+    chunk = await anext(stream)
+
+    assert captured_provider == "google-antigravity"
+    assert chunk[0] == "hello"
+    assert chunk[1] == "stop"
+
+
+@pytest.mark.asyncio
 async def test_iter_stream_timeout_accepts_first_thinking_token() -> None:
     thinking_chunk = SimpleNamespace(
         choices=[

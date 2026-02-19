@@ -23,9 +23,24 @@ from llmcord.logic.fallbacks import build_default_fallback_chain
             "gemini-3-flash-preview-high",
             "gemini/gemini-3-flash-preview-high",
         ),
+        (
+            "google-antigravity",
+            "gemini-3-flash-preview-low",
+            "gemini/gemini-3-flash-preview-low",
+        ),
+        (
+            "google-antigravity",
+            "gemini-3-flash-preview-minimal",
+            "gemini/gemini-3-flash-preview-minimal",
+        ),
+        (
+            "google-antigravity",
+            "gemini-3-flash-preview-high",
+            "gemini/gemini-3-flash-preview-high",
+        ),
     ],
 )
-def test_google_gemini_cli_preview_models_use_matching_gemini_first_fallback(
+def test_google_cloud_code_assist_preview_models_use_matching_gemini_first_fallback(
     original_provider: str,
     original_model: str,
     expected_first_fallback: str,

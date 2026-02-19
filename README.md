@@ -37,6 +37,7 @@ llmcord supports remote models from:
 - [xAI API](https://docs.x.ai/docs/models)
 - [Google Gemini API](https://ai.google.dev/gemini-api/docs/models)
 - **Google Cloud Code Assist (Gemini CLI OAuth)**
+- **Google Antigravity (Gemini 3 / Claude / GPT-OSS via OAuth)**
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
 - [OpenRouter](https://openrouter.ai/models)
@@ -123,6 +124,13 @@ Run the login helper to generate your API key JSON:
 uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_main; raise SystemExit(cli_login_main())"
 ```
 Paste the resulting JSON into `providers.google-gemini-cli.api_key`.
+
+#### For Google Antigravity support:
+Run the Antigravity login helper to generate your API key JSON:
+```bash
+uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_antigravity_main; raise SystemExit(cli_login_antigravity_main())"
+```
+Paste the resulting JSON into `providers.google-antigravity.api_key`.
 
 4. Run the bot:
   ```bash

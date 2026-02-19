@@ -287,6 +287,44 @@ async def test_decider_google_gemini_cli_uses_native_stream(
 
 
 @pytest.mark.asyncio
+async def test_decider_google_antigravity_uses_native_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_stream_google_gemini_cli(**kwargs: object):
+        assert kwargs.get("provider_id") == "google-antigravity"
+        assert kwargs.get("model") == "gemini-3-pro"
+        yield '{"needs_search":false}', None, False
+
+    async def _fail_litellm_call(**_kwargs: object) -> object:
+        msg = "litellm path should not be used for google-antigravity decider"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.stream_google_gemini_cli",
+        _fake_stream_google_gemini_cli,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.litellm.acompletion",
+        _fail_litellm_call,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="google-antigravity",
+            model="gemini-3-pro",
+            api_keys=["refresh-token"],
+            base_url=None,
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert exhausted is False
+    assert result == {"needs_search": False}
+
+
+@pytest.mark.asyncio
 async def test_decider_google_gemini_cli_uses_first_token_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

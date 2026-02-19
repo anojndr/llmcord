@@ -95,6 +95,15 @@ providers:
     api_key: 
     base_url: https://cloudcode-pa.googleapis.com
 
+  google-antigravity:
+    # Paste JSON produced by:
+    # uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_antigravity_main; raise SystemExit(cli_login_antigravity_main())"
+    # Example value:
+    # {"refresh":"...","access":"...","expires":1700000000000,"projectId":"rising-fact-p41fc"}
+    api_key:
+    # Optional override endpoint. Default uses daily sandbox with prod fallback.
+    # base_url: https://daily-cloudcode-pa.sandbox.googleapis.com
+
   openrouter:
     api_key:
     base_url: https://openrouter.ai/api/v1
@@ -109,6 +118,8 @@ models:
   google-gemini-cli/gemini-3-flash-preview-minimal:
 
   google-gemini-cli/gemini-3-flash-preview-high:
+
+  google-antigravity/gemini-3-pro:
 
   gemini/gemini-3-flash-preview-low:
 

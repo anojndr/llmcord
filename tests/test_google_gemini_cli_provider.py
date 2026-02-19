@@ -2,6 +2,8 @@ import json
 from typing import cast
 
 from llmcord.services.llm.providers.gemini_cli import (
+    GOOGLE_ANTIGRAVITY_PROVIDER,
+    GOOGLE_GEMINI_CLI_PROVIDER,
     _build_cloudcode_request,
     credentials_to_api_key,
     parse_api_key_credentials,
@@ -22,7 +24,7 @@ def test_parse_google_gemini_cli_api_key_json_roundtrip() -> None:
         },
     )
 
-    parsed = parse_api_key_credentials(raw)
+    parsed = parse_api_key_credentials(raw, GOOGLE_GEMINI_CLI_PROVIDER)
 
     assert parsed.refresh == "refresh-token"
     assert parsed.access == "access-token"
@@ -47,7 +49,7 @@ def test_parse_google_gemini_cli_authorized_user_fields() -> None:
         },
     )
 
-    parsed = parse_api_key_credentials(raw)
+    parsed = parse_api_key_credentials(raw, GOOGLE_GEMINI_CLI_PROVIDER)
 
     assert parsed.refresh == "refresh-token"
     assert parsed.oauth_client_id == "oauth-client-id"
@@ -66,7 +68,10 @@ def test_parse_google_gemini_cli_authorized_user_fields() -> None:
 
 
 def test_parse_google_gemini_cli_api_key_plain_refresh_token() -> None:
-    parsed = parse_api_key_credentials("refresh-only-token")
+    parsed = parse_api_key_credentials(
+        "refresh-only-token",
+        GOOGLE_GEMINI_CLI_PROVIDER,
+    )
 
     assert parsed.refresh == "refresh-only-token"
     assert parsed.access is None
@@ -75,6 +80,7 @@ def test_parse_google_gemini_cli_api_key_plain_refresh_token() -> None:
 
 def test_build_cloudcode_request_converts_multipart_content() -> None:
     request = _build_cloudcode_request(
+        provider_id=GOOGLE_GEMINI_CLI_PROVIDER,
         model="gemini-3-flash-preview",
         project_id="project-123",
         messages=[
@@ -126,6 +132,7 @@ def test_build_cloudcode_request_converts_multipart_content() -> None:
 
 def test_build_cloudcode_request_strips_thinking_suffix_from_model() -> None:
     request = _build_cloudcode_request(
+        provider_id=GOOGLE_GEMINI_CLI_PROVIDER,
         model="gemini-3-flash-preview-high",
         project_id="project-123",
         messages=[{"role": "user", "content": "hello"}],
@@ -144,3 +151,24 @@ def test_build_cloudcode_request_strips_thinking_suffix_from_model() -> None:
     assert isinstance(thinking_config, dict)
     thinking_config_dict = cast("dict[str, object]", thinking_config)
     assert thinking_config_dict["thinkingLevel"] == "HIGH"
+
+
+def test_build_cloudcode_request_antigravity_adds_agent_fields() -> None:
+    request = _build_cloudcode_request(
+        provider_id=GOOGLE_ANTIGRAVITY_PROVIDER,
+        model="gemini-3-pro",
+        project_id="project-123",
+        messages=[{"role": "user", "content": "hello"}],
+        model_parameters=None,
+    )
+
+    assert request["requestType"] == "agent"
+    assert request["userAgent"] == "antigravity"
+
+    payload = request["request"]
+    assert isinstance(payload, dict)
+    payload_dict = cast("dict[str, object]", payload)
+    system_instruction = payload_dict["systemInstruction"]
+    assert isinstance(system_instruction, dict)
+    instruction_dict = cast("dict[str, object]", system_instruction)
+    assert instruction_dict.get("role") == "user"

@@ -41,6 +41,30 @@ GOOGLE_GEMINI_CLI_FALLBACKS: dict[tuple[str, str], FallbackModel] = {
         "gemini-3-flash-preview-high",
         "gemini/gemini-3-flash-preview-high",
     ),
+    (
+        "google-antigravity",
+        "gemini-3-flash-preview-low",
+    ): (
+        "gemini",
+        "gemini-3-flash-preview-low",
+        "gemini/gemini-3-flash-preview-low",
+    ),
+    (
+        "google-antigravity",
+        "gemini-3-flash-preview-minimal",
+    ): (
+        "gemini",
+        "gemini-3-flash-preview-minimal",
+        "gemini/gemini-3-flash-preview-minimal",
+    ),
+    (
+        "google-antigravity",
+        "gemini-3-flash-preview-high",
+    ): (
+        "gemini",
+        "gemini-3-flash-preview-high",
+        "gemini/gemini-3-flash-preview-high",
+    ),
 }
 
 
