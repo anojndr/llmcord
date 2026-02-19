@@ -71,6 +71,20 @@ async def _send_processing_error(
     await call_with_embed_limits(processing_msg.edit, embed=embed)
 
 
+async def _update_processing_progress(
+    processing_msg: discord.Message,
+    *,
+    step: int,
+    total_steps: int,
+    status: str,
+) -> None:
+    embed = discord.Embed(
+        description=f"⏳ Working on your request ({step}/{total_steps}): {status}",
+        color=EMBED_COLOR_INCOMPLETE,
+    )
+    await call_with_embed_limits(processing_msg.edit, embed=embed)
+
+
 def _is_system_prompt_disabled(
     *,
     provider_settings: ProviderSettings,
@@ -218,6 +232,12 @@ async def process_message(
     )
 
     try:
+        await _update_processing_progress(
+            processing_msg,
+            step=2,
+            total_steps=5,
+            status="Selecting the best model configuration...",
+        )
         provider_settings = await resolve_provider_settings(
             processing_msg=processing_msg,
             curr_model_lock=curr_model_lock,
@@ -246,6 +266,12 @@ async def process_message(
             youtube_transcript_method,
         ) = _get_message_limits(config, accept_images=accept_images)
 
+        await _update_processing_progress(
+            processing_msg,
+            step=3,
+            total_steps=5,
+            status="Reading your message, context, and attachments...",
+        )
         build_result = await build_messages(
             context=MessageBuildContext(
                 new_msg=new_msg,
@@ -305,6 +331,12 @@ async def process_message(
             config,
             tavily_api_keys,
         )
+        await _update_processing_progress(
+            processing_msg,
+            step=4,
+            total_steps=5,
+            status="Checking whether web search is needed...",
+        )
         search_metadata = await resolve_search_metadata(
             SearchResolutionContext(
                 new_msg=new_msg,
@@ -322,6 +354,12 @@ async def process_message(
             is_googlelens_query_func=is_googlelens_query,
         )
 
+        await _update_processing_progress(
+            processing_msg,
+            step=5,
+            total_steps=5,
+            status="Generating your response...",
+        )
         generation_context = GenerationContext(
             new_msg=new_msg,
             discord_bot=discord_bot,
