@@ -91,6 +91,56 @@ ANTIGRAVITY_SYSTEM_INSTRUCTION = (
     "**Proactiveness**"
 )
 
+IMAGE_TOOL_NAME = "generate_image"
+IMAGE_TOOL_DEFAULT_MODEL = "gemini-3-pro-image"
+IMAGE_TOOL_DEFAULT_ASPECT_RATIO = "1:1"
+IMAGE_TOOL_READ_TIMEOUT_SECONDS = 180
+IMAGE_TOOL_MAX_ATTEMPTS_PER_ENDPOINT = 2
+IMAGE_TOOL_RETRY_BASE_DELAY_SECONDS = 1.0
+IMAGE_TOOL_ASPECT_RATIOS = (
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9",
+)
+IMAGE_SYSTEM_INSTRUCTION = (
+    "You are an AI image generator. Generate images based on user descriptions. "
+    "Focus on creating high-quality, visually appealing images that match the "
+    "user's request."
+)
+IMAGE_TOOL_DECLARATION: dict[str, object] = {
+    "name": IMAGE_TOOL_NAME,
+    "description": (
+        "Generate an image via Google Antigravity image models and return the "
+        "result as inline image data."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "prompt": {
+                "type": "string",
+                "description": "Image description.",
+            },
+            "model": {
+                "type": "string",
+                "description": ("Image model id (e.g., gemini-3-pro-image, imagen-3)."),
+            },
+            "aspectRatio": {
+                "type": "string",
+                "enum": list(IMAGE_TOOL_ASPECT_RATIOS),
+                "description": "Aspect ratio for generated image.",
+            },
+        },
+        "required": ["prompt"],
+    },
+}
+
 
 def _get_antigravity_headers() -> dict[str, str]:
     version = os.environ.get("PI_AI_ANTIGRAVITY_VERSION") or DEFAULT_ANTIGRAVITY_VERSION
@@ -800,6 +850,18 @@ def _build_cloudcode_request(
     if generation_config:
         request_body["generationConfig"] = generation_config
 
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+        request_body["tools"] = [
+            {
+                "functionDeclarations": [IMAGE_TOOL_DECLARATION],
+            },
+        ]
+        request_body["toolConfig"] = {
+            "functionCallingConfig": {
+                "mode": "AUTO",
+            },
+        }
+
     request_payload: dict[str, object] = {
         "project": project_id,
         "model": clean_model,
@@ -853,6 +915,385 @@ def _extract_retry_delay_ms(response: httpx.Response, response_text: str) -> int
     if unit == "ms":
         return int(value)
     return int(value * 1000)
+
+
+def _normalize_aspect_ratio(value: object) -> str:
+    if not isinstance(value, str):
+        return IMAGE_TOOL_DEFAULT_ASPECT_RATIO
+    normalized = value.strip()
+    if normalized in IMAGE_TOOL_ASPECT_RATIOS:
+        return normalized
+    return IMAGE_TOOL_DEFAULT_ASPECT_RATIO
+
+
+def _extract_image_parts_from_content(raw_content: object) -> list[dict[str, object]]:
+    image_parts: list[dict[str, object]] = []
+    if not isinstance(raw_content, list):
+        return image_parts
+
+    for part in raw_content:
+        if not isinstance(part, dict):
+            continue
+        part_dict = cast("dict[str, object]", part)
+        part_type = part_dict.get("type")
+
+        if part_type == "image_url":
+            image_obj = part_dict.get("image_url")
+            if not isinstance(image_obj, dict):
+                continue
+            image_url = cast("dict[str, object]", image_obj).get("url")
+            if not isinstance(image_url, str):
+                continue
+            parsed = _parse_data_url(image_url)
+            if parsed is not None:
+                image_parts.append({"inlineData": parsed})
+            continue
+
+        if part_type == "file":
+            file_obj = part_dict.get("file")
+            if not isinstance(file_obj, dict):
+                continue
+            file_data = cast("dict[str, object]", file_obj).get("file_data")
+            if not isinstance(file_data, str):
+                continue
+            parsed = _parse_data_url(file_data)
+            if parsed is None:
+                continue
+            mime_type = parsed.get("mimeType")
+            if isinstance(mime_type, str) and mime_type.startswith("image/"):
+                image_parts.append({"inlineData": parsed})
+
+    return image_parts
+
+
+def _build_antigravity_image_tool_contents(
+    messages: list[dict[str, object]],
+    fallback_prompt: object,
+) -> list[dict[str, object]]:
+    image_contents: list[dict[str, object]] = []
+
+    for message in messages:
+        role = str(message.get("role") or "user")
+        if role == "system":
+            continue
+        raw_content = message.get("content")
+
+        if role == "assistant":
+            assistant_images = _extract_image_parts_from_content(raw_content)
+            if assistant_images:
+                image_contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "Previously generated image for follow-up "
+                                    "editing context."
+                                ),
+                            },
+                            *assistant_images,
+                        ],
+                    },
+                )
+            continue
+
+        user_parts: list[dict[str, object]] = []
+        if isinstance(raw_content, str):
+            if raw_content.strip():
+                user_parts.append({"text": raw_content})
+        elif isinstance(raw_content, list):
+            for part in raw_content:
+                if not isinstance(part, dict):
+                    continue
+                part_dict = cast("dict[str, object]", part)
+                part_type = part_dict.get("type")
+                if part_type == "text":
+                    text = part_dict.get("text")
+                    if isinstance(text, str) and text:
+                        user_parts.append({"text": text})
+                    continue
+                if part_type in {"image_url", "file"}:
+                    user_parts.extend(_extract_image_parts_from_content([part_dict]))
+
+        if user_parts:
+            image_contents.append({"role": "user", "parts": user_parts})
+
+    if image_contents:
+        return image_contents
+    if isinstance(fallback_prompt, str) and fallback_prompt.strip():
+        return [{"role": "user", "parts": [{"text": fallback_prompt}]}]
+    return [
+        {
+            "role": "user",
+            "parts": [{"text": "Generate an image based on the latest request."}],
+        },
+    ]
+
+
+def _build_antigravity_image_request(
+    *,
+    project_id: str,
+    contents: list[dict[str, object]],
+    model: str,
+    aspect_ratio: str,
+) -> dict[str, object]:
+    return {
+        "project": project_id,
+        "model": model,
+        "request": {
+            "contents": contents,
+            "systemInstruction": {
+                "parts": [{"text": IMAGE_SYSTEM_INSTRUCTION}],
+            },
+            "generationConfig": {
+                "imageConfig": {"aspectRatio": aspect_ratio},
+                "candidateCount": 1,
+            },
+            "safetySettings": [
+                {
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_ONLY_HIGH",
+                },
+                {
+                    "category": "HARM_CATEGORY_HATE_SPEECH",
+                    "threshold": "BLOCK_ONLY_HIGH",
+                },
+                {
+                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                    "threshold": "BLOCK_ONLY_HIGH",
+                },
+                {
+                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                    "threshold": "BLOCK_ONLY_HIGH",
+                },
+                {
+                    "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+                    "threshold": "BLOCK_ONLY_HIGH",
+                },
+            ],
+        },
+        "requestType": "agent",
+        "userAgent": "antigravity",
+        "requestId": f"agent-{int(time.time() * 1000)}-{secrets.token_hex(5)}",
+    }
+
+
+async def _request_antigravity_generated_image(
+    *,
+    access_token: str,
+    project_id: str,
+    contents: list[dict[str, object]],
+    model: str,
+    aspect_ratio: str,
+    endpoint: str,
+    headers: dict[str, str],
+) -> tuple[str, str, str]:
+    def _raise_image_request_error(message: str) -> None:
+        raise RuntimeError(message)
+
+    def _candidate_endpoints(initial: str) -> list[str]:
+        normalized_initial = initial.rstrip("/")
+        endpoint_candidates = [
+            normalized_initial,
+            ANTIGRAVITY_DAILY_ENDPOINT,
+            DEFAULT_ENDPOINT,
+        ]
+        deduped: list[str] = []
+        for candidate in endpoint_candidates:
+            normalized = candidate.rstrip("/")
+            if normalized not in deduped:
+                deduped.append(normalized)
+        return deduped
+
+    def _is_retryable_status(status_code: int) -> bool:
+        return status_code in {408, 429, 500, 502, 503, 504}
+
+    request_payload = _build_antigravity_image_request(
+        project_id=project_id,
+        contents=contents,
+        model=model,
+        aspect_ratio=aspect_ratio,
+    )
+    request_headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        **headers,
+    }
+    last_error: Exception | None = None
+
+    for current_endpoint in _candidate_endpoints(endpoint):
+        image_endpoint = f"{current_endpoint}/v1internal:streamGenerateContent?alt=sse"
+        for attempt in range(IMAGE_TOOL_MAX_ATTEMPTS_PER_ENDPOINT):
+            try:
+                async with (
+                    httpx.AsyncClient(
+                        timeout=httpx.Timeout(
+                            connect=30,
+                            read=IMAGE_TOOL_READ_TIMEOUT_SECONDS,
+                            write=30,
+                            pool=30,
+                        ),
+                    ) as client,
+                    client.stream(
+                        "POST",
+                        image_endpoint,
+                        headers=request_headers,
+                        json=request_payload,
+                    ) as response,
+                ):
+                    if not response.is_success:
+                        error_bytes = await response.aread()
+                        error_text = error_bytes.decode("utf-8", errors="replace")
+                        if (
+                            _is_retryable_status(response.status_code)
+                            and attempt + 1 < IMAGE_TOOL_MAX_ATTEMPTS_PER_ENDPOINT
+                        ):
+                            await asyncio.sleep(
+                                IMAGE_TOOL_RETRY_BASE_DELAY_SECONDS * (2**attempt),
+                            )
+                            continue
+                        msg = (
+                            "Antigravity image generation failed "
+                            f"({response.status_code}): {error_text}"
+                        )
+                        _raise_image_request_error(msg)
+
+                    model_notes: list[str] = []
+                    async for line in response.aiter_lines():
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload = line[5:].strip()
+                        if not payload:
+                            continue
+                        try:
+                            chunk = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(chunk, dict):
+                            continue
+
+                        response_data = chunk.get("response")
+                        if not isinstance(response_data, dict):
+                            continue
+                        candidates = response_data.get("candidates")
+                        if not isinstance(candidates, list):
+                            continue
+
+                        for candidate in candidates:
+                            if not isinstance(candidate, dict):
+                                continue
+                            content = candidate.get("content")
+                            if not isinstance(content, dict):
+                                continue
+                            parts = content.get("parts")
+                            if not isinstance(parts, list):
+                                continue
+
+                            for part in parts:
+                                if not isinstance(part, dict):
+                                    continue
+                                text = part.get("text")
+                                if isinstance(text, str) and text:
+                                    model_notes.append(text)
+
+                                inline_data = part.get("inlineData")
+                                if not isinstance(inline_data, dict):
+                                    continue
+                                inline_data_dict = cast(
+                                    "dict[str, object]",
+                                    inline_data,
+                                )
+                                mime_type = inline_data_dict.get("mimeType")
+                                encoded_data = inline_data_dict.get("data")
+                                if (
+                                    not isinstance(encoded_data, str)
+                                    or not encoded_data
+                                ):
+                                    continue
+                                if not isinstance(mime_type, str) or not mime_type:
+                                    mime_type = "image/png"
+                                return (
+                                    encoded_data,
+                                    mime_type,
+                                    " ".join(model_notes).strip(),
+                                )
+
+                    msg = "Antigravity image generation returned no image data"
+                    _raise_image_request_error(msg)
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                last_error = exc
+                if attempt + 1 < IMAGE_TOOL_MAX_ATTEMPTS_PER_ENDPOINT:
+                    await asyncio.sleep(
+                        IMAGE_TOOL_RETRY_BASE_DELAY_SECONDS * (2**attempt),
+                    )
+                    continue
+                break
+            except RuntimeError as exc:
+                last_error = exc
+                break
+            except httpx.HTTPError as exc:
+                last_error = exc
+                break
+
+    if last_error is not None:
+        msg = (
+            "Antigravity image generation failed after retries across endpoints: "
+            f"{str(last_error).strip() or type(last_error).__name__}"
+        )
+        raise RuntimeError(msg)
+
+    msg = "Antigravity image generation failed after retries across endpoints"
+    raise RuntimeError(msg)
+
+
+async def _execute_antigravity_image_tool_call(
+    *,
+    endpoint: str,
+    headers: dict[str, str],
+    credentials: GeminiCliCredentials,
+    messages: list[dict[str, object]],
+    call_name: str,
+    call_args: dict[str, object],
+) -> str:
+    if call_name != IMAGE_TOOL_NAME:
+        return ""
+
+    model = call_args.get("model")
+    model_id = (
+        model.strip()
+        if isinstance(model, str) and model.strip()
+        else IMAGE_TOOL_DEFAULT_MODEL
+    )
+    aspect_ratio = _normalize_aspect_ratio(call_args.get("aspectRatio"))
+
+    if not credentials.access or not credentials.project_id:
+        return "Image tool call failed: missing antigravity access credentials."
+
+    fallback_prompt = call_args.get("prompt")
+    image_contents = _build_antigravity_image_tool_contents(
+        messages,
+        fallback_prompt,
+    )
+
+    encoded_data, mime_type, notes = await _request_antigravity_generated_image(
+        access_token=credentials.access,
+        project_id=credentials.project_id,
+        contents=image_contents,
+        model=model_id,
+        aspect_ratio=aspect_ratio,
+        endpoint=endpoint,
+        headers=headers,
+    )
+
+    summary = (
+        f"Generated image via {GOOGLE_ANTIGRAVITY_PROVIDER}/{model_id}. "
+        f"Aspect ratio: {aspect_ratio}."
+    )
+    if notes:
+        summary = f"{summary} Model notes: {notes}"
+    data_url = f"data:{mime_type};base64,{encoded_data}"
+    return f"{summary}\n{data_url}"
 
 
 async def stream_google_gemini_cli(
@@ -963,6 +1404,51 @@ async def stream_google_gemini_cli(
                         for part in parts:
                             if not isinstance(part, dict):
                                 continue
+                            function_call = part.get("functionCall")
+                            if isinstance(function_call, dict):
+                                function_call_dict = cast(
+                                    "dict[str, object]",
+                                    function_call,
+                                )
+                                function_name = function_call_dict.get("name")
+                                function_args = function_call_dict.get("args")
+                                call_args: dict[str, object] = {}
+                                if isinstance(function_args, dict):
+                                    call_args = cast(
+                                        "dict[str, object]",
+                                        function_args,
+                                    )
+
+                                if (
+                                    provider_id == GOOGLE_ANTIGRAVITY_PROVIDER
+                                    and isinstance(function_name, str)
+                                ):
+                                    # Prevent upstream first-token timeout.
+                                    yield "", None, False
+                                    try:
+                                        tool_result_text = (
+                                            await _execute_antigravity_image_tool_call(
+                                                endpoint=endpoint,
+                                                headers=provider_headers,
+                                                credentials=credentials,
+                                                messages=messages,
+                                                call_name=function_name,
+                                                call_args=call_args,
+                                            )
+                                        )
+                                    except (
+                                        OSError,
+                                        RuntimeError,
+                                        ValueError,
+                                        httpx.HTTPError,
+                                    ) as exc:
+                                        tool_result_text = (
+                                            "Image tool call failed: "
+                                            f"{str(exc).strip() or type(exc).__name__}"
+                                        )
+                                    if tool_result_text:
+                                        yield tool_result_text, None, False
+
                             text = part.get("text")
                             if isinstance(text, str) and text:
                                 yield text, None, bool(part.get("thought"))

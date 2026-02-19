@@ -205,6 +205,48 @@ async def test_google_antigravity_stream_uses_native_stream(
 
 
 @pytest.mark.asyncio
+async def test_google_native_stream_extracts_and_sanitizes_image_data_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_google_stream(
+        **_kwargs: object,
+    ) -> AsyncIterator[tuple[str, object | None, bool]]:
+        yield "Here is your image: data:image/png;base64,AAAB", None, False
+        yield "", "stop", False
+
+    monkeypatch.setattr(
+        "llmcord.logic.generation.stream_google_gemini_cli",
+        _fake_google_stream,
+    )
+
+    context = cast(
+        "GenerationContext",
+        SimpleNamespace(
+            messages=[{"role": "user", "content": "hello"}],
+            new_msg=SimpleNamespace(content="hello"),
+        ),
+    )
+
+    stream = _get_stream(
+        context=context,
+        stream_config=StreamConfig(
+            provider="google-antigravity",
+            actual_model="gemini-3-pro",
+            api_key="dummy-key",
+            base_url=None,
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+    first_chunk = await anext(stream)
+
+    assert "[generated image]" in first_chunk[0]
+    assert "data:image/png;base64" not in first_chunk[0]
+    assert len(first_chunk[3]) == 1
+    assert first_chunk[3][0].mime_type == "image/png"
+
+
+@pytest.mark.asyncio
 async def test_iter_stream_timeout_accepts_first_thinking_token() -> None:
     thinking_chunk = SimpleNamespace(
         choices=[

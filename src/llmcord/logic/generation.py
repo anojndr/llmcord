@@ -45,6 +45,7 @@ from llmcord.logic.generation_types import (
 from llmcord.logic.images import (
     append_generated_images,
     extract_gemini_images_from_chunk,
+    extract_generated_images,
     send_generated_images,
 )
 from llmcord.logic.utils import (
@@ -56,6 +57,24 @@ from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 
 logger = logging.getLogger(__name__)
+IMAGE_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
+
+
+def _strip_image_data_urls(value: str) -> str:
+    return IMAGE_DATA_URL_RE.sub("[generated image]", value)
+
+
+def _process_google_stream_chunk(
+    chunk: object,
+) -> tuple[str, object | None, list[GeneratedImage], bool]:
+    delta_content, chunk_finish_reason, is_thinking = cast(
+        "tuple[str, object | None, bool]",
+        chunk,
+    )
+    image_payloads = extract_generated_images(delta_content)
+    if image_payloads:
+        delta_content = _strip_image_data_urls(delta_content)
+    return delta_content, chunk_finish_reason, image_payloads, is_thinking
 
 
 def _collect_litellm_exceptions() -> tuple[type[Exception], ...]:
@@ -406,15 +425,17 @@ async def _get_stream(
             stream,
             timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
         ):
-            delta_content, chunk_finish_reason, is_thinking = cast(
-                "tuple[str, object | None, bool]",
-                chunk,
-            )
+            (
+                delta_content,
+                chunk_finish_reason,
+                image_payloads,
+                is_thinking,
+            ) = _process_google_stream_chunk(chunk)
             yield (
                 delta_content,
                 chunk_finish_reason,
                 None,
-                [],
+                image_payloads,
                 is_thinking,
             )
         return

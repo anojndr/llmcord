@@ -1,16 +1,21 @@
 import json
 from typing import cast
 
+import pytest
+
 from llmcord.services.llm.providers.gemini_cli import (
     GOOGLE_ANTIGRAVITY_PROVIDER,
     GOOGLE_GEMINI_CLI_PROVIDER,
+    GeminiCliCredentials,
     _build_cloudcode_request,
+    _execute_antigravity_image_tool_call,
     credentials_to_api_key,
     parse_api_key_credentials,
 )
 
 EXPECTED_EXPIRES_MS = 1_700_000_000_000
 EXPECTED_CONTENT_COUNT = 2
+EXPECTED_IMAGE_CONTEXT_MESSAGES = 3
 
 
 def test_parse_google_gemini_cli_api_key_json_roundtrip() -> None:
@@ -172,3 +177,155 @@ def test_build_cloudcode_request_antigravity_adds_agent_fields() -> None:
     assert isinstance(system_instruction, dict)
     instruction_dict = cast("dict[str, object]", system_instruction)
     assert instruction_dict.get("role") == "user"
+
+    tools = payload_dict.get("tools")
+    assert isinstance(tools, list)
+    assert tools
+    tool_entry = tools[0]
+    assert isinstance(tool_entry, dict)
+    tool_entry_dict = cast("dict[str, object]", tool_entry)
+    declarations = tool_entry_dict.get("functionDeclarations")
+    assert isinstance(declarations, list)
+    assert declarations
+    declaration = declarations[0]
+    assert isinstance(declaration, dict)
+    declaration_dict = cast("dict[str, object]", declaration)
+    assert declaration_dict.get("name") == "generate_image"
+
+    tool_config = payload_dict.get("toolConfig")
+    assert isinstance(tool_config, dict)
+    function_calling_config = cast("dict[str, object]", tool_config).get(
+        "functionCallingConfig",
+    )
+    assert isinstance(function_calling_config, dict)
+    assert cast("dict[str, object]", function_calling_config).get("mode") == "AUTO"
+
+
+@pytest.mark.asyncio
+async def test_antigravity_image_tool_uses_original_message_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_contents: list[dict[str, object]] = []
+
+    async def _fake_request_antigravity_generated_image(
+        **kwargs: object,
+    ) -> tuple[str, str, str]:
+        nonlocal captured_contents
+        contents = kwargs.get("contents")
+        assert isinstance(contents, list)
+        captured_contents = cast("list[dict[str, object]]", contents)
+        return "AAAB", "image/png", ""
+
+    monkeypatch.setattr(
+        "llmcord.services.llm.providers.gemini_cli._request_antigravity_generated_image",
+        _fake_request_antigravity_generated_image,
+    )
+
+    credentials = GeminiCliCredentials(
+        refresh="refresh",
+        access="access",
+        expires=0,
+        project_id="project-id",
+    )
+
+    tool_result = await _execute_antigravity_image_tool_call(
+        endpoint="https://daily-cloudcode-pa.sandbox.googleapis.com",
+        headers={},
+        credentials=credentials,
+        messages=[
+            {
+                "role": "user",
+                "content": "Put a hat on me",
+            },
+        ],
+        call_name="generate_image",
+        call_args={"prompt": "AI rewritten: portrait with stylish fedora"},
+    )
+
+    assert "data:image/png;base64,AAAB" in tool_result
+    assert captured_contents
+    first = captured_contents[0]
+    assert first.get("role") == "user"
+    parts = first.get("parts")
+    assert isinstance(parts, list)
+    assert {"text": "Put a hat on me"} in parts
+
+
+@pytest.mark.asyncio
+async def test_antigravity_image_tool_includes_prior_generated_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_contents: list[dict[str, object]] = []
+
+    async def _fake_request_antigravity_generated_image(
+        **kwargs: object,
+    ) -> tuple[str, str, str]:
+        nonlocal captured_contents
+        contents = kwargs.get("contents")
+        assert isinstance(contents, list)
+        captured_contents = cast("list[dict[str, object]]", contents)
+        return "AAAB", "image/png", ""
+
+    monkeypatch.setattr(
+        "llmcord.services.llm.providers.gemini_cli._request_antigravity_generated_image",
+        _fake_request_antigravity_generated_image,
+    )
+
+    credentials = GeminiCliCredentials(
+        refresh="refresh",
+        access="access",
+        expires=0,
+        project_id="project-id",
+    )
+
+    await _execute_antigravity_image_tool_call(
+        endpoint="https://daily-cloudcode-pa.sandbox.googleapis.com",
+        headers={},
+        credentials=credentials,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Make me sip tea"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,USERIMG"},
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Generated image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,GENIMG"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": "Put a hat on me",
+            },
+        ],
+        call_name="generate_image",
+        call_args={"prompt": "AI rewritten: person with hat"},
+    )
+
+    assert len(captured_contents) == EXPECTED_IMAGE_CONTEXT_MESSAGES
+    assistant_message = captured_contents[1]
+    assert assistant_message.get("role") == "user"
+    assistant_parts = assistant_message.get("parts")
+    assert isinstance(assistant_parts, list)
+    assert {
+        "text": "Previously generated image for follow-up editing context.",
+    } in assistant_parts
+    assert {
+        "inlineData": {"mimeType": "image/png", "data": "GENIMG"},
+    } in assistant_parts
+
+    last_user = captured_contents[2]
+    last_user_parts = last_user.get("parts")
+    assert isinstance(last_user_parts, list)
+    assert {"text": "Put a hat on me"} in last_user_parts
+    assert all(content.get("role") == "user" for content in captured_contents)
