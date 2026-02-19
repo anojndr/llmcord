@@ -87,6 +87,11 @@ def _count_total_results(results: list[dict]) -> int:
     return total
 
 
+def _exa_has_failures(results: list[dict]) -> bool:
+    """Return True if any Exa query response includes an error."""
+    return any(isinstance(result, dict) and "error" in result for result in results)
+
+
 def _format_result_item(
     item: dict,
     min_score: float,
@@ -237,23 +242,8 @@ async def perform_web_search(
             opts.tool,
         )
         total_results = _count_total_results(results)
-        retries_remaining = 3
-        while total_results == 0 and retries_remaining > 0:
-            logger.info(
-                "Exa returned 0 results; retrying (%s remaining)",
-                retries_remaining,
-            )
-            results = await _run_exa_searches(
-                queries,
-                opts.exa_mcp_url,
-                opts.max_results_per_query,
-                opts.tool,
-            )
-            total_results = _count_total_results(results)
-            retries_remaining -= 1
-
-        if total_results == 0 and api_keys:
-            logger.info("Exa still returned 0 results; falling back to Tavily")
+        if api_keys and (_exa_has_failures(results) or total_results == 0):
+            logger.info("Exa failed or returned 0 results; falling back to Tavily")
             provider_name = "Tavily"
             results = await _run_tavily_searches(
                 queries,
