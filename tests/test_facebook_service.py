@@ -4,11 +4,13 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
+from curl_cffi.requests import exceptions as curl_requests_exceptions
 
 from llmcord.services.facebook import (
     DownloadedFacebookVideo,
     maybe_download_facebook_video,
     maybe_download_facebook_videos,
+    maybe_download_facebook_videos_with_failures,
 )
 
 
@@ -176,3 +178,33 @@ async def test_maybe_download_facebook_videos_handles_multiple_urls_concurrently
         download_urls[first_url].encode("utf-8"),
         download_urls[second_url].encode("utf-8"),
     }
+
+
+@pytest.mark.asyncio
+async def test_maybe_download_facebook_videos_handles_fdownloader_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    facebook_url = "https://www.facebook.com/share/r/18ZA4xvsak/"
+
+    monkeypatch.setattr(
+        "llmcord.services.facebook._fetch_fdownloader_params",
+        AsyncMock(return_value=object()),
+    )
+    monkeypatch.setattr(
+        "llmcord.services.facebook._fetch_fdownloader_result_html",
+        AsyncMock(
+            side_effect=curl_requests_exceptions.Timeout(
+                "timed out",
+                code=0,
+            ),
+        ),
+    )
+
+    result = await maybe_download_facebook_videos_with_failures(
+        cleaned_content=f"summarize {facebook_url}",
+        actual_model="gemini-2.0-flash",
+        httpx_client=AsyncMock(),
+    )
+
+    assert result.videos == []
+    assert result.failed_urls == [facebook_url]

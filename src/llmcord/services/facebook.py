@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 from curl_cffi.requests import AsyncSession
+from curl_cffi.requests import exceptions as curl_requests_exceptions
 
 from llmcord.core.config import DEFAULT_USER_AGENT, is_gemini_model
 from llmcord.core.error_handling import log_exception
@@ -91,10 +92,20 @@ async def _fetch_fdownloader_params(
     *,
     session: AsyncSession,
 ) -> _FDownloaderParams | None:
-    response = await session.get(
-        _FDOWNLOADER_URL,
-        headers={"user-agent": DEFAULT_USER_AGENT},
-    )
+    try:
+        response = await session.get(
+            _FDOWNLOADER_URL,
+            headers={"user-agent": DEFAULT_USER_AGENT},
+        )
+    except curl_requests_exceptions.RequestException as exc:
+        log_exception(
+            logger=logger,
+            message="FDownloader homepage request failed",
+            error=exc,
+            context={"fdownloader_url": _FDOWNLOADER_URL},
+        )
+        return None
+
     if response.status_code != _HTTP_STATUS_OK:
         logger.warning(
             "FDownloader homepage request failed with status=%s",
@@ -131,11 +142,21 @@ async def _fetch_fdownloader_result_html(
         "referer": "https://fdownloader.net/",
         "user-agent": DEFAULT_USER_AGENT,
     }
-    response = await session.post(
-        params.search_url,
-        data=request_data,
-        headers=headers,
-    )
+    try:
+        response = await session.post(
+            params.search_url,
+            data=request_data,
+            headers=headers,
+        )
+    except curl_requests_exceptions.RequestException as exc:
+        log_exception(
+            logger=logger,
+            message="FDownloader ajaxSearch request failed",
+            error=exc,
+            context={"facebook_url": facebook_url},
+        )
+        return None
+
     if response.status_code != _HTTP_STATUS_OK:
         logger.warning(
             "FDownloader ajaxSearch failed status=%s url=%s",
@@ -280,7 +301,11 @@ async def maybe_download_facebook_videos_with_failures(
                     download_url=download_url,
                     httpx_client=httpx_client,
                 )
-            except (httpx.HTTPError, ValueError) as exc:
+            except (
+                curl_requests_exceptions.RequestException,
+                httpx.HTTPError,
+                ValueError,
+            ) as exc:
                 log_exception(
                     logger=logger,
                     message="Failed to download Facebook video for Gemini request",
