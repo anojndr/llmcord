@@ -31,10 +31,16 @@ def _extension_from_mime(mime_type: str) -> str:
 
 
 def _build_generated_image(data: bytes, mime_type: str) -> GeneratedImage:
-    digest = hashlib.sha256(data).hexdigest()[:12]
+    digest = hashlib.sha256(data).hexdigest()
+    short_digest = digest[:12]
     extension = _extension_from_mime(mime_type)
-    filename = f"gemini-output-{digest}.{extension}"
-    return GeneratedImage(data=data, mime_type=mime_type, filename=filename)
+    filename = f"gemini-output-{short_digest}.{extension}"
+    return GeneratedImage(
+        data=data,
+        mime_type=mime_type,
+        filename=filename,
+        digest=digest,
+    )
 
 
 def _coerce_payload(obj: object) -> object:
@@ -178,10 +184,9 @@ def append_generated_images(
 ) -> None:
     """Add unique generated images to the state tracking."""
     for image in images:
-        digest = hashlib.sha256(image.data).hexdigest()
-        if digest in state.generated_image_hashes:
+        if image.digest in state.generated_image_hashes:
             continue
-        state.generated_image_hashes.add(digest)
+        state.generated_image_hashes.add(image.digest)
         state.generated_images.append(image)
 
 

@@ -1,5 +1,6 @@
 """Message building and processing logic."""
 
+import asyncio
 import logging
 import re
 from base64 import b64encode
@@ -85,7 +86,7 @@ async def build_messages(
                 curr_node=curr_node,
                 context=context,
             )
-            _load_cached_search_data(curr_msg, curr_node)
+            await _load_cached_search_data(curr_msg, curr_node)
 
             content = _build_content_payload(
                 curr_node=curr_node,
@@ -539,18 +540,27 @@ def _clean_message_content(
     ).lstrip()
 
 
-def _load_cached_search_data(
+async def _load_cached_search_data(
     curr_msg: discord.Message,
     curr_node: MsgNode,
 ) -> None:
     if curr_node.search_results is not None and curr_node.lens_results is not None:
         return
 
-    (
-        stored_search_results,
-        stored_tavily_metadata,
-        stored_lens_results,
-    ) = get_db().get_message_search_data(str(curr_msg.id))
+    db = get_db()
+    async_get_search_data = getattr(db, "aget_message_search_data", None)
+    if callable(async_get_search_data):
+        (
+            stored_search_results,
+            stored_tavily_metadata,
+            stored_lens_results,
+        ) = await async_get_search_data(str(curr_msg.id))
+    else:
+        (
+            stored_search_results,
+            stored_tavily_metadata,
+            stored_lens_results,
+        ) = await asyncio.to_thread(db.get_message_search_data, str(curr_msg.id))
     if stored_search_results and curr_node.search_results is None:
         curr_node.search_results = stored_search_results
         curr_node.tavily_metadata = stored_tavily_metadata

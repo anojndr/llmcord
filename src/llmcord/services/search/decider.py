@@ -180,7 +180,8 @@ async def _run_decider_once(
             decider_is_gemini = is_gemini_model(run_config.model)
 
             # Convert messages to OpenAI format (LiteLLM uses OpenAI format)
-            litellm_messages = convert_messages_to_openai_format(
+            litellm_messages = await asyncio.to_thread(
+                convert_messages_to_openai_format,
                 messages,
                 system_prompt=system_prompt_with_date,
                 reverse=True,

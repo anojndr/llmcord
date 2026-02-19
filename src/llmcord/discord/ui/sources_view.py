@@ -21,13 +21,13 @@ from llmcord.discord.ui.utils import build_error_embed, get_response_data
 logger = logging.getLogger(__name__)
 
 
-def _resolve_grounding_metadata(
+async def _resolve_grounding_metadata(
     metadata: object | None,
     interaction: discord.Interaction,
 ) -> object | None:
     """Resolve grounding metadata from the button or persisted response data."""
     if metadata is None and interaction.message:
-        response_data = get_response_data(interaction.message.id)
+        response_data = await get_response_data(interaction.message.id)
         return response_data.grounding_metadata
     return metadata
 
@@ -37,7 +37,7 @@ async def _send_grounding_sources(
     metadata: object | None,
 ) -> None:
     """Send grounding sources embed or a standardized missing-data error."""
-    resolved_metadata = _resolve_grounding_metadata(metadata, interaction)
+    resolved_metadata = await _resolve_grounding_metadata(metadata, interaction)
     if not resolved_metadata:
         await call_with_embed_limits(
             interaction.response.send_message,
@@ -392,7 +392,7 @@ class TavilySourceButton(discord.ui.Button):
         """Show web-search sources in a paginated embed."""
         search_metadata = self.search_metadata
         if search_metadata is None and interaction.message:
-            response_data = get_response_data(interaction.message.id)
+            response_data = await get_response_data(interaction.message.id)
             search_metadata = response_data.tavily_metadata
 
         if not search_metadata:

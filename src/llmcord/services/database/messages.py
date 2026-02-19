@@ -135,6 +135,22 @@ class MessageDataMixin(_Base):
         lens_results: str | None = None,
     ) -> None:
         """Save web search results, lens results, and metadata for a message."""
+        self._run_db_call(
+            self._save_message_search_data_impl,
+            message_id,
+            search_results,
+            tavily_metadata,
+            lens_results,
+        )
+
+    def _save_message_search_data_impl(
+        self,
+        message_id: str,
+        search_results: str | None = None,
+        tavily_metadata: dict[str, Any] | None = None,
+        lens_results: str | None = None,
+    ) -> None:
+        """Save web search results, lens results, and metadata for a message."""
         conn = self._get_connection()
         cursor = conn.cursor()
 
@@ -213,7 +229,30 @@ class MessageDataMixin(_Base):
             logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved search data for message %s", message_id)
 
+    async def asave_message_search_data(
+        self,
+        message_id: str,
+        search_results: str | None = None,
+        tavily_metadata: dict[str, Any] | None = None,
+        lens_results: str | None = None,
+    ) -> None:
+        """Save message search data without blocking the event loop."""
+        await self._run_db_call_async(
+            self._save_message_search_data_impl,
+            message_id,
+            search_results,
+            tavily_metadata,
+            lens_results,
+        )
+
     def get_message_search_data(
+        self,
+        message_id: str,
+    ) -> tuple[str | None, dict[str, Any] | None, str | None]:
+        """Get web search results, metadata, and lens results for a message."""
+        return self._run_db_call(self._get_message_search_data_impl, message_id)
+
+    def _get_message_search_data_impl(
         self,
         message_id: str,
     ) -> tuple[str | None, dict[str, Any] | None, str | None]:
@@ -248,7 +287,25 @@ class MessageDataMixin(_Base):
             return search_results, tavily_metadata, lens_results
         return None, None, None
 
+    async def aget_message_search_data(
+        self,
+        message_id: str,
+    ) -> tuple[str | None, dict[str, Any] | None, str | None]:
+        """Get message search data without blocking the event loop."""
+        return await self._run_db_call_async(
+            self._get_message_search_data_impl,
+            message_id,
+        )
+
     def save_message_response_data(
+        self,
+        message_id: str,
+        payload: MessageResponsePayload,
+    ) -> None:
+        """Save response payloads for a Discord message."""
+        self._run_db_call(self._save_message_response_data_impl, message_id, payload)
+
+    def _save_message_response_data_impl(
         self,
         message_id: str,
         payload: MessageResponsePayload,
@@ -308,7 +365,34 @@ class MessageDataMixin(_Base):
             logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved response data for message %s", message_id)
 
+    async def asave_message_response_data(
+        self,
+        message_id: str,
+        payload: MessageResponsePayload,
+    ) -> None:
+        """Save response payloads without blocking the event loop."""
+        await self._run_db_call_async(
+            self._save_message_response_data_impl,
+            message_id,
+            payload,
+        )
+
     def get_message_response_data(
+        self,
+        message_id: str,
+    ) -> tuple[
+        str | None,
+        str | None,
+        dict[str, Any] | list[Any] | None,
+        dict[str, Any] | None,
+        str | None,
+        str | None,
+        list[str] | None,
+    ]:
+        """Get response data for a Discord message."""
+        return self._run_db_call(self._get_message_response_data_impl, message_id)
+
+    def _get_message_response_data_impl(
         self,
         message_id: str,
     ) -> tuple[
@@ -385,4 +469,22 @@ class MessageDataMixin(_Base):
             request_message_id,
             request_user_id,
             failed_extractions,
+        )
+
+    async def aget_message_response_data(
+        self,
+        message_id: str,
+    ) -> tuple[
+        str | None,
+        str | None,
+        dict[str, Any] | list[Any] | None,
+        dict[str, Any] | None,
+        str | None,
+        str | None,
+        list[str] | None,
+    ]:
+        """Get response data without blocking the event loop."""
+        return await self._run_db_call_async(
+            self._get_message_response_data_impl,
+            message_id,
         )

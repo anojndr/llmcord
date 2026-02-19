@@ -1,5 +1,6 @@
 """Utility functions for UI components."""
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -65,18 +66,30 @@ class ResponseData:
     failed_extractions: list[str] | None
 
 
-def get_response_data(message_id: int) -> ResponseData:
+async def get_response_data(message_id: int) -> ResponseData:
     """Get response data from the database."""
     db = get_db()
-    (
-        full_response,
-        thought_process,
-        grounding_metadata,
-        tavily_metadata,
-        request_message_id,
-        request_user_id,
-        failed_extractions,
-    ) = db.get_message_response_data(str(message_id))
+    async_get_response_data = getattr(db, "aget_message_response_data", None)
+    if callable(async_get_response_data):
+        (
+            full_response,
+            thought_process,
+            grounding_metadata,
+            tavily_metadata,
+            request_message_id,
+            request_user_id,
+            failed_extractions,
+        ) = await async_get_response_data(str(message_id))
+    else:
+        (
+            full_response,
+            thought_process,
+            grounding_metadata,
+            tavily_metadata,
+            request_message_id,
+            request_user_id,
+            failed_extractions,
+        ) = await asyncio.to_thread(db.get_message_response_data, str(message_id))
 
     return ResponseData(
         full_response=full_response,

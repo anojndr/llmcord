@@ -128,7 +128,7 @@ class RetryButton(discord.ui.Button):
         """Retry the generation when allowed for the requesting user."""
         response_data = None
         if (self.callback_fn is None or self.user_id is None) and interaction.message:
-            response_data = get_response_data(interaction.message.id)
+            response_data = await get_response_data(interaction.message.id)
             self.user_id = response_data.request_user_id
 
         if not self.user_id or interaction.user.id != self.user_id:
@@ -157,7 +157,7 @@ class RetryButton(discord.ui.Button):
             return
 
         if not response_data and interaction.message:
-            response_data = get_response_data(interaction.message.id)
+            response_data = await get_response_data(interaction.message.id)
 
         if (
             not response_data
@@ -199,7 +199,7 @@ class ViewResponseBetterButton(discord.ui.Button):
 
         full_response = self.full_response
         if not full_response and interaction.message:
-            response_data = get_response_data(interaction.message.id)
+            response_data = await get_response_data(interaction.message.id)
             full_response = response_data.full_response
 
         await _send_uploaded_text_view(
@@ -228,7 +228,7 @@ class ShowThoughtProcessButton(discord.ui.Button):
 
         thought_process = self.thought_process
         if not thought_process and interaction.message:
-            response_data = get_response_data(interaction.message.id)
+            response_data = await get_response_data(interaction.message.id)
             thought_process = response_data.thought_process
 
         await _send_uploaded_text_view(
@@ -257,7 +257,7 @@ class FailedUrlsButton(discord.ui.Button):
 
         failed_extractions = self.failed_extractions
         if failed_extractions is None and interaction.message:
-            response_data = get_response_data(interaction.message.id)
+            response_data = await get_response_data(interaction.message.id)
             failed_extractions = response_data.failed_extractions
 
         if not failed_extractions:

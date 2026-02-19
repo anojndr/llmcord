@@ -53,7 +53,11 @@ class UserPreferencesMixin(_Base):
         # utilizing I/O will be decorated in the final class OR we import the
         # decorator here.
         # Let's import the decorator to keep it self-contained.
-        return self._get_user_model_impl(user_id)
+        return self._run_db_call(self._get_user_model_impl, user_id)
+
+    async def aget_user_model(self, user_id: str) -> str | None:
+        """Get the preferred model for a user without blocking the event loop."""
+        return await self._run_db_call_async(self._get_user_model_impl, user_id)
 
     def _get_user_model_impl(self, user_id: str) -> str | None:
         conn = self._get_connection()
@@ -67,6 +71,9 @@ class UserPreferencesMixin(_Base):
 
     def set_user_model(self, user_id: str, model: str) -> None:
         """Set the preferred model for a user."""
+        self._run_db_call(self._set_user_model_impl, user_id, model)
+
+    def _set_user_model_impl(self, user_id: str, model: str) -> None:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -81,12 +88,19 @@ class UserPreferencesMixin(_Base):
         self._sync()
         logger.info("Set model preference for user %s: %s", user_id, model)
 
+    async def aset_user_model(self, user_id: str, model: str) -> None:
+        """Set the preferred model for a user without blocking the event loop."""
+        await self._run_db_call_async(self._set_user_model_impl, user_id, model)
+
     # User search decider model preferences methods
     def get_user_search_decider_model(self, user_id: str) -> str | None:
         """Get the preferred search decider model for a user.
 
         Returns None if not set.
         """
+        return self._run_db_call(self._get_user_search_decider_model_impl, user_id)
+
+    def _get_user_search_decider_model_impl(self, user_id: str) -> str | None:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute(
@@ -96,7 +110,18 @@ class UserPreferencesMixin(_Base):
         result = cursor.fetchone()
         return result[0] if result else None
 
+    async def aget_user_search_decider_model(self, user_id: str) -> str | None:
+        """Get decider model for a user without blocking the event loop."""
+        return await self._run_db_call_async(
+            self._get_user_search_decider_model_impl,
+            user_id,
+        )
+
     def set_user_search_decider_model(self, user_id: str, model: str) -> None:
+        """Set the preferred search decider model for a user."""
+        self._run_db_call(self._set_user_search_decider_model_impl, user_id, model)
+
+    def _set_user_search_decider_model_impl(self, user_id: str, model: str) -> None:
         """Set the preferred search decider model for a user."""
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -117,11 +142,22 @@ class UserPreferencesMixin(_Base):
             model,
         )
 
+    async def aset_user_search_decider_model(self, user_id: str, model: str) -> None:
+        """Set decider model for a user without blocking the event loop."""
+        await self._run_db_call_async(
+            self._set_user_search_decider_model_impl,
+            user_id,
+            model,
+        )
+
     def reset_all_user_model_preferences(self) -> int:
         """Reset all user model preferences.
 
         Returns the number of preferences deleted.
         """
+        return self._run_db_call(self._reset_all_user_model_preferences_impl)
+
+    def _reset_all_user_model_preferences_impl(self) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM user_model_preferences")
@@ -135,11 +171,20 @@ class UserPreferencesMixin(_Base):
         )
         return count
 
+    async def areset_all_user_model_preferences(self) -> int:
+        """Reset all model preferences without blocking the event loop."""
+        return await self._run_db_call_async(
+            self._reset_all_user_model_preferences_impl,
+        )
+
     def reset_all_user_search_decider_preferences(self) -> int:
         """Reset all user search decider model preferences.
 
         Returns the number of preferences deleted.
         """
+        return self._run_db_call(self._reset_all_user_search_decider_preferences_impl)
+
+    def _reset_all_user_search_decider_preferences_impl(self) -> int:
         conn = self._get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM user_search_decider_preferences")
@@ -152,3 +197,9 @@ class UserPreferencesMixin(_Base):
             count,
         )
         return count
+
+    async def areset_all_user_search_decider_preferences(self) -> int:
+        """Reset all decider model preferences without blocking the event loop."""
+        return await self._run_db_call_async(
+            self._reset_all_user_search_decider_preferences_impl,
+        )

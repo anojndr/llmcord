@@ -44,16 +44,23 @@ async def should_process_message(
 
     allow_dms = config.get("allow_dms", True)
     permissions = config["permissions"]
+    users = permissions["users"]
+    roles = permissions["roles"]
+    channels = permissions["channels"]
 
-    user_is_admin = new_msg.author.id in permissions["users"]["admin_ids"]
+    admin_user_ids = users.get("_admin_ids_set") or set(users["admin_ids"])
+    user_is_admin = new_msg.author.id in admin_user_ids
 
-    # Pre-convert to sets once for efficient lookups
-    allowed_user_ids = set(permissions["users"]["allowed_ids"])
-    blocked_user_ids = set(permissions["users"]["blocked_ids"])
-    allowed_role_ids = set(permissions["roles"]["allowed_ids"])
-    blocked_role_ids = set(permissions["roles"]["blocked_ids"])
-    allowed_channel_ids = set(permissions["channels"]["allowed_ids"])
-    blocked_channel_ids = set(permissions["channels"]["blocked_ids"])
+    allowed_user_ids = users.get("_allowed_ids_set") or set(users["allowed_ids"])
+    blocked_user_ids = users.get("_blocked_ids_set") or set(users["blocked_ids"])
+    allowed_role_ids = roles.get("_allowed_ids_set") or set(roles["allowed_ids"])
+    blocked_role_ids = roles.get("_blocked_ids_set") or set(roles["blocked_ids"])
+    allowed_channel_ids = channels.get("_allowed_ids_set") or set(
+        channels["allowed_ids"],
+    )
+    blocked_channel_ids = channels.get("_blocked_ids_set") or set(
+        channels["blocked_ids"],
+    )
 
     if is_dm:
         allow_all_users = not allowed_user_ids

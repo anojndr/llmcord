@@ -187,32 +187,38 @@ async def _collect_sse_body(response: httpx.Response) -> str:
     """Collect SSE event data into a single JSON string."""
     full_response = ""
     current_event_data: list[str] = []
+    current_event_maybe_json = False
 
     async for raw_line in response.aiter_lines():
         line = raw_line.rstrip("\n").rstrip("\r")
 
         if not line:
             if current_event_data:
-                event_body = "".join(current_event_data)
-                logger.debug(
-                    "Exa MCP SSE event body length: %s",
-                    len(event_body),
-                )
-                if event_body.strip().startswith("{"):
-                    full_response = event_body
+                if current_event_maybe_json:
+                    event_body = "".join(current_event_data)
+                    logger.debug(
+                        "Exa MCP SSE event body length: %s",
+                        len(event_body),
+                    )
+                    if event_body.lstrip().startswith("{"):
+                        full_response = event_body
                 current_event_data = []
+                current_event_maybe_json = False
             continue
 
         if line.startswith("data:"):
             data = line[5:]
-            current_event_data.append(data.removeprefix(" "))
+            payload = data.removeprefix(" ")
+            if not current_event_data:
+                current_event_maybe_json = payload.lstrip().startswith("{")
+            current_event_data.append(payload)
             continue
 
         if line.startswith("event:"):
             event_type = line[6:].strip()
             logger.debug("Exa MCP SSE event: %s", event_type)
 
-    if current_event_data and not full_response:
+    if current_event_data and not full_response and current_event_maybe_json:
         full_response = "".join(current_event_data)
 
     return full_response

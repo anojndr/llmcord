@@ -1,5 +1,6 @@
 """Web search and research command orchestration."""
 
+import asyncio
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -195,7 +196,7 @@ async def resolve_search_metadata(
     return search_metadata
 
 
-async def run_research_command(
+async def run_research_command(  # noqa: C901
     context: ResearchCommandContext,
 ) -> dict[str, object] | None:
     """Execute research command if present."""
@@ -236,11 +237,21 @@ async def run_research_command(
 
                 logger.info("Tavily research results appended to user message")
 
-                get_db().save_message_search_data(
-                    str(context.new_msg.id),
-                    research_results,
-                    search_metadata,
-                )
+                db = get_db()
+                async_save_search_data = getattr(db, "asave_message_search_data", None)
+                if callable(async_save_search_data):
+                    await async_save_search_data(
+                        str(context.new_msg.id),
+                        research_results,
+                        search_metadata,
+                    )
+                else:
+                    await asyncio.to_thread(
+                        db.save_message_search_data,
+                        str(context.new_msg.id),
+                        research_results,
+                        search_metadata,
+                    )
 
                 if context.new_msg.id in context.msg_nodes:
                     node = context.msg_nodes[context.new_msg.id]
@@ -251,7 +262,7 @@ async def run_research_command(
     return search_metadata
 
 
-async def maybe_run_web_search(
+async def maybe_run_web_search(  # noqa: C901, PLR0912
     context: WebSearchContext,
 ) -> dict[str, object] | None:
     """Decide and execute web search."""
@@ -267,7 +278,14 @@ async def maybe_run_web_search(
     ):
         db = get_db()
         user_id = str(context.new_msg.author.id)
-        user_decider_model = db.get_user_search_decider_model(user_id)
+        async_get_decider_model = getattr(db, "aget_user_search_decider_model", None)
+        if callable(async_get_decider_model):
+            user_decider_model = await async_get_decider_model(user_id)
+        else:
+            user_decider_model = await asyncio.to_thread(
+                db.get_user_search_decider_model,
+                user_id,
+            )
         default_decider = str(
             context.config.get(
                 "web_search_decider_model",
@@ -365,11 +383,25 @@ async def maybe_run_web_search(
                                 "Web search results appended to user message",
                             )
 
-                            get_db().save_message_search_data(
-                                str(context.new_msg.id),
-                                search_results,
-                                search_metadata,
+                            db = get_db()
+                            async_save_search_data = getattr(
+                                db,
+                                "asave_message_search_data",
+                                None,
                             )
+                            if callable(async_save_search_data):
+                                await async_save_search_data(
+                                    str(context.new_msg.id),
+                                    search_results,
+                                    search_metadata,
+                                )
+                            else:
+                                await asyncio.to_thread(
+                                    db.save_message_search_data,
+                                    str(context.new_msg.id),
+                                    search_results,
+                                    search_metadata,
+                                )
 
                             if context.new_msg.id in context.msg_nodes:
                                 node = context.msg_nodes[context.new_msg.id]

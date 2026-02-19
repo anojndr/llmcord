@@ -315,16 +315,24 @@ class ExternalContentContext:
     curr_node: MsgNode
 
 
-async def apply_googlelens(context: GoogleLensContext) -> str:
+async def apply_googlelens(context: GoogleLensContext) -> str:  # noqa: C901
     """Apply Google Lens enrichment to content if requested."""
     cleaned_content = context.cleaned_content
     if not cleaned_content.lower().startswith("googlelens"):
         return cleaned_content
 
     cleaned_content = cleaned_content[10:].strip()
-    _, _, cached_lens_results = get_db().get_message_search_data(
-        str(context.curr_msg.id),
-    )
+    db = get_db()
+    async_get_search_data = getattr(db, "aget_message_search_data", None)
+    if callable(async_get_search_data):
+        _, _, cached_lens_results = await async_get_search_data(
+            str(context.curr_msg.id),
+        )
+    else:
+        _, _, cached_lens_results = await asyncio.to_thread(
+            db.get_message_search_data,
+            str(context.curr_msg.id),
+        )
     if cached_lens_results:
         cleaned_content = cleaned_content + cached_lens_results
         context.curr_node.lens_results = cached_lens_results
@@ -422,10 +430,19 @@ async def apply_googlelens(context: GoogleLensContext) -> str:
             cleaned_content += all_results_text + instruction_text
 
             context.curr_node.lens_results = all_results_text
-            get_db().save_message_search_data(
-                str(context.curr_msg.id),
-                lens_results=all_results_text,
-            )
+            db = get_db()
+            async_save_search_data = getattr(db, "asave_message_search_data", None)
+            if callable(async_save_search_data):
+                await async_save_search_data(
+                    str(context.curr_msg.id),
+                    lens_results=all_results_text,
+                )
+            else:
+                await asyncio.to_thread(
+                    db.save_message_search_data,
+                    str(context.curr_msg.id),
+                    lens_results=all_results_text,
+                )
             logger.info(
                 "Saved lens results for message %s",
                 context.curr_msg.id,

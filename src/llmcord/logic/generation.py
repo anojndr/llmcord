@@ -230,10 +230,19 @@ async def _persist_response_payload(
             tavily_metadata=context.tavily_metadata,
             failed_extractions=context.failed_extractions or None,
         )
-        get_db().save_message_response_data(
-            message_id=str(state.response_msgs[last_msg_index].id),
-            payload=payload,
-        )
+        db = get_db()
+        async_save_response_data = getattr(db, "asave_message_response_data", None)
+        if callable(async_save_response_data):
+            await async_save_response_data(
+                message_id=str(state.response_msgs[last_msg_index].id),
+                payload=payload,
+            )
+        else:
+            await asyncio.to_thread(
+                db.save_message_response_data,
+                str(state.response_msgs[last_msg_index].id),
+                payload,
+            )
     except (OSError, RuntimeError, ValueError) as exc:
         log_exception(
             logger=logger,

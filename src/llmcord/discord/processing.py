@@ -1,5 +1,6 @@
 """Discord message processing helpers."""
 
+import asyncio
 import importlib
 import logging
 from typing import TYPE_CHECKING, cast
@@ -49,7 +50,11 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         # Get user's model preference from database (or use default)
         user_id = str(new_msg.author.id)
         db = get_db()
-        user_model = db.get_user_model(user_id)
+        async_get_user_model = getattr(db, "aget_user_model", None)
+        if callable(async_get_user_model):
+            user_model = await async_get_user_model(user_id)
+        else:
+            user_model = await asyncio.to_thread(db.get_user_model, user_id)
 
         # Fall back to default model if user hasn't set a preference
         # or if their saved model is no longer valid.

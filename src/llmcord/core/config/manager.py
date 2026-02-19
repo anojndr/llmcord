@@ -58,6 +58,36 @@ PROFILE_KEYS = {"bot_token", "port", "host"}
 REQUIRED_PROFILE_KEYS = {"bot_token", "port"}
 
 
+def _build_id_set(ids: object) -> set[int | str]:
+    """Convert configured ID collections to a set for fast lookups."""
+    if not isinstance(ids, list):
+        return set()
+    return {item for item in ids if isinstance(item, int | str)}
+
+
+def _normalize_permissions_config(config: dict[str, Any]) -> None:
+    """Attach cached permission lookup sets for hot-path message checks."""
+    permissions = config.get("permissions")
+    if not isinstance(permissions, dict):
+        return
+
+    users = permissions.get("users")
+    if isinstance(users, dict):
+        users["_admin_ids_set"] = _build_id_set(users.get("admin_ids"))
+        users["_allowed_ids_set"] = _build_id_set(users.get("allowed_ids"))
+        users["_blocked_ids_set"] = _build_id_set(users.get("blocked_ids"))
+
+    roles = permissions.get("roles")
+    if isinstance(roles, dict):
+        roles["_allowed_ids_set"] = _build_id_set(roles.get("allowed_ids"))
+        roles["_blocked_ids_set"] = _build_id_set(roles.get("blocked_ids"))
+
+    channels = permissions.get("channels")
+    if isinstance(channels, dict):
+        channels["_allowed_ids_set"] = _build_id_set(channels.get("allowed_ids"))
+        channels["_blocked_ids_set"] = _build_id_set(channels.get("blocked_ids"))
+
+
 def _normalize_profile_config(config: dict[str, Any]) -> dict[str, Any]:
     """Normalize profile-aware config settings.
 
@@ -141,7 +171,9 @@ def get_config(filename: str = "config.yaml") -> dict[str, Any]:
                 # Handle empty/corrupted YAML that returns None
                 if loaded_config is None:
                     raise ConfigFileEmptyError(filepath)
-                _CONFIG_STATE.cache = _normalize_profile_config(loaded_config)
+                normalized_config = _normalize_profile_config(loaded_config)
+                _normalize_permissions_config(normalized_config)
+                _CONFIG_STATE.cache = normalized_config
 
     return _CONFIG_STATE.cache
 

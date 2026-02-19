@@ -96,6 +96,7 @@ class GeneratedImage:
     data: bytes
     mime_type: str
     filename: str
+    digest: str
 
 
 @dataclass(slots=True)
