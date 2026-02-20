@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 
 import discord
@@ -58,6 +59,23 @@ from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 
 logger = logging.getLogger(__name__)
 IMAGE_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
+_THINKING_OPEN_TAG = "<thinking>"
+_THINKING_CLOSE_TAG = "</thinking>"
+
+
+@dataclass(slots=True)
+class _ThoughtParsingState:
+    in_history_thinking_block: bool = False
+    inline_thinking_active: bool = False
+    pending_tag_prefix: str = ""
+
+
+@dataclass(slots=True)
+class _StreamProcessingContext:
+    state: GenerationState
+    loop_state: StreamLoopState
+    history_parts: list[str]
+    max_message_length: int
 
 
 def _strip_image_data_urls(value: str) -> str:
@@ -563,6 +581,138 @@ def _append_history_content(
     return in_thinking_block
 
 
+def _extract_pending_thinking_tag_prefix(text: str) -> str:
+    max_prefix_len = max(len(_THINKING_OPEN_TAG), len(_THINKING_CLOSE_TAG)) - 1
+    search_len = min(len(text), max_prefix_len)
+
+    for prefix_len in range(search_len, 0, -1):
+        suffix = text[-prefix_len:]
+        if _THINKING_OPEN_TAG.startswith(suffix) or _THINKING_CLOSE_TAG.startswith(
+            suffix,
+        ):
+            return suffix
+
+    return ""
+
+
+def _split_stream_segments(
+    *,
+    delta_content: str,
+    is_thinking: bool,
+    inline_thinking_active: bool,
+    pending_tag_prefix: str,
+) -> tuple[list[tuple[str, bool]], bool, str]:
+    if is_thinking:
+        content = f"{pending_tag_prefix}{delta_content}"
+        if not content:
+            return [], inline_thinking_active, ""
+        return [(content, True)], inline_thinking_active, ""
+
+    content = f"{pending_tag_prefix}{delta_content}"
+    pending_prefix = _extract_pending_thinking_tag_prefix(content)
+    if pending_prefix:
+        content = content[: -len(pending_prefix)]
+
+    segments: list[tuple[str, bool]] = []
+    cursor = 0
+    inside_thinking = inline_thinking_active
+
+    while cursor < len(content):
+        token = _THINKING_CLOSE_TAG if inside_thinking else _THINKING_OPEN_TAG
+        token_index = content.find(token, cursor)
+        if token_index == -1:
+            segment_text = content[cursor:]
+            if segment_text:
+                segments.append((segment_text, inside_thinking))
+            break
+
+        segment_text = content[cursor:token_index]
+        if segment_text:
+            segments.append((segment_text, inside_thinking))
+
+        inside_thinking = not inside_thinking
+        cursor = token_index + len(token)
+
+    return segments, inside_thinking, pending_prefix
+
+
+def _process_stream_chunk(
+    *,
+    delta_content: str,
+    is_thinking: bool,
+    new_finish_reason: object | None,
+    parsing_state: _ThoughtParsingState,
+    processing: _StreamProcessingContext,
+) -> StreamEditDecision | None:
+    segments, parsing_state.inline_thinking_active, parsing_state.pending_tag_prefix = (
+        _split_stream_segments(
+            delta_content=delta_content,
+            is_thinking=is_thinking,
+            inline_thinking_active=parsing_state.inline_thinking_active,
+            pending_tag_prefix=parsing_state.pending_tag_prefix,
+        )
+    )
+
+    visible_delta_parts: list[str] = []
+    for segment_text, segment_is_thinking in segments:
+        parsing_state.in_history_thinking_block = _append_history_content(
+            history_parts=processing.history_parts,
+            delta_content=segment_text,
+            is_thinking=segment_is_thinking,
+            in_thinking_block=parsing_state.in_history_thinking_block,
+        )
+        if segment_is_thinking:
+            processing.state.thought_process += segment_text
+            continue
+        visible_delta_parts.append(segment_text)
+
+    visible_delta_content = "".join(visible_delta_parts)
+    processing.loop_state.finish_reason = new_finish_reason
+
+    if not visible_delta_content and processing.loop_state.finish_reason is None:
+        return None
+
+    decision = _append_stream_content(
+        response_contents=processing.state.response_contents,
+        prev_content=processing.loop_state.curr_content,
+        finish_reason=processing.loop_state.finish_reason,
+        delta_content=visible_delta_content,
+        max_message_length=processing.max_message_length,
+    )
+    processing.loop_state.curr_content = visible_delta_content
+    return decision
+
+
+def _flush_pending_tag_prefix(
+    *,
+    parsing_state: _ThoughtParsingState,
+    processing: _StreamProcessingContext,
+) -> StreamEditDecision | None:
+    if not parsing_state.pending_tag_prefix:
+        return None
+
+    parsing_state.in_history_thinking_block = _append_history_content(
+        history_parts=processing.history_parts,
+        delta_content=parsing_state.pending_tag_prefix,
+        is_thinking=parsing_state.inline_thinking_active,
+        in_thinking_block=parsing_state.in_history_thinking_block,
+    )
+
+    if parsing_state.inline_thinking_active:
+        processing.state.thought_process += parsing_state.pending_tag_prefix
+        return None
+
+    decision = _append_stream_content(
+        response_contents=processing.state.response_contents,
+        prev_content=processing.loop_state.curr_content,
+        finish_reason=processing.loop_state.finish_reason,
+        delta_content=parsing_state.pending_tag_prefix,
+        max_message_length=processing.max_message_length,
+    )
+    processing.loop_state.curr_content = parsing_state.pending_tag_prefix
+    return decision
+
+
 def _is_developer_instruction_error(error: Exception) -> bool:
     error_str = str(error).lower()
     return "developer instruction" in error_str and "not enabled" in error_str
@@ -907,7 +1057,13 @@ async def _stream_response(
     grounding_metadata = state.grounding_metadata
     loop_state = StreamLoopState(curr_content=None, finish_reason=None)
     history_parts: list[str] = []
-    in_thinking_block = False
+    parsing_state = _ThoughtParsingState()
+    processing = _StreamProcessingContext(
+        state=state,
+        loop_state=loop_state,
+        history_parts=history_parts,
+        max_message_length=max_message_length,
+    )
 
     async with context.new_msg.channel.typing():
         async for (
@@ -933,28 +1089,13 @@ async def _stream_response(
             if loop_state.finish_reason is not None:
                 break
 
-            in_thinking_block = _append_history_content(
-                history_parts=history_parts,
+            decision = _process_stream_chunk(
                 delta_content=delta_content,
                 is_thinking=is_thinking,
-                in_thinking_block=in_thinking_block,
+                new_finish_reason=new_finish_reason,
+                parsing_state=parsing_state,
+                processing=processing,
             )
-            if is_thinking and delta_content:
-                state.thought_process += delta_content
-
-            loop_state.finish_reason = new_finish_reason
-
-            if is_thinking:
-                continue
-
-            decision = _append_stream_content(
-                response_contents=response_contents,
-                prev_content=loop_state.curr_content,
-                finish_reason=loop_state.finish_reason,
-                delta_content=delta_content,
-                max_message_length=max_message_length,
-            )
-            loop_state.curr_content = delta_content
 
             if decision is None:
                 continue
@@ -967,7 +1108,20 @@ async def _stream_response(
                 grounding_metadata=grounding_metadata,
             )
 
-    if in_thinking_block:
+    pending_decision = _flush_pending_tag_prefix(
+        parsing_state=parsing_state,
+        processing=processing,
+    )
+    if pending_decision is not None:
+        await maybe_edit_stream_message(
+            context=context,
+            state=state,
+            reply_helper=reply_helper,
+            decision=pending_decision,
+            grounding_metadata=grounding_metadata,
+        )
+
+    if parsing_state.in_history_thinking_block:
         history_parts.append("\n</thinking>\n")
     state.full_history_response = "".join(history_parts)
 

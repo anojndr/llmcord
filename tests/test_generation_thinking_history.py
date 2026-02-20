@@ -103,6 +103,64 @@ async def test_thinking_chunks_hidden_but_preserved_in_history(
 
 
 @pytest.mark.asyncio
+async def test_inline_thinking_tags_hidden_when_provider_flag_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_get_stream(
+        **_kwargs: object,
+    ) -> AsyncIterator[tuple[str, object | None, object | None, list[object], bool]]:
+        yield "before <thi", None, None, [], False
+        yield "nking>private-thought</think", None, None, [], False
+        yield "ing> after", "stop", None, [], False
+
+    monkeypatch.setattr("llmcord.logic.generation._get_stream", _fake_get_stream)
+
+    async def _reply_helper(**_kwargs: object) -> None:
+        return None
+
+    context = cast(
+        "GenerationContext",
+        SimpleNamespace(
+            new_msg=SimpleNamespace(channel=_DummyChannel()),
+            tavily_metadata=None,
+        ),
+    )
+    state = GenerationState(
+        response_msgs=[],
+        response_contents=[],
+        input_tokens=0,
+        max_message_length=4096,
+        embed=None,
+        grounding_metadata=None,
+        last_edit_time=0.0,
+        generated_images=[],
+        generated_image_hashes=set(),
+        display_model="google-gemini-cli/gemini-3-flash-preview",
+    )
+
+    await _stream_response(
+        context=context,
+        state=state,
+        stream_config=StreamConfig(
+            provider="google-gemini-cli",
+            actual_model="gemini-3-flash-preview",
+            api_key="dummy-key",
+            base_url=None,
+            extra_headers=None,
+            model_parameters=None,
+        ),
+        reply_helper=_reply_helper,
+    )
+
+    visible_response = "".join(state.response_contents)
+    assert visible_response == "before  after"
+    assert "private-thought" not in visible_response
+    assert state.thought_process == "private-thought"
+    assert "<thinking>" in state.full_history_response
+    assert "private-thought" in state.full_history_response
+
+
+@pytest.mark.asyncio
 async def test_google_gemini_cli_stream_uses_first_token_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
