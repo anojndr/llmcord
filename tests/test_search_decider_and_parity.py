@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import cast
 
@@ -374,6 +375,40 @@ async def test_decider_google_antigravity_uses_native_stream(
 
     assert exhausted is False
     assert result == {"needs_search": False}
+
+
+@pytest.mark.asyncio
+async def test_decider_empty_response_skips_json_parse_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _fake_get_decider_response_text(**_kwargs: object) -> str:
+        return ""
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._get_decider_response_text",
+        _fake_get_decider_response_text,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result, exhausted = await _run_decider_once(
+            [{"role": "user", "content": "hello"}],
+            DeciderRunConfig(
+                provider="google-gemini-cli",
+                model="gemini-3-flash-preview-minimal",
+                api_keys=["refresh-token"],
+                base_url="https://cloudcode-pa.googleapis.com",
+                extra_headers=None,
+                model_parameters=None,
+            ),
+        )
+
+    assert result is None
+    assert exhausted is False
+    assert all(
+        "Failed to parse JSON response from search decider" not in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

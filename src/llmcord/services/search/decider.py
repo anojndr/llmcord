@@ -160,6 +160,45 @@ async def _get_decider_response_text(
     return (response.choices[0].message.content or "").strip()
 
 
+def _parse_decider_response(
+    response_text: str,
+) -> dict[str, Any] | None:
+    if response_text.startswith("```"):
+        response_text = response_text.split("```")[1]
+        response_text = response_text.removeprefix("json")
+        response_text = response_text.strip()
+
+    if not response_text:
+        logger.info(
+            "Search decider returned an empty response; skipping parse.",
+        )
+        return None
+
+    try:
+        result = json.loads(response_text)
+    except json.JSONDecodeError as json_err:
+        logger.warning(
+            "Failed to parse JSON response from search decider: %s. Response: %s",
+            json_err,
+            response_text[:200],
+        )
+        if (
+            '"needs_search": false' in response_text.lower()
+            or '"needs_search":false' in response_text.lower()
+        ):
+            return {"needs_search": False}
+        return None
+
+    if isinstance(result, dict):
+        return result
+
+    logger.warning(
+        "Web search decider returned non-dict response: %s",
+        response_text[:100],
+    )
+    return None
+
+
 async def _run_decider_once(
     messages: list,
     run_config: DeciderRunConfig,
@@ -208,40 +247,11 @@ async def _run_decider_once(
                 litellm_messages=litellm_messages,
             )
 
-            # Parse response
-            if response_text.startswith("```"):
-                # Remove markdown code blocks if present
-                response_text = response_text.split("```")[1]
-                response_text = response_text.removeprefix("json")
-                response_text = response_text.strip()
-
-            try:
-                result = json.loads(response_text)
-                # Validate response structure
-                if isinstance(result, dict):
-                    return result, False
-                logger.warning(
-                    "Web search decider returned non-dict response: %s",
-                    response_text[:100],
-                )
-                exhausted_keys = False
-                break
-            except json.JSONDecodeError as json_err:
-                logger.warning(
-                    "Failed to parse JSON response from search decider: %s. "
-                    "Response: %s",
-                    json_err,
-                    response_text[:200],
-                )
-                # Attempt to extract needs_search from malformed response
-                if (
-                    '"needs_search": false' in response_text.lower()
-                    or '"needs_search":false' in response_text.lower()
-                ):
-                    exhausted_keys = False
-                    break
-                exhausted_keys = False
-                break
+            result = _parse_decider_response(response_text)
+            if result is not None:
+                return result, False
+            exhausted_keys = False
+            break
         except (
             TimeoutError,
             OSError,
