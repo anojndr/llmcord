@@ -556,11 +556,16 @@ async def _load_cached_search_data(
             stored_lens_results,
         ) = await async_get_search_data(str(curr_msg.id))
     else:
+        sync_get_search_data = getattr(db, "get_message_search_data", None)
         (
             stored_search_results,
             stored_tavily_metadata,
             stored_lens_results,
-        ) = await asyncio.to_thread(db.get_message_search_data, str(curr_msg.id))
+        ) = (
+            await asyncio.to_thread(sync_get_search_data, str(curr_msg.id))
+            if callable(sync_get_search_data)
+            else (None, None, None)
+        )
     if stored_search_results and curr_node.search_results is None:
         curr_node.search_results = stored_search_results
         curr_node.tavily_metadata = stored_tavily_metadata

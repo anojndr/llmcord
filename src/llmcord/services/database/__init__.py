@@ -24,28 +24,35 @@ class AppDB(
         self,
         local_db_path: str = "llmcord.db",
     ) -> None:
-        """Initialize the SQLite database connection and tables."""
-        super().__init__(local_db_path)
-        self._init_db()
+        """Initialize the database service.
 
-    def _init_db(self) -> None:
+        Note: actual connection setup and table initialization are async and
+        are performed lazily on first use (or eagerly via `init_db`).
+        """
+        super().__init__(local_db_path)
+
+    async def _init_db(self) -> None:
         """Initialize all database tables."""
-        self._init_user_tables()
-        self._init_message_tables()
-        self._sync()
+        await self._init_user_tables()
+        await self._init_message_tables()
+
+    async def init(self) -> None:
+        """Eagerly initialize the database connection and tables."""
+        await self._ensure_initialized()
 
 
 # Global instance initialized once to share the DB connection across services.
 _db_state: dict[str, AppDB | None] = {"instance": None}
 
 
-def init_db(
+async def init_db(
     local_db_path: str = "llmcord.db",
 ) -> AppDB:
     """Initialize the global database instance."""
     instance = AppDB(
         local_db_path=local_db_path,
     )
+    await instance.init()
     _db_state["instance"] = instance
     return instance
 

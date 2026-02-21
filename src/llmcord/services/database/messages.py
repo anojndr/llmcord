@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 from llmcord.core.error_handling import log_exception
 
 if TYPE_CHECKING:
+    import aiosqlite
+
     from .core import DatabaseProtocol as _Base
 else:
     _Base = object
@@ -35,14 +37,11 @@ class MessageResponsePayload:
 class MessageDataMixin(_Base):
     """Mixin for message data storage."""
 
-    def _init_message_tables(self) -> None:
+    async def _init_message_tables(self) -> None:
         """Initialize message data tables."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        conn = await self._get_connection()
 
-        # Message search data table stores web search results and extracted URL
-        # content.
-        cursor.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS message_search_data (
                 message_id TEXT PRIMARY KEY,
                 search_results TEXT,
@@ -51,8 +50,7 @@ class MessageDataMixin(_Base):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Response data table stores rendered response payloads for UI actions.
-        cursor.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS message_response_data (
                 message_id TEXT PRIMARY KEY,
                 request_message_id TEXT,
@@ -66,21 +64,21 @@ class MessageDataMixin(_Base):
             )
         """)
 
-        # Migrations
-        self._run_message_migrations(cursor, conn)
+        await self._run_message_migrations(conn)
+        await conn.commit()
 
-        conn.commit()
-
-    def _run_message_migrations(
+    async def _run_message_migrations(
         self,
-        cursor: sqlite3.Cursor,
-        conn: sqlite3.Connection,
+        conn: aiosqlite.Connection,
     ) -> None:
         """Run migrations for message tables."""
         # Migration: ensure message_response_data has the expected schema.
         with contextlib.suppress(sqlite3.Error, ValueError):
-            cursor.execute("PRAGMA table_info(message_response_data)")
-            columns = {row[1] for row in cursor.fetchall()}
+            async with conn.execute(
+                "PRAGMA table_info(message_response_data)",
+            ) as cursor:
+                rows = await cursor.fetchall()
+            columns = {row[1] for row in rows}
 
             required_columns = {
                 "message_id": "TEXT",
@@ -95,8 +93,8 @@ class MessageDataMixin(_Base):
             }
 
             if columns and "message_id" not in columns:
-                cursor.execute("DROP TABLE message_response_data")
-                cursor.execute("""
+                await conn.execute("DROP TABLE message_response_data")
+                await conn.execute("""
                     CREATE TABLE message_response_data (
                         message_id TEXT PRIMARY KEY,
                         request_message_id TEXT,
@@ -113,21 +111,20 @@ class MessageDataMixin(_Base):
 
             for column_name, column_type in required_columns.items():
                 if column_name not in columns:
-                    cursor.execute(
+                    await conn.execute(
                         "ALTER TABLE message_response_data ADD COLUMN "
                         f"{column_name} {column_type}",
                     )
-            conn.commit()
+            await conn.commit()
 
         # Migration: Add lens_results column if it doesn't exist.
         with contextlib.suppress(sqlite3.Error, ValueError):
-            cursor.execute(
+            await conn.execute(
                 "ALTER TABLE message_search_data ADD COLUMN lens_results TEXT",
             )
-            conn.commit()
+            await conn.commit()
 
-    # Message search data methods
-    def save_message_search_data(
+    async def _save_message_search_data_impl(
         self,
         message_id: str,
         search_results: str | None = None,
@@ -135,24 +132,7 @@ class MessageDataMixin(_Base):
         lens_results: str | None = None,
     ) -> None:
         """Save web search results, lens results, and metadata for a message."""
-        self._run_db_call(
-            self._save_message_search_data_impl,
-            message_id,
-            search_results,
-            tavily_metadata,
-            lens_results,
-        )
-
-    def _save_message_search_data_impl(
-        self,
-        message_id: str,
-        search_results: str | None = None,
-        tavily_metadata: dict[str, Any] | None = None,
-        lens_results: str | None = None,
-    ) -> None:
-        """Save web search results, lens results, and metadata for a message."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        conn = await self._get_connection()
 
         # Ensure all parameters are primitive SQLite-compatible types.
         # (str, int, float, None) - convert any non-primitive types to strings
@@ -194,7 +174,7 @@ class MessageDataMixin(_Base):
 
         # Debug log parameter types if there's an issue
         try:
-            cursor.execute(
+            await conn.execute(
                 """INSERT INTO message_search_data (
                        message_id,
                        search_results,
@@ -221,12 +201,8 @@ class MessageDataMixin(_Base):
             )
             raise
 
-        conn.commit()
+        await conn.commit()
         # Sync in background to avoid blocking
-        try:
-            self._sync()
-        except sqlite3.Error as exc:
-            logger.debug("Background sync after save failed: %s", exc)
         logger.info("Saved search data for message %s", message_id)
 
     async def asave_message_search_data(
@@ -245,26 +221,18 @@ class MessageDataMixin(_Base):
             lens_results,
         )
 
-    def get_message_search_data(
+    async def _get_message_search_data_impl(
         self,
         message_id: str,
     ) -> tuple[str | None, dict[str, Any] | None, str | None]:
         """Get web search results, metadata, and lens results for a message."""
-        return self._run_db_call(self._get_message_search_data_impl, message_id)
-
-    def _get_message_search_data_impl(
-        self,
-        message_id: str,
-    ) -> tuple[str | None, dict[str, Any] | None, str | None]:
-        """Get web search results, metadata, and lens results for a message."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
+        conn = await self._get_connection()
+        async with conn.execute(
             "SELECT search_results, tavily_metadata, lens_results "
             "FROM message_search_data WHERE message_id = ?",
             (str(message_id),),
-        )
-        result = cursor.fetchone()
+        ) as cursor:
+            result = await cursor.fetchone()
         if result:
             search_results = result[0]
             try:
@@ -297,22 +265,13 @@ class MessageDataMixin(_Base):
             message_id,
         )
 
-    def save_message_response_data(
+    async def _save_message_response_data_impl(
         self,
         message_id: str,
         payload: MessageResponsePayload,
     ) -> None:
         """Save response payloads for a Discord message."""
-        self._run_db_call(self._save_message_response_data_impl, message_id, payload)
-
-    def _save_message_response_data_impl(
-        self,
-        message_id: str,
-        payload: MessageResponsePayload,
-    ) -> None:
-        """Save response payloads for a Discord message."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        conn = await self._get_connection()
         request_message_id = payload.request_message_id
         request_user_id = payload.request_user_id
         full_response = payload.full_response
@@ -320,7 +279,7 @@ class MessageDataMixin(_Base):
         grounding_metadata = payload.grounding_metadata
         tavily_metadata = payload.tavily_metadata
         failed_extractions = payload.failed_extractions
-        cursor.execute(
+        await conn.execute(
             """INSERT INTO message_response_data (
                    message_id,
                    request_message_id,
@@ -358,11 +317,7 @@ class MessageDataMixin(_Base):
                 json.dumps(failed_extractions) if failed_extractions else None,
             ),
         )
-        conn.commit()
-        try:
-            self._sync()
-        except sqlite3.Error as exc:
-            logger.debug("Background sync after save failed: %s", exc)
+        await conn.commit()
         logger.info("Saved response data for message %s", message_id)
 
     async def asave_message_response_data(
@@ -377,7 +332,7 @@ class MessageDataMixin(_Base):
             payload,
         )
 
-    def get_message_response_data(
+    async def _get_message_response_data_impl(
         self,
         message_id: str,
     ) -> tuple[
@@ -390,31 +345,15 @@ class MessageDataMixin(_Base):
         list[str] | None,
     ]:
         """Get response data for a Discord message."""
-        return self._run_db_call(self._get_message_response_data_impl, message_id)
-
-    def _get_message_response_data_impl(
-        self,
-        message_id: str,
-    ) -> tuple[
-        str | None,
-        str | None,
-        dict[str, Any] | list[Any] | None,
-        dict[str, Any] | None,
-        str | None,
-        str | None,
-        list[str] | None,
-    ]:
-        """Get response data for a Discord message."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
+        conn = await self._get_connection()
+        async with conn.execute(
             "SELECT full_response, thought_process, grounding_metadata, "
             "tavily_metadata, "
             "request_message_id, request_user_id, failed_extractions "
             "FROM message_response_data WHERE message_id = ?",
             (str(message_id),),
-        )
-        result = cursor.fetchone()
+        ) as cursor:
+            result = await cursor.fetchone()
         if not result:
             return None, None, None, None, None, None, None
 

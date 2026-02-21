@@ -256,11 +256,13 @@ async def _persist_response_payload(
                 payload=payload,
             )
         else:
-            await asyncio.to_thread(
-                db.save_message_response_data,
-                str(state.response_msgs[last_msg_index].id),
-                payload,
-            )
+            sync_save_response_data = getattr(db, "save_message_response_data", None)
+            if callable(sync_save_response_data):
+                await asyncio.to_thread(
+                    sync_save_response_data,
+                    str(state.response_msgs[last_msg_index].id),
+                    payload,
+                )
     except (OSError, RuntimeError, ValueError) as exc:
         log_exception(
             logger=logger,

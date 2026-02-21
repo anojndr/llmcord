@@ -15,6 +15,6 @@ async def main() -> None:
     importlib.import_module("llmcord.discord.events")
 
     # Initialize SQLite database
-    init_db()
+    await init_db()
 
     await asyncio.gather(start_server(), discord_bot.start(config["bot_token"]))

@@ -1,7 +1,7 @@
 """Shared utility helpers for Discord command handling."""
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 # DRY Helper Functions for Slash Commands
 # =============================================================================
 
-GetModelFn = Callable[[str], str | None]
-SetModelFn = Callable[[str, str], None]
+GetModelFn = Callable[[str], Awaitable[str | None]]
+SetModelFn = Callable[[str, str], Awaitable[None]]
 GetDefaultFn = Callable[[], str | None]
 
 
@@ -95,7 +95,7 @@ async def _handle_model_switch(
         return
 
     # Get user's current model preference (or default)
-    current_user_model = handlers.get_current(user_id)
+    current_user_model = await handlers.get_current(user_id)
     default_model = handlers.get_default()
 
     if current_user_model is None:
@@ -117,7 +117,7 @@ async def _handle_model_switch(
     if model == current_user_model:
         output = f"Your current {model_type_label}: `{current_user_model}`"
     else:
-        handlers.set_model(user_id, model)
+        await handlers.set_model(user_id, model)
         output = f"Your {model_type_label} switched to: `{model}`"
         logger.info(
             "User %s switched %s to: %s",
@@ -129,7 +129,7 @@ async def _handle_model_switch(
     await interaction.followup.send(output)
 
 
-def _build_model_autocomplete(
+async def _build_model_autocomplete(
     curr_str: str,
     handlers: ModelAutocompleteHandlers,
     user_id: str,
@@ -149,7 +149,7 @@ def _build_model_autocomplete(
         List of discord.app_commands.Choice objects.
 
     """
-    user_model = handlers.get_current(user_id)
+    user_model = await handlers.get_current(user_id)
     default_model = handlers.get_default()
 
     if user_model is None:

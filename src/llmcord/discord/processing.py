@@ -54,7 +54,12 @@ async def _process_user_message(new_msg: discord.Message) -> None:
         if callable(async_get_user_model):
             user_model = await async_get_user_model(user_id)
         else:
-            user_model = await asyncio.to_thread(db.get_user_model, user_id)
+            sync_get_user_model = getattr(db, "get_user_model", None)
+            user_model = (
+                await asyncio.to_thread(sync_get_user_model, user_id)
+                if callable(sync_get_user_model)
+                else None
+            )
 
         # Fall back to default model if user hasn't set a preference
         # or if their saved model is no longer valid.

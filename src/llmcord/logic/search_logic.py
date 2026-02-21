@@ -246,12 +246,18 @@ async def run_research_command(  # noqa: C901
                         search_metadata,
                     )
                 else:
-                    await asyncio.to_thread(
-                        db.save_message_search_data,
-                        str(context.new_msg.id),
-                        research_results,
-                        search_metadata,
+                    sync_save_search_data = getattr(
+                        db,
+                        "save_message_search_data",
+                        None,
                     )
+                    if callable(sync_save_search_data):
+                        await asyncio.to_thread(
+                            sync_save_search_data,
+                            str(context.new_msg.id),
+                            research_results,
+                            search_metadata,
+                        )
 
                 if context.new_msg.id in context.msg_nodes:
                     node = context.msg_nodes[context.new_msg.id]
@@ -262,7 +268,7 @@ async def run_research_command(  # noqa: C901
     return search_metadata
 
 
-async def maybe_run_web_search(  # noqa: C901, PLR0912
+async def maybe_run_web_search(  # noqa: C901, PLR0912, PLR0915
     context: WebSearchContext,
 ) -> dict[str, object] | None:
     """Decide and execute web search."""
@@ -282,9 +288,11 @@ async def maybe_run_web_search(  # noqa: C901, PLR0912
         if callable(async_get_decider_model):
             user_decider_model = await async_get_decider_model(user_id)
         else:
-            user_decider_model = await asyncio.to_thread(
-                db.get_user_search_decider_model,
-                user_id,
+            sync_get_decider_model = getattr(db, "get_user_search_decider_model", None)
+            user_decider_model = (
+                await asyncio.to_thread(sync_get_decider_model, user_id)
+                if callable(sync_get_decider_model)
+                else None
             )
         default_decider = str(
             context.config.get(
@@ -396,12 +404,18 @@ async def maybe_run_web_search(  # noqa: C901, PLR0912
                                     search_metadata,
                                 )
                             else:
-                                await asyncio.to_thread(
-                                    db.save_message_search_data,
-                                    str(context.new_msg.id),
-                                    search_results,
-                                    search_metadata,
+                                sync_save_search_data = getattr(
+                                    db,
+                                    "save_message_search_data",
+                                    None,
                                 )
+                                if callable(sync_save_search_data):
+                                    await asyncio.to_thread(
+                                        sync_save_search_data,
+                                        str(context.new_msg.id),
+                                        search_results,
+                                        search_metadata,
+                                    )
 
                             if context.new_msg.id in context.msg_nodes:
                                 node = context.msg_nodes[context.new_msg.id]

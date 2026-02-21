@@ -81,6 +81,7 @@ async def get_response_data(message_id: int) -> ResponseData:
             failed_extractions,
         ) = await async_get_response_data(str(message_id))
     else:
+        sync_get_response_data = getattr(db, "get_message_response_data", None)
         (
             full_response,
             thought_process,
@@ -89,7 +90,11 @@ async def get_response_data(message_id: int) -> ResponseData:
             request_message_id,
             request_user_id,
             failed_extractions,
-        ) = await asyncio.to_thread(db.get_message_response_data, str(message_id))
+        ) = (
+            await asyncio.to_thread(sync_get_response_data, str(message_id))
+            if callable(sync_get_response_data)
+            else (None, None, None, None, None, None, None)
+        )
 
     return ResponseData(
         full_response=full_response,

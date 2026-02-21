@@ -16,67 +16,47 @@ logger = logging.getLogger(__name__)
 class UserPreferencesMixin(_Base):
     """Mixin for user preference storage."""
 
-    def _init_user_tables(self) -> None:
+    async def _init_user_tables(self) -> None:
         """Initialize user preference tables."""
-        # We assume self is mixed in with DatabaseCore
-        conn = self._get_connection()
-        cursor = conn.cursor()
+        conn = await self._get_connection()
 
-        # User model preferences table
-        cursor.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_model_preferences (
                 user_id TEXT PRIMARY KEY,
                 model TEXT NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # User search decider model preferences table
-        cursor.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS user_search_decider_preferences (
                 user_id TEXT PRIMARY KEY,
                 model TEXT NOT NULL,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        conn.commit()
+        await conn.commit()
 
     # User model preferences methods
-    def get_user_model(self, user_id: str) -> str | None:
-        """Get the preferred model for a user.
-
-        Returns None if not set.
-        """
-        # _with_reconnect should be applied by the consumer or we need to
-        # import it.
-        # Ideally, we apply it here if we can import it, or rely on the main
-        # class. For simplicity in this mixin structure, we assume the methods
-        # utilizing I/O will be decorated in the final class OR we import the
-        # decorator here.
-        # Let's import the decorator to keep it self-contained.
-        return self._run_db_call(self._get_user_model_impl, user_id)
-
     async def aget_user_model(self, user_id: str) -> str | None:
         """Get the preferred model for a user without blocking the event loop."""
         return await self._run_db_call_async(self._get_user_model_impl, user_id)
 
-    def _get_user_model_impl(self, user_id: str) -> str | None:
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
+    async def _get_user_model_impl(self, user_id: str) -> str | None:
+        conn = await self._get_connection()
+        async with conn.execute(
             "SELECT model FROM user_model_preferences WHERE user_id = ?",
             (str(user_id),),
-        )
-        result = cursor.fetchone()
+        ) as cursor:
+            result = await cursor.fetchone()
         return result[0] if result else None
 
-    def set_user_model(self, user_id: str, model: str) -> None:
-        """Set the preferred model for a user."""
-        self._run_db_call(self._set_user_model_impl, user_id, model)
+    async def aset_user_model(self, user_id: str, model: str) -> None:
+        """Set the preferred model for a user without blocking the event loop."""
+        await self._run_db_call_async(self._set_user_model_impl, user_id, model)
 
-    def _set_user_model_impl(self, user_id: str, model: str) -> None:
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
+    async def _set_user_model_impl(self, user_id: str, model: str) -> None:
+        conn = await self._get_connection()
+        await conn.execute(
             """INSERT INTO user_model_preferences (user_id, model, updated_at)
                VALUES (?, ?, CURRENT_TIMESTAMP)
                ON CONFLICT(user_id) DO UPDATE SET
@@ -84,32 +64,10 @@ class UserPreferencesMixin(_Base):
                    updated_at = CURRENT_TIMESTAMP""",
             (str(user_id), model, model),
         )
-        conn.commit()
-        self._sync()
+        await conn.commit()
         logger.info("Set model preference for user %s: %s", user_id, model)
 
-    async def aset_user_model(self, user_id: str, model: str) -> None:
-        """Set the preferred model for a user without blocking the event loop."""
-        await self._run_db_call_async(self._set_user_model_impl, user_id, model)
-
     # User search decider model preferences methods
-    def get_user_search_decider_model(self, user_id: str) -> str | None:
-        """Get the preferred search decider model for a user.
-
-        Returns None if not set.
-        """
-        return self._run_db_call(self._get_user_search_decider_model_impl, user_id)
-
-    def _get_user_search_decider_model_impl(self, user_id: str) -> str | None:
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            ("SELECT model FROM user_search_decider_preferences WHERE user_id = ?"),
-            (str(user_id),),
-        )
-        result = cursor.fetchone()
-        return result[0] if result else None
-
     async def aget_user_search_decider_model(self, user_id: str) -> str | None:
         """Get decider model for a user without blocking the event loop."""
         return await self._run_db_call_async(
@@ -117,30 +75,14 @@ class UserPreferencesMixin(_Base):
             user_id,
         )
 
-    def set_user_search_decider_model(self, user_id: str, model: str) -> None:
-        """Set the preferred search decider model for a user."""
-        self._run_db_call(self._set_user_search_decider_model_impl, user_id, model)
-
-    def _set_user_search_decider_model_impl(self, user_id: str, model: str) -> None:
-        """Set the preferred search decider model for a user."""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            (
-                "INSERT INTO user_search_decider_preferences "
-                "(user_id, model, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(user_id) DO UPDATE SET model = ?, "
-                "updated_at = CURRENT_TIMESTAMP"
-            ),
-            (str(user_id), model, model),
-        )
-        conn.commit()
-        self._sync()
-        logger.info(
-            "Set search decider model preference for user %s: %s",
-            user_id,
-            model,
-        )
+    async def _get_user_search_decider_model_impl(self, user_id: str) -> str | None:
+        conn = await self._get_connection()
+        async with conn.execute(
+            "SELECT model FROM user_search_decider_preferences WHERE user_id = ?",
+            (str(user_id),),
+        ) as cursor:
+            result = await cursor.fetchone()
+        return result[0] if result else None
 
     async def aset_user_search_decider_model(self, user_id: str, model: str) -> None:
         """Set decider model for a user without blocking the event loop."""
@@ -150,26 +92,27 @@ class UserPreferencesMixin(_Base):
             model,
         )
 
-    def reset_all_user_model_preferences(self) -> int:
-        """Reset all user model preferences.
-
-        Returns the number of preferences deleted.
-        """
-        return self._run_db_call(self._reset_all_user_model_preferences_impl)
-
-    def _reset_all_user_model_preferences_impl(self) -> int:
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM user_model_preferences")
-        count = cursor.fetchone()[0]
-        cursor.execute("DELETE FROM user_model_preferences")
-        conn.commit()
-        self._sync()
-        logger.info(
-            "Reset all user model preferences (%d users affected)",
-            count,
+    async def _set_user_search_decider_model_impl(
+        self,
+        user_id: str,
+        model: str,
+    ) -> None:
+        conn = await self._get_connection()
+        await conn.execute(
+            (
+                "INSERT INTO user_search_decider_preferences "
+                "(user_id, model, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(user_id) DO UPDATE SET model = ?, "
+                "updated_at = CURRENT_TIMESTAMP"
+            ),
+            (str(user_id), model, model),
         )
-        return count
+        await conn.commit()
+        logger.info(
+            "Set search decider model preference for user %s: %s",
+            user_id,
+            model,
+        )
 
     async def areset_all_user_model_preferences(self) -> int:
         """Reset all model preferences without blocking the event loop."""
@@ -177,23 +120,17 @@ class UserPreferencesMixin(_Base):
             self._reset_all_user_model_preferences_impl,
         )
 
-    def reset_all_user_search_decider_preferences(self) -> int:
-        """Reset all user search decider model preferences.
-
-        Returns the number of preferences deleted.
-        """
-        return self._run_db_call(self._reset_all_user_search_decider_preferences_impl)
-
-    def _reset_all_user_search_decider_preferences_impl(self) -> int:
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM user_search_decider_preferences")
-        count = cursor.fetchone()[0]
-        cursor.execute("DELETE FROM user_search_decider_preferences")
-        conn.commit()
-        self._sync()
+    async def _reset_all_user_model_preferences_impl(self) -> int:
+        conn = await self._get_connection()
+        async with conn.execute(
+            "SELECT COUNT(*) FROM user_model_preferences",
+        ) as cursor:
+            row = await cursor.fetchone()
+        count = int(row[0]) if row else 0
+        await conn.execute("DELETE FROM user_model_preferences")
+        await conn.commit()
         logger.info(
-            ("Reset all user search decider model preferences (%d users affected)"),
+            "Reset all user model preferences (%d users affected)",
             count,
         )
         return count
@@ -203,3 +140,18 @@ class UserPreferencesMixin(_Base):
         return await self._run_db_call_async(
             self._reset_all_user_search_decider_preferences_impl,
         )
+
+    async def _reset_all_user_search_decider_preferences_impl(self) -> int:
+        conn = await self._get_connection()
+        async with conn.execute(
+            "SELECT COUNT(*) FROM user_search_decider_preferences",
+        ) as cursor:
+            row = await cursor.fetchone()
+        count = int(row[0]) if row else 0
+        await conn.execute("DELETE FROM user_search_decider_preferences")
+        await conn.commit()
+        logger.info(
+            "Reset all user search decider model preferences (%d users affected)",
+            count,
+        )
+        return count

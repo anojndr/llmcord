@@ -87,8 +87,8 @@ async def model_command(interaction: discord.Interaction, model: str) -> None:
     config_data = config_module.get_config()
 
     handlers = ModelSwitchHandlers(
-        get_current=db.get_user_model,
-        set_model=db.set_user_model,
+        get_current=db.aget_user_model,
+        set_model=db.aset_user_model,
         get_default=partial(get_default_model, config_data),
     )
     await _handle_model_switch(
@@ -111,10 +111,10 @@ async def model_autocomplete(
     user_id = str(interaction.user.id)
 
     handlers = ModelAutocompleteHandlers(
-        get_current=db.get_user_model,
+        get_current=db.aget_user_model,
         get_default=partial(get_default_model, config_data),
     )
-    return _build_model_autocomplete(curr_str, handlers, user_id, config_data)
+    return await _build_model_autocomplete(curr_str, handlers, user_id, config_data)
 
 
 @discord_bot.tree.command(
@@ -132,8 +132,8 @@ async def search_decider_model_command(
     config_data = config_module.get_config()
 
     handlers = ModelSwitchHandlers(
-        get_current=db.get_user_search_decider_model,
-        set_model=db.set_user_search_decider_model,
+        get_current=db.aget_user_search_decider_model,
+        set_model=db.aset_user_search_decider_model,
         get_default=partial(_get_default_search_decider_model, config_data),
     )
     await _handle_model_switch(
@@ -156,10 +156,10 @@ async def search_decider_model_autocomplete(
     user_id = str(interaction.user.id)
 
     handlers = ModelAutocompleteHandlers(
-        get_current=db.get_user_search_decider_model,
+        get_current=db.aget_user_search_decider_model,
         get_default=partial(_get_default_search_decider_model, config_data),
     )
-    return _build_model_autocomplete(curr_str, handlers, user_id, config_data)
+    return await _build_model_autocomplete(curr_str, handlers, user_id, config_data)
 
 
 @discord_bot.tree.command(
@@ -189,8 +189,8 @@ async def reset_all_preferences_command(
     db = get_db()
 
     # Reset both preferences
-    model_count = db.reset_all_user_model_preferences()
-    decider_count = db.reset_all_user_search_decider_preferences()
+    model_count = await db.areset_all_user_model_preferences()
+    decider_count = await db.areset_all_user_search_decider_preferences()
 
     message_lines = [
         "✅ Successfully reset all user preferences:",
