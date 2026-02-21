@@ -1,9 +1,11 @@
 """Discord slash commands for llmcord."""
 
+import io
 import logging
 from functools import partial
 
 import discord
+from discord import app_commands
 from discord.app_commands import Choice
 
 from llmcord import config as config_module
@@ -11,6 +13,10 @@ from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
 from llmcord.globals import discord_bot
 from llmcord.services.database import get_db
+from llmcord.services.humanizer import (
+    QuillBotHumanizerError,
+    humanize_text_with_quillbot,
+)
 from llmcord.utils.common import (
     ModelAutocompleteHandlers,
     ModelSwitchHandlers,
@@ -21,6 +27,8 @@ from llmcord.utils.common import (
 )
 
 logger = logging.getLogger(__name__)
+
+_DISCORD_MESSAGE_CHAR_LIMIT = 2_000
 
 
 async def _defer_for_channel_visibility(interaction: discord.Interaction) -> None:
@@ -197,4 +205,43 @@ async def reset_all_preferences_command(
         interaction.user.id,
         model_count,
         decider_count,
+    )
+
+
+@discord_bot.tree.command(
+    name="humanize",
+    description="Humanize text with QuillBot",
+)
+@app_commands.describe(text="Text to humanize")
+async def humanize_command(
+    interaction: discord.Interaction,
+    text: app_commands.Range[str, 1, 4_000],
+) -> None:
+    """Handle the /humanize command."""
+    await _defer_for_channel_visibility(interaction)
+
+    try:
+        result = await humanize_text_with_quillbot(text)
+    except QuillBotHumanizerError as exc:
+        await call_with_embed_limits(
+            interaction.followup.send,
+            embed=build_error_embed(f"Humanize failed: {exc}"),
+            ephemeral=True,
+        )
+        return
+
+    metadata = (
+        "QuillBot mode: "
+        f"`{result.mode}` | word limit: `{result.word_limit}`"
+        f" | segments: `{result.segment_count}`"
+    )
+
+    if len(result.text) + len(metadata) + 2 <= _DISCORD_MESSAGE_CHAR_LIMIT:
+        await interaction.followup.send(f"{result.text}\n\n{metadata}")
+        return
+
+    payload = io.BytesIO(result.text.encode("utf-8"))
+    await interaction.followup.send(
+        content=metadata,
+        file=discord.File(payload, filename="humanized.txt"),
     )

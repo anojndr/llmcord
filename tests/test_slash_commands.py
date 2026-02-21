@@ -6,4 +6,9 @@ from llmcord.globals import discord_bot
 
 def test_slash_commands_registered() -> None:
     names = {cmd.name for cmd in discord_bot.tree.get_commands()}
-    assert {"model", "searchdecidermodel", "resetallpreferences"}.issubset(names)
+    assert {
+        "model",
+        "searchdecidermodel",
+        "resetallpreferences",
+        "humanize",
+    }.issubset(names)
