@@ -250,8 +250,13 @@ async def _run_decider_once(
             result = _parse_decider_response(response_text)
             if result is not None:
                 return result, False
-            exhausted_keys = False
-            break
+
+            logger.warning(
+                "Search decider returned invalid/empty response for provider '%s'; "
+                "continuing key rotation.",
+                run_config.provider,
+            )
+            continue
         except (
             TimeoutError,
             OSError,
@@ -280,9 +285,6 @@ async def _run_decider_once(
                 },
             )
             continue
-
-        exhausted_keys = False
-        break
 
     return None, exhausted_keys
 

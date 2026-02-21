@@ -404,7 +404,7 @@ async def test_decider_empty_response_skips_json_parse_warning(
         )
 
     assert result is None
-    assert exhausted is False
+    assert exhausted is True
     assert all(
         "Failed to parse JSON response from search decider" not in record.getMessage()
         for record in caplog.records
@@ -665,3 +665,63 @@ async def test_decider_first_token_timeout_triggers_fallback_chain(
     )
 
     assert result == {"needs_search": False}
+
+
+@pytest.mark.asyncio
+async def test_decider_empty_response_triggers_fallback_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted_providers: list[str] = []
+
+    async def _fake_get_decider_response_text(
+        *,
+        run_config: DeciderRunConfig,
+        **_kwargs: object,
+    ) -> str:
+        attempted_providers.append(run_config.provider)
+        if run_config.provider == "google-gemini-cli":
+            return ""
+        return '{"needs_search":false}'
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._get_decider_response_text",
+        _fake_get_decider_response_text,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._get_decider_runner",
+        lambda: _run_decider_once,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.get_config",
+        lambda: {
+            "providers": {
+                "mistral": {
+                    "api_key": ["mistral-key"],
+                    "base_url": "https://api.mistral.ai/v1",
+                },
+            },
+            "models": {},
+        },
+    )
+
+    result = await decide_web_search(
+        [{"role": "user", "content": "hello"}],
+        {
+            "provider": "google-gemini-cli",
+            "model": "gemini-3-flash-preview-minimal",
+            "api_keys": ["refresh-token"],
+            "base_url": "https://cloudcode-pa.googleapis.com",
+            "extra_headers": None,
+            "model_parameters": None,
+            "fallback_chain": [
+                (
+                    "mistral",
+                    "mistral-large-latest",
+                    "mistral/mistral-large-latest",
+                ),
+            ],
+        },
+    )
+
+    assert result == {"needs_search": False}
+    assert attempted_providers == ["google-gemini-cli", "mistral"]
