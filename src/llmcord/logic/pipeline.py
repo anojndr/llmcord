@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -44,6 +45,8 @@ from llmcord.services.extractors import TwitterApiProtocol
 from llmcord.services.search import get_current_datetime_strings
 
 logger = logging.getLogger(__name__)
+
+STATUS_CALLBACK_THROTTLE_SECONDS = 2.0
 
 
 @dataclass(slots=True)
@@ -198,7 +201,7 @@ async def _setup_initial_view(
     await processing_msg.edit(view=initial_view)
 
 
-async def process_message(
+async def process_message(  # noqa: C901, PLR0915
     new_msg: discord.Message,
     context: ProcessContext,
 ) -> None:
@@ -212,6 +215,44 @@ async def process_message(
     override_provider_slash_model = context.override_provider_slash_model
     fallback_chain = context.fallback_chain
     last_edit_time = 0
+
+    step3_status_last: str | None = None
+    step3_status_last_at = 0.0
+
+    async def step3_status_callback(status: str) -> None:
+        nonlocal step3_status_last, step3_status_last_at
+        now = time.monotonic()
+        if status == step3_status_last:
+            return
+        if (now - step3_status_last_at) < STATUS_CALLBACK_THROTTLE_SECONDS:
+            return
+        step3_status_last = status
+        step3_status_last_at = now
+        await _update_processing_progress(
+            processing_msg,
+            step=3,
+            total_steps=5,
+            status=status,
+        )
+
+    step4_status_last: str | None = None
+    step4_status_last_at = 0.0
+
+    async def step4_status_callback(status: str) -> None:
+        nonlocal step4_status_last, step4_status_last_at
+        now = time.monotonic()
+        if status == step4_status_last:
+            return
+        if (now - step4_status_last_at) < STATUS_CALLBACK_THROTTLE_SECONDS:
+            return
+        step4_status_last = status
+        step4_status_last_at = now
+        await _update_processing_progress(
+            processing_msg,
+            step=4,
+            total_steps=5,
+            status=status,
+        )
 
     should_process, processing_msg_or_none = await should_process_message(
         new_msg,
@@ -288,6 +329,7 @@ async def process_message(
                 enable_youtube_transcripts=enable_youtube_transcripts,
                 youtube_transcript_method=youtube_transcript_method,
                 provider_slash_model=provider_settings.provider_slash_model,
+                status_callback=step3_status_callback,
             ),
         )
         messages = build_result.messages
@@ -350,6 +392,7 @@ async def process_message(
                 web_search_provider=web_search_provider,
                 actual_model=provider_settings.actual_model,
                 actual_provider=provider_settings.provider,
+                status_callback=step4_status_callback,
             ),
             is_googlelens_query_func=is_googlelens_query,
         )

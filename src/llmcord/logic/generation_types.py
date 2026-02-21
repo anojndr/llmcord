@@ -1,7 +1,7 @@
 """Data types for generation logic."""
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import discord
 
@@ -123,5 +123,6 @@ class GenerationLoopState:
     last_error_msg: str | None
     fallback_state: FallbackState
     fallback_chain: list[tuple[str, str, str]]
+    timeout_strikes: dict[str, int] = field(default_factory=dict)
     image_input_removed: bool = False
     developer_instruction_removed: bool = False

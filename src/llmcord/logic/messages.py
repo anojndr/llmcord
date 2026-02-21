@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from base64 import b64encode
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -56,6 +57,7 @@ class MessageBuildContext:
     enable_youtube_transcripts: bool
     youtube_transcript_method: str
     provider_slash_model: str | None = None
+    status_callback: Callable[[str], Awaitable[None]] | None = None
 
 
 @dataclass(slots=True)
@@ -159,6 +161,11 @@ async def _populate_node_if_needed(
         if att.content_type
         and any(att.content_type.startswith(x) for x in allowed_types)
     ]
+
+    if good_attachments and context.status_callback is not None:
+        await context.status_callback(
+            f"Downloading {len(good_attachments)} attachment(s)...",
+        )
 
     (
         good_attachments,
@@ -274,6 +281,17 @@ async def _add_social_video_attachments(
     curr_node: MsgNode,
     processed_attachments: list[dict[str, bytes | str | None]],
 ) -> None:
+    cleaned_lower = cleaned_content.lower()
+
+    if context.status_callback is not None and any(
+        token in cleaned_lower
+        for token in (
+            "tiktok.com",
+            "vt.tiktok.com",
+        )
+    ):
+        await context.status_callback("Downloading linked TikTok video(s)...")
+
     tiktok_result = await maybe_download_tiktok_videos_with_failures(
         cleaned_content=cleaned_content,
         actual_model=context.actual_model,
@@ -294,6 +312,15 @@ async def _add_social_video_attachments(
             "Added %s downloaded TikTok video attachment(s) for Gemini processing",
             len(tiktok_result.videos),
         )
+
+    if context.status_callback is not None and any(
+        token in cleaned_lower
+        for token in (
+            "facebook.com",
+            "fb.watch",
+        )
+    ):
+        await context.status_callback("Downloading linked Facebook video(s)...")
 
     facebook_result = await maybe_download_facebook_videos_with_failures(
         cleaned_content=cleaned_content,

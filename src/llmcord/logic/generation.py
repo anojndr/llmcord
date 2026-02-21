@@ -52,6 +52,7 @@ from llmcord.logic.images import (
 from llmcord.logic.utils import (
     count_conversation_tokens,
 )
+from llmcord.services.circuit_breaker import GLOBAL_PROVIDER_CIRCUIT_BREAKER
 from llmcord.services.database import get_db
 from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
@@ -61,6 +62,7 @@ logger = logging.getLogger(__name__)
 IMAGE_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
 _THINKING_OPEN_TAG = "<thinking>"
 _THINKING_CLOSE_TAG = "</thinking>"
+SERVER_ERROR_STATUS_MIN = 500
 
 
 @dataclass(slots=True)
@@ -123,6 +125,53 @@ def _format_display_model(provider: str, actual_model: str) -> str:
     if actual_model.startswith(f"{provider}/"):
         return actual_model
     return f"{provider}/{actual_model}"
+
+
+def _circuit_breaker_key(provider: str, base_url: str | None) -> str:
+    suffix = base_url or ""
+    return f"{provider}|{suffix}".lower()
+
+
+def _get_error_status_code(error: Exception) -> int | None:
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+
+    response = getattr(error, "response", None)
+    if response is not None:
+        resp_code = getattr(response, "status_code", None)
+        if isinstance(resp_code, int):
+            return resp_code
+
+    return None
+
+
+def _is_outage_like_provider_error(error: Exception) -> bool:
+    if isinstance(error, (FirstTokenTimeoutError, asyncio.TimeoutError)):
+        return True
+    if isinstance(error, (httpx.TimeoutException, httpx.RequestError)):
+        return True
+
+    status_code = _get_error_status_code(error)
+    if isinstance(status_code, int) and status_code >= SERVER_ERROR_STATUS_MIN:
+        return True
+
+    message = str(error).lower()
+    return any(
+        token in message
+        for token in (
+            "service unavailable",
+            "gateway timeout",
+            "bad gateway",
+            "connection reset",
+            "temporarily unavailable",
+            "timed out",
+            "timeout",
+            "503",
+            "502",
+            "504",
+        )
+    )
 
 
 async def _initialize_generation_state(
@@ -834,12 +883,14 @@ def _remove_audio_video_file_parts_from_messages(
     return removed_any
 
 
-def _handle_generation_exception(
+def _handle_generation_exception(  # noqa: PLR0913
     *,
     error: Exception,
     provider: str,
     current_api_key: str,
     good_keys: list[str],
+    timeout_strikes: dict[str, int],
+    timeout_strike_threshold: int = 2,
 ) -> tuple[list[str], str]:
     last_error_msg = str(error)
     log_exception(
@@ -859,7 +910,7 @@ def _handle_generation_exception(
     if is_first_token_timeout:
         special_case_message = (
             "No first token within %s seconds for provider '%s'; "
-            "removing key and trying remaining keys."
+            "recording a timeout strike and trying another key."
         )
     elif is_empty_response:
         special_case_message = (
@@ -903,7 +954,20 @@ def _handle_generation_exception(
             )
         else:
             logger.warning(special_case_message, provider)
+
+        if is_first_token_timeout:
+            _handle_key_rotation_error(
+                provider=provider,
+                current_api_key=current_api_key,
+                good_keys=good_keys,
+                error_flags=(False, True),
+                timeout_strikes=timeout_strikes,
+                timeout_strike_threshold=timeout_strike_threshold,
+            )
+            return good_keys, last_error_msg
+
         _remove_key(good_keys, current_api_key)
+        timeout_strikes.pop(current_api_key, None)
         return good_keys, last_error_msg
 
     _handle_key_rotation_error(
@@ -911,6 +975,8 @@ def _handle_generation_exception(
         current_api_key=current_api_key,
         good_keys=good_keys,
         error_flags=(is_key_error, is_timeout_error),
+        timeout_strikes=timeout_strikes,
+        timeout_strike_threshold=timeout_strike_threshold,
     )
 
     return good_keys, last_error_msg
@@ -921,16 +987,33 @@ def _remove_key(good_keys: list[str], current_api_key: str) -> None:
         good_keys.remove(current_api_key)
 
 
-def _handle_key_rotation_error(
+def _rotate_key(good_keys: list[str], current_api_key: str) -> None:
+    if not good_keys:
+        return
+
+    if good_keys[0] == current_api_key:
+        good_keys.pop(0)
+        good_keys.append(current_api_key)
+        return
+
+    if current_api_key in good_keys:
+        good_keys.remove(current_api_key)
+        good_keys.append(current_api_key)
+
+
+def _handle_key_rotation_error(  # noqa: PLR0913
     *,
     provider: str,
     current_api_key: str,
     good_keys: list[str],
     error_flags: tuple[bool, bool],
+    timeout_strikes: dict[str, int],
+    timeout_strike_threshold: int,
 ) -> None:
     is_key_error, is_timeout_error = error_flags
     if is_key_error:
         _remove_key(good_keys, current_api_key)
+        timeout_strikes.pop(current_api_key, None)
         logger.info(
             "Removed failed key for '%s', %s keys remaining",
             provider,
@@ -939,16 +1022,33 @@ def _handle_key_rotation_error(
         return
 
     if is_timeout_error:
+        strikes = timeout_strikes.get(current_api_key, 0) + 1
+        timeout_strikes[current_api_key] = strikes
+
+        if strikes < timeout_strike_threshold:
+            _rotate_key(good_keys, current_api_key)
+            logger.warning(
+                "Timeout for provider '%s'; rotating key (strike %s/%s)",
+                provider,
+                strikes,
+                timeout_strike_threshold,
+            )
+            return
+
         _remove_key(good_keys, current_api_key)
+        timeout_strikes.pop(current_api_key, None)
         logger.warning(
-            "Non-key error for provider '%s': %s, %s keys remaining",
+            "Timeout for provider '%s'; removed key after %s/%s strikes, "
+            "%s keys remaining",
             provider,
-            "timeout",
+            strikes,
+            timeout_strike_threshold,
             len(good_keys),
         )
         return
 
     _remove_key(good_keys, current_api_key)
+    timeout_strikes.pop(current_api_key, None)
     logger.warning(
         "Unknown error for provider '%s', %s keys remaining",
         provider,
@@ -1133,7 +1233,7 @@ async def _stream_response(
     state.grounding_metadata = grounding_metadata
 
 
-async def _run_generation_loop(
+async def _run_generation_loop(  # noqa: C901
     *,
     context: GenerationContext,
     state: GenerationState,
@@ -1160,6 +1260,16 @@ async def _run_generation_loop(
         state.thought_process = ""
         state.full_history_response = ""
         loop_state.attempt_count += 1
+
+        circuit_key = _circuit_breaker_key(loop_state.provider, loop_state.base_url)
+        if loop_state.fallback_chain and await GLOBAL_PROVIDER_CIRCUIT_BREAKER.is_open(
+            circuit_key,
+        ):
+            logger.warning(
+                "Circuit open for provider '%s'; skipping to fallback",
+                loop_state.provider,
+            )
+            loop_state.good_keys = []
 
         if not loop_state.good_keys:
             should_continue = await _handle_exhausted_keys(
@@ -1189,8 +1299,22 @@ async def _run_generation_loop(
                 stream_config=stream_config,
                 reply_helper=reply_helper,
             )
+            loop_state.timeout_strikes.pop(current_api_key, None)
+            await GLOBAL_PROVIDER_CIRCUIT_BREAKER.record_success(circuit_key)
             break
         except GENERATION_EXCEPTIONS as exc:
+            if _is_outage_like_provider_error(exc):
+                opened = await GLOBAL_PROVIDER_CIRCUIT_BREAKER.record_failure(
+                    circuit_key,
+                )
+                if opened and loop_state.fallback_chain:
+                    logger.warning(
+                        "Provider '%s' circuit opened; forcing fallback "
+                        "for this request",
+                        loop_state.provider,
+                    )
+                    loop_state.good_keys = []
+
             if (
                 not loop_state.developer_instruction_removed
                 and _is_developer_instruction_error(exc)
@@ -1229,6 +1353,7 @@ async def _run_generation_loop(
                 provider=loop_state.provider,
                 current_api_key=current_api_key,
                 good_keys=loop_state.good_keys,
+                timeout_strikes=loop_state.timeout_strikes,
             )
 
 

@@ -133,8 +133,8 @@ async def get_provider_slash_model(
     if override_provider_slash_model:
         return override_provider_slash_model
 
-    async with curr_model_lock:
-        return curr_model_ref[0]
+    _ = curr_model_lock
+    return curr_model_ref[0]
 
 
 def parse_provider_slash_model(

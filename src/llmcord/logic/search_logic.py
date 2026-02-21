@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -40,6 +40,7 @@ class ResearchCommandContext:
     tavily_api_keys: list[str]
     user_warnings: set[str]
     has_existing_search: bool
+    status_callback: Callable[[str], Awaitable[None]] | None = None
 
 
 @dataclass(slots=True)
@@ -57,6 +58,7 @@ class WebSearchContext:
     actual_provider: str | None
     has_existing_search: bool
     search_metadata: dict[str, object] | None
+    status_callback: Callable[[str], Awaitable[None]] | None = None
 
 
 @dataclass(slots=True)
@@ -74,6 +76,7 @@ class SearchResolutionContext:
     web_search_provider: str
     actual_model: str
     actual_provider: str | None = None
+    status_callback: Callable[[str], Awaitable[None]] | None = None
 
 
 def resolve_web_search_provider(
@@ -149,6 +152,7 @@ async def resolve_search_metadata(
                 tavily_api_keys=context.tavily_api_keys,
                 user_warnings=context.user_warnings,
                 has_existing_search=has_existing_search,
+                status_callback=context.status_callback,
             ),
         )
         or search_metadata
@@ -173,6 +177,7 @@ async def resolve_search_metadata(
                 actual_provider=context.actual_provider,
                 has_existing_search=has_existing_search,
                 search_metadata=search_metadata,
+                status_callback=context.status_callback,
             ),
         )
 
@@ -190,13 +195,14 @@ async def resolve_search_metadata(
                 actual_provider=context.actual_provider,
                 has_existing_search=has_existing_search,
                 search_metadata=search_metadata,
+                status_callback=context.status_callback,
             ),
         )
 
     return search_metadata
 
 
-async def run_research_command(  # noqa: C901
+async def run_research_command(  # noqa: C901, PLR0912
     context: ResearchCommandContext,
 ) -> dict[str, object] | None:
     """Execute research command if present."""
@@ -220,6 +226,9 @@ async def run_research_command(  # noqa: C901
                 context.research_query,
             )
             break
+
+    if context.status_callback is not None:
+        await context.status_callback("Performing deep web research...")
 
     research_results, search_metadata = await perform_tavily_research(
         query=context.research_query,
@@ -370,6 +379,12 @@ async def maybe_run_web_search(  # noqa: C901, PLR0912, PLR0915
                     exa_mcp_url=EXA_MCP_URL,
                     tool=search_decision.get("tool", "web_search_exa"),
                 )
+
+                if context.status_callback is not None:
+                    await context.status_callback(
+                        f"Performing {search_depth} web search...",
+                    )
+
                 search_results, search_metadata = await perform_web_search(
                     queries,
                     api_keys=context.tavily_api_keys,
