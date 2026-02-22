@@ -1,7 +1,17 @@
-"""Exa MCP search provider integration."""
+"""Exa MCP search provider integration.
+
+This module integrates with Exa via the Exa MCP HTTP endpoint.
+
+Exa can return errors in multiple shapes:
+- HTTP non-200 responses with a JSON body containing `requestId`, `error`, `tag`
+- Rate limit (429) responses with a simplified `{ "error": "..." }` body
+- JSON-RPC errors (`{"error": {"message": ..., "data": ...}}`)
+- Successful responses that still contain per-URL failures in a `statuses` field
+"""
 
 import json
 import logging
+from typing import cast
 
 import httpx
 
@@ -35,6 +45,231 @@ def _get_exa_client() -> httpx.AsyncClient:
             headers={},
         ),
     )
+
+
+def _truncate_error_text(text: str, *, limit: int = MAX_ERROR_CHARS) -> str:
+    if not text:
+        return ""
+    return text[:limit]
+
+
+def _safe_json_loads(text: str) -> object | None:
+    if not text:
+        return None
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _as_str(value: object) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
+def _extract_exa_api_error_shape(
+    data: dict[str, object],
+) -> tuple[str | None, str | None, str | None]:
+    request_id = _as_str(data.get("requestId"))
+    tag = _as_str(data.get("tag"))
+    if not (request_id or tag):
+        return None, None, None
+
+    message: str | None = None
+    raw_error = data.get("error")
+    if isinstance(raw_error, str):
+        message = raw_error
+    elif isinstance(raw_error, dict):
+        raw_error_dict = cast("dict[str, object]", raw_error)
+        message = _as_str(raw_error_dict.get("message")) or _as_str(
+            raw_error_dict.get("error"),
+        )
+
+    return message, tag, request_id
+
+
+def _extract_exa_simple_error_shape(
+    data: dict[str, object],
+) -> tuple[str | None, str | None, str | None]:
+    raw_error = data.get("error")
+    if isinstance(raw_error, str):
+        return _as_str(raw_error), None, None
+    return None, None, None
+
+
+def _extract_exa_jsonrpc_error_shape(
+    data: dict[str, object],
+) -> tuple[str | None, str | None, str | None]:
+    raw_error = data.get("error")
+    if not isinstance(raw_error, dict):
+        return None, None, None
+
+    error_dict = cast("dict[str, object]", raw_error)
+    nested = error_dict.get("data")
+    if nested is not None:
+        nested_info = _extract_exa_error_info(nested)
+        if any(nested_info):
+            return nested_info
+
+    return _as_str(error_dict.get("message")), None, None
+
+
+def _extract_exa_result_nested_shape(
+    data: dict[str, object],
+) -> tuple[str | None, str | None, str | None]:
+    if "result" not in data:
+        return None, None, None
+    return _extract_exa_error_info(data.get("result"))
+
+
+def _extract_exa_error_info(obj: object) -> tuple[str | None, str | None, str | None]:
+    """Return (message, tag, request_id) if an Exa-style error payload is found."""
+    if not isinstance(obj, dict):
+        return None, None, None
+
+    data = cast("dict[str, object]", obj)
+    extractors = (
+        _extract_exa_api_error_shape,
+        _extract_exa_simple_error_shape,
+        _extract_exa_jsonrpc_error_shape,
+        _extract_exa_result_nested_shape,
+    )
+    for extractor in extractors:
+        message, tag, request_id = extractor(data)
+        if message or tag or request_id:
+            return message, tag, request_id
+
+    return None, None, None
+
+
+def _exa_tag_hint(tag: str) -> str | None:
+    hints: dict[str, str] = {
+        "INVALID_API_KEY": "Check your Exa API key / authentication.",
+        "NO_MORE_CREDITS": "Exa credits are exhausted.",
+        "API_KEY_BUDGET_EXCEEDED": "Exa API key budget exceeded.",
+        "ACCESS_DENIED": "Access denied for this feature or plan.",
+        "FEATURE_DISABLED": "Feature disabled for this plan.",
+        "ROBOTS_FILTER_FAILED": "All URLs blocked by robots.txt.",
+        "PROHIBITED_CONTENT": "Blocked by content safety moderation.",
+        "CONTENT_FILTER_ERROR": "Blocked by content safety policy.",
+        "INVALID_REQUEST_BODY": "Request body validation failed.",
+        "INVALID_REQUEST": "Conflicting or invalid request parameters.",
+        "INVALID_URLS": "One or more URLs/IDs are invalid.",
+        "FETCH_DOCUMENT_ERROR": "A URL could not be processed.",
+        "UNABLE_TO_GENERATE_RESPONSE": "Unable to generate a response for this query.",
+        "DEFAULT_ERROR": "Exa server error; retry later.",
+        "INTERNAL_ERROR": "Exa internal error; retry later.",
+    }
+    return hints.get(tag)
+
+
+def _extract_exa_error_fields(
+    *,
+    body_text: str | None,
+    body_json: object | None,
+    fallback_message: str | None,
+) -> tuple[str, str | None, str | None]:
+    message, tag, request_id = _extract_exa_error_info(body_json)
+
+    if not message and body_text:
+        body_candidate = _safe_json_loads(body_text)
+        message, tag, request_id = _extract_exa_error_info(body_candidate)
+
+    if not message:
+        message = fallback_message or (body_text or "Unknown Exa error")
+
+    return _truncate_error_text(str(message)), tag, request_id
+
+
+def _compose_exa_error_message(
+    *,
+    http_status: int | None,
+    message: str,
+    tag: str | None,
+    request_id: str | None,
+) -> str:
+    prefix_parts: list[str] = []
+    if http_status is not None:
+        prefix_parts.append(f"HTTP {http_status}")
+    if tag is not None:
+        prefix_parts.append(tag)
+    prefix = " ".join(prefix_parts)
+    full_message = f"{prefix}: {message}" if prefix else message
+
+    if tag:
+        hint = _exa_tag_hint(tag)
+        if hint:
+            full_message = f"{full_message} ({hint})"
+
+    if request_id:
+        full_message = f"{full_message} (requestId={request_id})"
+
+    return full_message
+
+
+def _format_exa_error(
+    *,
+    query: str,
+    http_status: int | None,
+    body_text: str | None = None,
+    body_json: object | None = None,
+    fallback_message: str | None = None,
+) -> dict:
+    message, tag, request_id = _extract_exa_error_fields(
+        body_text=body_text,
+        body_json=body_json,
+        fallback_message=fallback_message,
+    )
+
+    full_message = _compose_exa_error_message(
+        http_status=http_status,
+        message=message,
+        tag=tag,
+        request_id=request_id,
+    )
+
+    error_dict: dict[str, object] = {"error": full_message, "query": query}
+    details: dict[str, object] = {}
+    if http_status is not None:
+        details["http_status"] = http_status
+    if tag is not None:
+        details["tag"] = tag
+    if request_id is not None:
+        details["request_id"] = request_id
+    if details:
+        error_dict["exa_error"] = details
+    return error_dict
+
+
+def _collect_exa_status_errors(statuses: object) -> list[dict[str, object]]:
+    if not isinstance(statuses, list):
+        return []
+
+    errors: list[dict[str, object]] = []
+    for status_entry in statuses:
+        if not isinstance(status_entry, dict):
+            continue
+        status_dict = cast("dict[str, object]", status_entry)
+        if status_dict.get("status") != "error":
+            continue
+        error_obj = status_dict.get("error")
+        if not isinstance(error_obj, dict):
+            continue
+        error_dict = cast("dict[str, object]", error_obj)
+        tag = _as_str(error_dict.get("tag"))
+        http_status_code = error_dict.get("httpStatusCode")
+        url_id = _as_str(status_dict.get("id"))
+        errors.append(
+            {
+                "id": url_id,
+                "tag": tag,
+                "httpStatusCode": http_status_code,
+            },
+        )
+    return errors
 
 
 def _normalize_exa_block(block: str, index: int) -> str | None:
@@ -286,17 +521,20 @@ async def _parse_exa_http_response(
     if response.status_code != HTTP_OK:
         error_bytes = await response.aread()
         error_text = error_bytes.decode("utf-8", errors="replace")
-        error_text = error_text[:MAX_ERROR_CHARS]
+        error_text = _truncate_error_text(error_text)
+        error_json = _safe_json_loads(error_text)
         logger.error(
             "Exa MCP HTTP error for query '%s': %s - %s",
             query,
             response.status_code,
             error_text,
         )
-        return {
-            "error": f"HTTP {response.status_code}: {error_text[:200]}",
-            "query": query,
-        }
+        return _format_exa_error(
+            query=query,
+            http_status=response.status_code,
+            body_text=error_text,
+            body_json=error_json,
+        )
 
     content_type = response.headers.get("content-type", "")
     if "text/event-stream" in content_type:
@@ -332,16 +570,50 @@ def _extract_text_content(mcp_result: dict, query: str) -> str:
 def _handle_json_data(search_data: list | dict, query: str) -> dict:
     """Handle parsed JSON search data."""
     if isinstance(search_data, list):
-        results = search_data
+        results: list = search_data
+        statuses: object | None = None
+        error_payload: object | None = None
     else:
+        # Exa can return: {"results": [...], "statuses": [...]} or
+        # error payloads with: {"requestId": ..., "error": ..., "tag": ...}
+        error_payload = search_data if "error" in search_data else None
         results = search_data.get("results", [])
+        statuses = search_data.get("statuses")
+
+    if error_payload is not None and (not results):
+        return _format_exa_error(
+            query=query,
+            http_status=None,
+            body_json=error_payload,
+            body_text=None,
+        )
+
+    status_errors = _collect_exa_status_errors(statuses)
+    if status_errors and not results:
+        # If every URL failed content fetching, surface a provider error.
+        tag_set: set[str] = set()
+        for err in status_errors:
+            tag = err.get("tag")
+            if isinstance(tag, str) and tag:
+                tag_set.add(tag)
+
+        tags = sorted(tag_set)
+        tag_summary = ", ".join(tags) if tags else "unknown"
+        return {
+            "error": f"Exa content fetch failed: {tag_summary}",
+            "query": query,
+            "exa_status_errors": status_errors,
+        }
 
     logger.info(
         "Exa MCP response for query '%s': %s results",
         query,
         len(results),
     )
-    return {"results": results, "query": query}
+    response_dict: dict[str, object] = {"results": results, "query": query}
+    if status_errors:
+        response_dict["exa_status_errors"] = status_errors
+    return response_dict
 
 
 def _handle_text_format(text_content: str, query: str) -> dict:
@@ -377,13 +649,24 @@ def _extract_exa_results(result: dict, query: str) -> dict:
     """Extract Exa results from the MCP JSON-RPC response."""
     if "error" in result:
         error = result.get("error")
-        error_msg = (
-            error.get("message", "Unknown MCP error")
-            if isinstance(error, dict)
-            else str(error)
-        )
+        error_msg = _as_str(error) if isinstance(error, str) else None
+        if isinstance(error, dict):
+            error_msg = _as_str(error.get("message")) or _as_str(error.get("error"))
+            formatted = _format_exa_error(
+                query=query,
+                http_status=None,
+                body_json=error,
+                fallback_message=error_msg or "Unknown MCP error",
+            )
+            logger.error(
+                "Exa MCP error for query '%s': %s",
+                query,
+                formatted.get("error"),
+            )
+            return formatted
+
         logger.error("Exa MCP error for query '%s': %s", query, error_msg)
-        return {"error": error_msg, "query": query}
+        return {"error": error_msg or "Unknown MCP error", "query": query}
 
     mcp_result = result.get("result", {})
     if mcp_result.get("isError"):
@@ -393,8 +676,18 @@ def _extract_exa_results(result: dict, query: str) -> dict:
             first_content = content[0]
             if isinstance(first_content, dict):
                 error_msg = first_content.get("text", error_msg)
+
+        # The tool error text may itself be an Exa API error payload.
+        error_json = _safe_json_loads(str(error_msg))
+        formatted = _format_exa_error(
+            query=query,
+            http_status=None,
+            body_text=str(error_msg),
+            body_json=error_json,
+            fallback_message=str(error_msg),
+        )
         logger.error("Exa MCP tool error for query '%s': %s", query, error_msg)
-        return {"error": error_msg, "query": query}
+        return formatted
 
     text_content = _extract_text_content(mcp_result, query)
     if not text_content:
@@ -444,7 +737,7 @@ async def _do_exa_request(
                         attempt + 1,
                         retries,
                     )
-                    await wait_before_retry(attempt)
+                    await wait_before_retry(attempt, response=response)
                     continue
 
                 result = await _parse_exa_http_response(response, query)
