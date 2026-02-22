@@ -55,12 +55,15 @@ from llmcord.services.database import get_db
 from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
+from llmcord.services.llm.providers.gemini_errors import classify_gemini_error
 
 logger = logging.getLogger(__name__)
 IMAGE_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
 _THINKING_OPEN_TAG = "<thinking>"
 _THINKING_CLOSE_TAG = "</thinking>"
 SERVER_ERROR_STATUS_MIN = 500
+
+_GEMINI_PROVIDER_IDS = {"gemini", "google-gemini-cli", "google-antigravity"}
 
 
 @dataclass(slots=True)
@@ -716,6 +719,55 @@ def _is_image_input_error(error: Exception) -> bool:
     return any(pattern in error_str for pattern in image_error_patterns)
 
 
+def _format_gemini_empty_finish_reason_message(
+    *,
+    finish_reason: object | None,
+) -> str | None:
+    if finish_reason is None:
+        return None
+
+    reason = str(finish_reason).strip()
+    if not reason:
+        return None
+
+    lowered = reason.lower()
+    if "recitation" in lowered:
+        return (
+            "⚠️ Gemini stopped without returning content due to RECITATION. "
+            "Try rephrasing, adding unique context, or increasing temperature."
+        )
+    if "safety" in lowered or "blocked" in lowered or "block" in lowered:
+        return (
+            "⚠️ Gemini blocked the response due to safety settings. "
+            "Try rephrasing the request."
+        )
+    if lowered == "other" or "blockedreason.other" in lowered:
+        return (
+            "⚠️ Gemini stopped without returning content (reason: OTHER). "
+            "Try rephrasing the request."
+        )
+    return f"⚠️ Gemini stopped without returning content (finish reason: {reason})."
+
+
+def _maybe_handle_gemini_empty_response(
+    *,
+    provider: str,
+    finish_reason: object | None,
+    state: GenerationState,
+) -> bool:
+    if provider not in _GEMINI_PROVIDER_IDS:
+        return False
+
+    finish_reason_msg = _format_gemini_empty_finish_reason_message(
+        finish_reason=finish_reason,
+    )
+    if not finish_reason_msg:
+        return False
+
+    state.response_contents = [finish_reason_msg]
+    return True
+
+
 def _remove_system_messages(messages: list[dict[str, object]]) -> bool:
     original_len = len(messages)
     messages[:] = [
@@ -848,6 +900,25 @@ def _handle_generation_exception(  # noqa: PLR0913
 
     error_str = str(error).lower()
     is_developer_instruction_error = _is_developer_instruction_error(error)
+
+    if provider in _GEMINI_PROVIDER_IDS:
+        classification = classify_gemini_error(error)
+        if classification is not None:
+            last_error_msg = classification.message
+            logger.warning(
+                "Gemini error classified | provider=%s status=%s http=%s",
+                provider,
+                classification.api_status,
+                classification.http_status,
+            )
+            if classification.action == "remove_key":
+                _remove_key(good_keys, current_api_key)
+                timeout_strikes.pop(current_api_key, None)
+                return good_keys, last_error_msg
+            if classification.action == "skip_provider":
+                good_keys.clear()
+                timeout_strikes.pop(current_api_key, None)
+                return good_keys, last_error_msg
     key_error_patterns = [
         "unauthorized",
         "invalid_api_key",
@@ -862,6 +933,7 @@ def _handle_generation_exception(  # noqa: PLR0913
         "billing",
         "insufficient_quota",
         "expired",
+        "reported as leaked",
     ]
     is_key_error = any(pattern in error_str for pattern in key_error_patterns)
 
@@ -1135,7 +1207,11 @@ async def _stream_response(
         history_parts.append("\n</thinking>\n")
     state.full_history_response = "".join(history_parts)
 
-    if not response_contents:
+    if not response_contents and not _maybe_handle_gemini_empty_response(
+        provider=stream_config.provider,
+        finish_reason=loop_state.finish_reason,
+        state=state,
+    ):
         _raise_empty_response()
 
     state.grounding_metadata = grounding_metadata

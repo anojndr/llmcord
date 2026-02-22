@@ -22,6 +22,7 @@ from llmcord.logic.fallbacks import (
 from llmcord.logic.generation_types import FallbackState
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
+from llmcord.services.llm.providers.gemini_errors import classify_gemini_error
 from llmcord.services.search.config import (
     MIN_DECIDER_MESSAGES,
     SEARCH_DECIDER_SYSTEM_PROMPT,
@@ -221,6 +222,27 @@ async def _run_decider_once(
                     "model": run_config.model,
                 },
             )
+
+            if run_config.provider in {
+                "gemini",
+                "google-gemini-cli",
+                "google-antigravity",
+            }:
+                classification = classify_gemini_error(exc)
+                if (
+                    classification is not None
+                    and classification.action == "skip_provider"
+                ):
+                    logger.warning(
+                        (
+                            "Gemini decider error is provider/request-level; "
+                            "skipping remaining keys | status=%s http=%s"
+                        ),
+                        classification.api_status,
+                        classification.http_status,
+                    )
+                    break
+
             continue
 
     return None, exhausted_keys
