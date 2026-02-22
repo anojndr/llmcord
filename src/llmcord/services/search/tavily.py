@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import cast
 
 import httpx
@@ -16,9 +17,269 @@ from llmcord.core.config import (
 )
 from llmcord.core.error_handling import log_exception
 from llmcord.services.http import request_with_retries
-from llmcord.services.search.config import MAX_ERROR_CHARS, MAX_LOG_CHARS
+from llmcord.services.search.config import HTTP_OK, MAX_ERROR_CHARS, MAX_LOG_CHARS
 
 logger = logging.getLogger(__name__)
+
+
+def _truncate_error_text(text: str, *, limit: int = MAX_ERROR_CHARS) -> str:
+    if not text:
+        return ""
+    return text[:limit]
+
+
+def _safe_json_loads(text: str) -> object | None:
+    if not text:
+        return None
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
+def _as_str(value: object) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
+def _extract_tavily_request_id(obj: object) -> str | None:
+    if not isinstance(obj, dict):
+        return None
+    data = cast("dict[str, object]", obj)
+    return _as_str(data.get("request_id")) or _as_str(data.get("requestId"))
+
+
+def _extract_tavily_error_message(obj: object) -> str | None:
+    """Extract a human-readable error message from a Tavily error payload.
+
+    Tavily's OpenAPI error schema is typically:
+    {"detail": {"error": "..."}}
+    But we also defensively handle other shapes.
+    """
+    if not isinstance(obj, dict):
+        return None
+
+    data = cast("dict[str, object]", obj)
+
+    raw_detail = data.get("detail")
+    if isinstance(raw_detail, dict):
+        detail = cast("dict[str, object]", raw_detail)
+        message = _as_str(detail.get("error")) or _as_str(detail.get("message"))
+        if message:
+            return message
+
+    raw_error = data.get("error")
+    if isinstance(raw_error, str):
+        return _as_str(raw_error)
+    if isinstance(raw_error, dict):
+        error_dict = cast("dict[str, object]", raw_error)
+        message = _as_str(error_dict.get("error")) or _as_str(error_dict.get("message"))
+        if message:
+            return message
+
+    return _as_str(data.get("message"))
+
+
+def _tavily_error_kind_from_http_status(http_status: int | None) -> str | None:
+    if http_status is None:
+        return None
+
+    kinds: dict[int, str] = {
+        400: "bad_request",
+        401: "unauthorized",
+        403: "forbidden",
+        404: "not_found",
+        429: "rate_limited",
+        432: "plan_limit_exceeded",
+        433: "paygo_limit_exceeded",
+        500: "server_error",
+    }
+    return kinds.get(http_status, "http_error")
+
+
+def _tavily_kind_hint(kind: str) -> str | None:
+    hints: dict[str, str] = {
+        "unauthorized": "Check your Tavily API key (missing/invalid).",
+        "rate_limited": "Rate limit exceeded; retry later or rotate keys.",
+        "plan_limit_exceeded": (
+            "Plan/key usage limit exceeded; upgrade plan or rotate keys."
+        ),
+        "paygo_limit_exceeded": (
+            "Pay-as-you-go limit exceeded; raise PayGo limit in dashboard."
+        ),
+        "server_error": "Tavily server error; retry later.",
+        "timeout": "Tavily request timed out; retry later.",
+        "connection_error": "Network/connectivity issue; retry later.",
+        "unexpected_response": (
+            "Unexpected response from Tavily; check payload/response format."
+        ),
+    }
+    return hints.get(kind)
+
+
+def _compose_tavily_error_message(
+    *,
+    http_status: int | None,
+    kind: str | None,
+    message: str,
+    request_id: str | None,
+) -> str:
+    prefix_parts: list[str] = []
+    if http_status is not None:
+        prefix_parts.append(f"HTTP {http_status}")
+    if kind is not None:
+        prefix_parts.append(kind)
+    prefix = " ".join(prefix_parts)
+    full_message = f"{prefix}: {message}" if prefix else message
+
+    if kind:
+        hint = _tavily_kind_hint(kind)
+        if hint:
+            full_message = f"{full_message} ({hint})"
+
+    if request_id:
+        full_message = f"{full_message} (request_id={request_id})"
+    return full_message
+
+
+@dataclass(frozen=True, slots=True)
+class _TavilyParsedResponse:
+    body_text: str
+    body_json: object | None
+    request_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TavilyErrorContext:
+    query: str | None
+    http_status: int | None
+    kind_override: str | None = None
+    body_text: str | None = None
+    body_json: object | None = None
+    fallback_message: str | None = None
+    request_id: str | None = None
+    retry_after: str | None = None
+
+
+async def _read_tavily_response(response: httpx.Response) -> _TavilyParsedResponse:
+    body_bytes = await response.aread()
+    body_text = body_bytes.decode("utf-8", errors="replace")
+    body_json = _safe_json_loads(body_text)
+    request_id = _extract_tavily_request_id(body_json)
+    return _TavilyParsedResponse(
+        body_text=body_text,
+        body_json=body_json,
+        request_id=request_id,
+    )
+
+
+def _format_tavily_error(context: _TavilyErrorContext) -> dict:
+    message = _extract_tavily_error_message(context.body_json)
+    if not message and context.body_text:
+        message = _extract_tavily_error_message(_safe_json_loads(context.body_text))
+    if not message:
+        message = context.fallback_message or (
+            context.body_text or "Unknown Tavily error"
+        )
+
+    message = _truncate_error_text(str(message))
+    kind = context.kind_override or _tavily_error_kind_from_http_status(
+        context.http_status,
+    )
+    full_message = _compose_tavily_error_message(
+        http_status=context.http_status,
+        kind=kind,
+        message=message,
+        request_id=context.request_id,
+    )
+
+    error_dict: dict[str, object] = {"error": full_message}
+    if context.query is not None:
+        error_dict["query"] = context.query
+    if context.http_status is not None:
+        error_dict["status_code"] = context.http_status
+
+    details: dict[str, object] = {}
+    if context.http_status is not None:
+        details["http_status"] = context.http_status
+    if kind is not None:
+        details["kind"] = kind
+    if context.request_id is not None:
+        details["request_id"] = context.request_id
+    if context.retry_after is not None:
+        details["retry_after"] = context.retry_after
+    if details:
+        error_dict["tavily_error"] = details
+    return error_dict
+
+
+async def _parse_tavily_json_response(
+    *,
+    response: httpx.Response,
+    query: str | None,
+    ok_statuses: set[int],
+) -> dict:
+    parsed = await _read_tavily_response(response)
+    retry_after = response.headers.get("retry-after")
+
+    body_preview = _truncate_error_text(parsed.body_text, limit=MAX_LOG_CHARS)
+    logger.debug("Tavily API raw response: %s", body_preview)
+
+    if response.status_code not in ok_statuses:
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=response.status_code,
+                body_text=parsed.body_text,
+                body_json=parsed.body_json,
+                request_id=parsed.request_id,
+                retry_after=retry_after,
+            ),
+        )
+
+    if parsed.body_json is None:
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=response.status_code,
+                kind_override="unexpected_response",
+                body_text=parsed.body_text,
+                fallback_message="Invalid JSON in Tavily response",
+                request_id=parsed.request_id,
+            ),
+        )
+
+    if not isinstance(parsed.body_json, dict):
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=response.status_code,
+                kind_override="unexpected_response",
+                body_text=parsed.body_text,
+                body_json=parsed.body_json,
+                fallback_message="Unexpected Tavily response shape",
+                request_id=parsed.request_id,
+            ),
+        )
+
+    # Defensive: some services return 200 with an error payload.
+    maybe_message = _extract_tavily_error_message(parsed.body_json)
+    if maybe_message:
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=response.status_code,
+                kind_override="unexpected_response",
+                body_text=parsed.body_text,
+                body_json=parsed.body_json,
+                request_id=parsed.request_id,
+            ),
+        )
+
+    return cast("dict", parsed.body_json)
 
 
 # Shared httpx client for Tavily API calls - uses DRY factory pattern
@@ -106,16 +367,14 @@ async def tavily_search(
         )
         logger.info("Tavily API response status: %s", response.status_code)
 
-        # Log raw response for debugging (first 1000 chars)
-        raw_text = (
-            response.text[:MAX_LOG_CHARS]
-            if len(response.text) > MAX_LOG_CHARS
-            else response.text
+        result = await _parse_tavily_json_response(
+            response=response,
+            query=query,
+            ok_statuses={HTTP_OK},
         )
-        logger.debug("Tavily API raw response: %s", raw_text)
+        if "error" in result:
+            return result
 
-        response.raise_for_status()
-        result = response.json()
         logger.info(
             "Tavily API response for query '%s': %s results",
             query,
@@ -128,22 +387,6 @@ async def tavily_search(
                 result,
             )
             return {"results": [], "query": query}
-    except httpx.HTTPStatusError as exc:
-        log_exception(
-            logger=logger,
-            message="Tavily HTTP error",
-            error=exc,
-            context={
-                "query": query,
-                "status_code": exc.response.status_code,
-                "response_preview": exc.response.text[:MAX_ERROR_CHARS],
-            },
-        )
-        error_text = exc.response.text[:200]
-        return {
-            "error": f"HTTP {exc.response.status_code}: {error_text}",
-            "query": query,
-        }
     except httpx.TimeoutException as exc:
         log_exception(
             logger=logger,
@@ -151,7 +394,14 @@ async def tavily_search(
             error=exc,
             context={"query": query},
         )
-        return {"error": f"Timeout: {exc}", "query": query}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=None,
+                kind_override="timeout",
+                fallback_message=f"Timeout: {exc}",
+            ),
+        )
     except httpx.RequestError as exc:
         log_exception(
             logger=logger,
@@ -159,7 +409,14 @@ async def tavily_search(
             error=exc,
             context={"query": query},
         )
-        return {"error": f"Connection error: {exc}", "query": query}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=None,
+                kind_override="connection_error",
+                fallback_message=f"Connection error: {exc}",
+            ),
+        )
     except (
         httpx.HTTPError,
         ImportError,
@@ -174,7 +431,14 @@ async def tavily_search(
             error=exc,
             context={"query": query},
         )
-        return {"error": str(exc), "query": query}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=query,
+                http_status=None,
+                kind_override="unexpected_response",
+                fallback_message=str(exc),
+            ),
+        )
     else:
         return result
 
@@ -222,7 +486,14 @@ async def tavily_research_create(
             error=exc,
             context={"model": model},
         )
-        return {"error": f"Timeout: {exc}"}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=None,
+                http_status=None,
+                kind_override="timeout",
+                fallback_message=f"Timeout: {exc}",
+            ),
+        )
     except httpx.RequestError as exc:
         log_exception(
             logger=logger,
@@ -230,7 +501,14 @@ async def tavily_research_create(
             error=exc,
             context={"model": model},
         )
-        return {"error": f"Connection error: {exc}"}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=None,
+                http_status=None,
+                kind_override="connection_error",
+                fallback_message=f"Connection error: {exc}",
+            ),
+        )
     except (
         httpx.HTTPError,
         ImportError,
@@ -245,22 +523,20 @@ async def tavily_research_create(
             error=exc,
             context={"model": model},
         )
-        return {"error": str(exc)}
-    else:
-        if response.status_code in (200, 201):
-            return response.json()
-
-        error_detail = response.text[:MAX_ERROR_CHARS]
-        logger.warning(
-            "Tavily research create error: %s - %s",
-            response.status_code,
-            error_detail,
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=None,
+                http_status=None,
+                kind_override="unexpected_response",
+                fallback_message=str(exc),
+            ),
         )
-        return {
-            "error": f"HTTP {response.status_code}",
-            "status_code": response.status_code,
-            "detail": error_detail,
-        }
+    else:
+        return await _parse_tavily_json_response(
+            response=response,
+            query=None,
+            ok_statuses={HTTP_OK, 201},
+        )
 
 
 async def tavily_research_get(
@@ -278,7 +554,7 @@ async def tavily_research_get(
 
     """
     try:
-        client = _get_tavily_client()
+        client = _get_client_from_package()
         response = await request_with_retries(
             lambda: client.get(
                 f"https://api.tavily.com/research/{request_id}",
@@ -297,7 +573,14 @@ async def tavily_research_get(
             error=exc,
             context={"request_id": request_id},
         )
-        return {"error": f"Timeout: {exc}"}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=None,
+                http_status=None,
+                kind_override="timeout",
+                fallback_message=f"Timeout: {exc}",
+            ),
+        )
     except httpx.RequestError as exc:
         log_exception(
             logger=logger,
@@ -305,7 +588,14 @@ async def tavily_research_get(
             error=exc,
             context={"request_id": request_id},
         )
-        return {"error": f"Connection error: {exc}"}
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=None,
+                http_status=None,
+                kind_override="connection_error",
+                fallback_message=f"Connection error: {exc}",
+            ),
+        )
     except (
         httpx.HTTPError,
         ImportError,
@@ -320,22 +610,20 @@ async def tavily_research_get(
             error=exc,
             context={"request_id": request_id},
         )
-        return {"error": str(exc)}
-    else:
-        if response.status_code in (200, 202):
-            return response.json()
-
-        error_detail = response.text[:MAX_ERROR_CHARS]
-        logger.warning(
-            "Tavily research get error: %s - %s",
-            response.status_code,
-            error_detail,
+        return _format_tavily_error(
+            _TavilyErrorContext(
+                query=None,
+                http_status=None,
+                kind_override="unexpected_response",
+                fallback_message=str(exc),
+            ),
         )
-        return {
-            "error": f"HTTP {response.status_code}",
-            "status_code": response.status_code,
-            "detail": error_detail,
-        }
+    else:
+        return await _parse_tavily_json_response(
+            response=response,
+            query=None,
+            ok_statuses={HTTP_OK, 202},
+        )
 
 
 def _format_research_content(content: object) -> str:

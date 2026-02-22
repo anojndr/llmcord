@@ -39,6 +39,14 @@ async def _search_single_query_tavily(
         if "error" not in result:
             return result
 
+        # Some Tavily errors are not solved by trying another key
+        # (e.g., invalid request body), so don't burn all keys.
+        tavily_error = result.get("tavily_error")
+        if isinstance(tavily_error, dict):
+            kind = tavily_error.get("kind")
+            if kind in {"bad_request", "unexpected_response"}:
+                return result
+
     logger.error("All Tavily API keys failed for query '%s'", query)
     return {"error": "All API keys exhausted", "query": query}
 
