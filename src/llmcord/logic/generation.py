@@ -56,6 +56,10 @@ from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 from llmcord.services.llm.providers.gemini_errors import classify_gemini_error
+from llmcord.services.llm.providers.openrouter_errors import (
+    classify_openrouter_error,
+    raise_for_openrouter_payload_error,
+)
 
 logger = logging.getLogger(__name__)
 IMAGE_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
@@ -79,6 +83,15 @@ class _StreamProcessingContext:
     loop_state: StreamLoopState
     history_parts: list[str]
     max_message_length: int
+
+
+StreamYieldChunk = tuple[
+    str,
+    object | None,
+    object | None,
+    list[GeneratedImage],
+    bool,
+]
 
 
 def _strip_image_data_urls(value: str) -> str:
@@ -402,9 +415,7 @@ async def _get_stream(
     *,
     context: GenerationContext,
     stream_config: StreamConfig,
-) -> AsyncIterator[
-    tuple[str, object | None, object | None, list[GeneratedImage], bool]
-]:
+) -> AsyncIterator[StreamYieldChunk]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
     if stream_config.provider in {"google-gemini-cli", "google-antigravity"}:
         stream = stream_google_gemini_cli(
@@ -432,6 +443,19 @@ async def _get_stream(
             )
         return
 
+    async for chunk in _get_litellm_stream(
+        context=context,
+        stream_config=stream_config,
+    ):
+        yield chunk
+
+
+async def _get_litellm_stream(
+    *,
+    context: GenerationContext,
+    stream_config: StreamConfig,
+) -> AsyncIterator[StreamYieldChunk]:
+    """Yield chunks from the LiteLLM streaming response (non-Gemini CLI)."""
     enable_grounding = not re.search(r"https?://", context.new_msg.content)
 
     if not is_gemini_model(stream_config.actual_model):
@@ -471,6 +495,9 @@ async def _get_stream(
     stream = await litellm.acompletion(**litellm_kwargs)
 
     async for chunk in stream:
+        if stream_config.provider == "openrouter":
+            raise_for_openrouter_payload_error(payload_obj=chunk)
+
         choices = getattr(chunk, "choices", None)
         if not choices:
             continue
@@ -478,6 +505,7 @@ async def _get_stream(
         choice = choices[0]
         delta_content = getattr(choice.delta, "content", "") or ""
         chunk_finish_reason = getattr(choice, "finish_reason", None)
+
         grounding_metadata = _extract_grounding_metadata(chunk, choice)
         image_payloads = extract_gemini_images_from_chunk(
             chunk,
@@ -485,21 +513,11 @@ async def _get_stream(
             delta_content,
         )
 
-        if chunk_finish_reason and is_gemini_model(stream_config.actual_model):
-            chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
-            logger.debug("Gemini chunk finish - attributes: %s", chunk_attrs)
-            chunk_model_extra = getattr(chunk, "model_extra", None)
-            if isinstance(chunk_model_extra, Mapping) and chunk_model_extra:
-                logger.info(
-                    "Gemini chunk model_extra keys: %s",
-                    list(chunk_model_extra.keys()),
-                )
-            hidden_params = getattr(chunk, "_hidden_params", None)
-            if isinstance(hidden_params, Mapping):
-                logger.info(
-                    "Gemini chunk _hidden_params keys: %s",
-                    list(hidden_params.keys()),
-                )
+        _debug_log_gemini_chunk_finish(
+            chunk=chunk,
+            finish_reason=chunk_finish_reason,
+            actual_model=stream_config.actual_model,
+        )
 
         yield (
             delta_content,
@@ -507,6 +525,31 @@ async def _get_stream(
             grounding_metadata,
             image_payloads,
             False,
+        )
+
+
+def _debug_log_gemini_chunk_finish(
+    *,
+    chunk: object,
+    finish_reason: object | None,
+    actual_model: str,
+) -> None:
+    if not finish_reason or not is_gemini_model(actual_model):
+        return
+
+    chunk_attrs = [attr for attr in dir(chunk) if not attr.startswith("_")]
+    logger.debug("Gemini chunk finish - attributes: %s", chunk_attrs)
+    chunk_model_extra = getattr(chunk, "model_extra", None)
+    if isinstance(chunk_model_extra, Mapping) and chunk_model_extra:
+        logger.info(
+            "Gemini chunk model_extra keys: %s",
+            list(chunk_model_extra.keys()),
+        )
+    hidden_params = getattr(chunk, "_hidden_params", None)
+    if isinstance(hidden_params, Mapping):
+        logger.info(
+            "Gemini chunk _hidden_params keys: %s",
+            list(hidden_params.keys()),
         )
 
 
@@ -901,24 +944,15 @@ def _handle_generation_exception(  # noqa: PLR0913
     error_str = str(error).lower()
     is_developer_instruction_error = _is_developer_instruction_error(error)
 
-    if provider in _GEMINI_PROVIDER_IDS:
-        classification = classify_gemini_error(error)
-        if classification is not None:
-            last_error_msg = classification.message
-            logger.warning(
-                "Gemini error classified | provider=%s status=%s http=%s",
-                provider,
-                classification.api_status,
-                classification.http_status,
-            )
-            if classification.action == "remove_key":
-                _remove_key(good_keys, current_api_key)
-                timeout_strikes.pop(current_api_key, None)
-                return good_keys, last_error_msg
-            if classification.action == "skip_provider":
-                good_keys.clear()
-                timeout_strikes.pop(current_api_key, None)
-                return good_keys, last_error_msg
+    provider_result = _maybe_handle_provider_error_classification(
+        error=error,
+        provider=provider,
+        current_api_key=current_api_key,
+        good_keys=good_keys,
+        timeout_strikes=timeout_strikes,
+    )
+    if provider_result is not None:
+        return provider_result
     key_error_patterns = [
         "unauthorized",
         "invalid_api_key",
@@ -960,6 +994,53 @@ def _handle_generation_exception(  # noqa: PLR0913
     )
 
     return good_keys, last_error_msg
+
+
+def _maybe_handle_provider_error_classification(
+    *,
+    error: Exception,
+    provider: str,
+    current_api_key: str,
+    good_keys: list[str],
+    timeout_strikes: dict[str, int],
+) -> tuple[list[str], str] | None:
+    if provider in _GEMINI_PROVIDER_IDS:
+        classification = classify_gemini_error(error)
+        if classification is None:
+            return None
+
+        logger.warning(
+            "Gemini error classified | provider=%s status=%s http=%s",
+            provider,
+            classification.api_status,
+            classification.http_status,
+        )
+        if classification.action == "remove_key":
+            _remove_key(good_keys, current_api_key)
+        else:
+            good_keys.clear()
+        timeout_strikes.pop(current_api_key, None)
+        return good_keys, classification.message
+
+    if provider == "openrouter":
+        classification = classify_openrouter_error(error)
+        if classification is None:
+            return None
+
+        logger.warning(
+            "OpenRouter error classified | status=%s code=%s action=%s",
+            classification.http_status,
+            classification.code,
+            classification.action,
+        )
+        if classification.action == "remove_key":
+            _remove_key(good_keys, current_api_key)
+        else:
+            good_keys.clear()
+        timeout_strikes.pop(current_api_key, None)
+        return good_keys, classification.message
+
+    return None
 
 
 def _remove_key(good_keys: list[str], current_api_key: str) -> None:

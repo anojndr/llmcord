@@ -23,6 +23,10 @@ from llmcord.logic.generation_types import FallbackState
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 from llmcord.services.llm.providers.gemini_errors import classify_gemini_error
+from llmcord.services.llm.providers.openrouter_errors import (
+    classify_openrouter_error,
+    raise_for_openrouter_payload_error,
+)
 from llmcord.services.search.config import (
     MIN_DECIDER_MESSAGES,
     SEARCH_DECIDER_SYSTEM_PROMPT,
@@ -104,6 +108,8 @@ async def _get_decider_response_text(
         ),
     )
     response = await litellm.acompletion(**litellm_kwargs)
+    if run_config.provider == "openrouter":
+        raise_for_openrouter_payload_error(payload_obj=response)
     return (response.choices[0].message.content or "").strip()
 
 
@@ -222,6 +228,22 @@ async def _run_decider_once(
                     "model": run_config.model,
                 },
             )
+
+            if run_config.provider == "openrouter":
+                classification = classify_openrouter_error(exc)
+                if (
+                    classification is not None
+                    and classification.action == "skip_provider"
+                ):
+                    logger.warning(
+                        (
+                            "OpenRouter decider error is provider/request-level; "
+                            "skipping remaining keys | status=%s code=%s"
+                        ),
+                        classification.http_status,
+                        classification.code,
+                    )
+                    break
 
             if run_config.provider in {
                 "gemini",
