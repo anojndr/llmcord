@@ -42,8 +42,11 @@ async def health_check(_request: web.Request) -> web.Response:
     return web.Response(text="I'm alive")
 
 
-async def start_server() -> None:
-    """Start a small HTTP health-check server."""
+async def start_server() -> web.AppRunner:
+    """Start a small HTTP health-check server.
+
+    Returns the underlying aiohttp runner so callers can clean it up on shutdown.
+    """
     config = get_config()
     app = web.Application(middlewares=[_error_middleware])
     app.add_routes([web.get("/", health_check)])
@@ -53,3 +56,4 @@ async def start_server() -> None:
     host = os.environ.get("HOST", config.get("host"))
     site = web.TCPSite(runner, host, port)
     await site.start()
+    return runner
