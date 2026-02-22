@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace, TracebackType
 from typing import cast
@@ -9,8 +8,6 @@ import pytest
 
 from llmcord.logic.generation import (
     _get_stream,
-    _iter_stream_with_first_chunk,
-    _litellm_chunk_has_token,
     _stream_response,
 )
 from llmcord.logic.generation_types import (
@@ -161,68 +158,6 @@ async def test_inline_thinking_tags_hidden_when_provider_flag_missing(
 
 
 @pytest.mark.asyncio
-async def test_google_gemini_cli_stream_uses_first_token_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured_timeout: int | None = None
-    configured_timeout = 47
-
-    async def _fake_google_stream(
-        **_kwargs: object,
-    ) -> AsyncIterator[tuple[str, object | None, bool]]:
-        yield "hello", "stop", False
-
-    async def _fake_iter_stream_with_first_chunk(
-        stream_iter: AsyncIterator[tuple[str, object | None, bool]],
-        *,
-        timeout_seconds: int,
-    ) -> AsyncIterator[tuple[str, object | None, bool]]:
-        nonlocal captured_timeout
-        captured_timeout = timeout_seconds
-        async for chunk in stream_iter:
-            yield chunk
-
-    monkeypatch.setattr(
-        "llmcord.logic.generation.stream_google_gemini_cli",
-        _fake_google_stream,
-    )
-    monkeypatch.setattr(
-        "llmcord.logic.generation._iter_stream_with_first_chunk",
-        _fake_iter_stream_with_first_chunk,
-    )
-    monkeypatch.setattr(
-        "llmcord.logic.generation.get_first_token_timeout_seconds",
-        lambda: configured_timeout,
-    )
-
-    context = cast(
-        "GenerationContext",
-        SimpleNamespace(
-            messages=[{"role": "user", "content": "hello"}],
-            new_msg=SimpleNamespace(content="hello"),
-        ),
-    )
-
-    stream = _get_stream(
-        context=context,
-        stream_config=StreamConfig(
-            provider="google-gemini-cli",
-            actual_model="gemini-3-flash-preview",
-            api_key="dummy-key",
-            base_url=None,
-            extra_headers=None,
-            model_parameters=None,
-        ),
-    )
-    chunk = await anext(stream)
-
-    assert chunk[0] == "hello"
-    assert chunk[1] == "stop"
-    assert chunk[4] is False
-    assert captured_timeout == configured_timeout
-
-
-@pytest.mark.asyncio
 async def test_google_antigravity_stream_uses_native_stream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -306,34 +241,3 @@ async def test_google_native_stream_extracts_and_sanitizes_image_data_urls(
     assert "data:image/png;base64" not in first_chunk[0]
     assert len(first_chunk[3]) == 1
     assert first_chunk[3][0].mime_type == "image/png"
-
-
-@pytest.mark.asyncio
-async def test_iter_stream_timeout_accepts_first_thinking_token() -> None:
-    thinking_chunk = SimpleNamespace(
-        choices=[
-            SimpleNamespace(
-                delta=SimpleNamespace(content="", reasoning_content="thinking-token"),
-            ),
-        ],
-    )
-    answer_chunk = SimpleNamespace(
-        choices=[SimpleNamespace(delta=SimpleNamespace(content="answer"))],
-    )
-
-    async def _stream() -> AsyncIterator[object]:
-        await asyncio.sleep(0.01)
-        yield thinking_chunk
-        await asyncio.sleep(1.1)
-        yield answer_chunk
-
-    received_chunks: list[object] = []
-    async for chunk in _iter_stream_with_first_chunk(
-        _stream(),
-        timeout_seconds=1,
-        chunk_has_token=_litellm_chunk_has_token,
-    ):
-        received_chunks.append(chunk)
-        break
-
-    assert received_chunks == [thinking_chunk]

@@ -20,9 +20,7 @@ from llmcord.core.config import (
 from llmcord.core.error_handling import log_exception
 from llmcord.core.exceptions import (
     LITELLM_TIMEOUT_SECONDS,
-    FirstTokenTimeoutError,
     _raise_empty_response,
-    get_first_token_timeout_seconds,
 )
 from llmcord.core.models import MsgNode
 from llmcord.discord.ui import metadata as ui_metadata
@@ -111,7 +109,6 @@ def _collect_litellm_exceptions() -> tuple[type[Exception], ...]:
 LITELLM_RETRYABLE_ERRORS = _collect_litellm_exceptions()
 
 GENERATION_EXCEPTIONS = (
-    FirstTokenTimeoutError,
     asyncio.TimeoutError,
     httpx.HTTPError,
     OSError,
@@ -147,7 +144,7 @@ def _get_error_status_code(error: Exception) -> int | None:
 
 
 def _is_outage_like_provider_error(error: Exception) -> bool:
-    if isinstance(error, (FirstTokenTimeoutError, asyncio.TimeoutError)):
+    if isinstance(error, asyncio.TimeoutError):
         return True
     if isinstance(error, (httpx.TimeoutException, httpx.RequestError)):
         return True
@@ -398,59 +395,6 @@ def _extract_grounding_metadata(
     return grounding_metadata
 
 
-async def _iter_stream_with_first_chunk(
-    stream_iter: AsyncIterator[object],
-    *,
-    timeout_seconds: int,
-    chunk_has_token: Callable[[object], bool] | None = None,
-) -> AsyncIterator[object]:
-    start_time = asyncio.get_running_loop().time()
-    buffered_chunks: list[object] = []
-
-    try:
-        while True:
-            elapsed = asyncio.get_running_loop().time() - start_time
-            remaining_timeout = max(timeout_seconds - elapsed, 0.0)
-
-            chunk = await asyncio.wait_for(
-                stream_iter.__anext__(),
-                timeout=remaining_timeout,
-            )
-            buffered_chunks.append(chunk)
-            if chunk_has_token is None or chunk_has_token(chunk):
-                break
-    except StopAsyncIteration:
-        for buffered_chunk in buffered_chunks:
-            yield buffered_chunk
-        return
-    except TimeoutError as exc:
-        raise FirstTokenTimeoutError(timeout_seconds=timeout_seconds) from exc
-
-    for buffered_chunk in buffered_chunks:
-        yield buffered_chunk
-    async for chunk in stream_iter:
-        yield chunk
-
-
-def _litellm_chunk_has_token(chunk: object) -> bool:
-    choices = getattr(chunk, "choices", None)
-    if not choices:
-        return False
-
-    choice = choices[0]
-    delta = getattr(choice, "delta", None)
-    if delta is None:
-        return False
-
-    delta_content = getattr(delta, "content", "") or ""
-    reasoning_content = (
-        getattr(delta, "reasoning_content", "")
-        or getattr(delta, "reasoningContent", "")
-        or ""
-    )
-    return bool(delta_content or reasoning_content)
-
-
 async def _get_stream(
     *,
     context: GenerationContext,
@@ -459,8 +403,6 @@ async def _get_stream(
     tuple[str, object | None, object | None, list[GeneratedImage], bool]
 ]:
     """Yield stream chunks from LiteLLM with grounding metadata."""
-    first_token_timeout_seconds = get_first_token_timeout_seconds()
-
     if stream_config.provider in {"google-gemini-cli", "google-antigravity"}:
         stream = stream_google_gemini_cli(
             provider_id=stream_config.provider,
@@ -471,10 +413,7 @@ async def _get_stream(
             extra_headers=stream_config.extra_headers,
             model_parameters=stream_config.model_parameters,
         )
-        async for chunk in _iter_stream_with_first_chunk(
-            stream,
-            timeout_seconds=first_token_timeout_seconds,
-        ):
+        async for chunk in stream:
             (
                 delta_content,
                 chunk_finish_reason,
@@ -528,11 +467,7 @@ async def _get_stream(
 
     stream = await litellm.acompletion(**litellm_kwargs)
 
-    async for chunk in _iter_stream_with_first_chunk(
-        stream,
-        timeout_seconds=first_token_timeout_seconds,
-        chunk_has_token=_litellm_chunk_has_token,
-    ):
+    async for chunk in stream:
         choices = getattr(chunk, "choices", None)
         if not choices:
             continue
@@ -900,19 +835,13 @@ def _handle_generation_exception(  # noqa: PLR0913
         context={"provider": provider},
     )
 
-    is_first_token_timeout = isinstance(error, FirstTokenTimeoutError)
     is_timeout_error = isinstance(error, asyncio.TimeoutError) or (
         "timeout" in str(error).lower()
     )
     is_empty_response = "no content" in str(error).lower()
 
     special_case_message: str | None = None
-    if is_first_token_timeout:
-        special_case_message = (
-            "No first token within %s seconds for provider '%s'; "
-            "recording a timeout strike and trying another key."
-        )
-    elif is_empty_response:
+    if is_empty_response:
         special_case_message = (
             "Empty response for provider '%s'; removing key and trying remaining keys."
         )
@@ -943,28 +872,7 @@ def _handle_generation_exception(  # noqa: PLR0913
         )
 
     if special_case_message:
-        if is_first_token_timeout:
-            timeout_seconds = getattr(error, "timeout_seconds", None)
-            if not isinstance(timeout_seconds, int):
-                timeout_seconds = get_first_token_timeout_seconds()
-            logger.warning(
-                special_case_message,
-                timeout_seconds,
-                provider,
-            )
-        else:
-            logger.warning(special_case_message, provider)
-
-        if is_first_token_timeout:
-            _handle_key_rotation_error(
-                provider=provider,
-                current_api_key=current_api_key,
-                good_keys=good_keys,
-                error_flags=(False, True),
-                timeout_strikes=timeout_strikes,
-                timeout_strike_threshold=timeout_strike_threshold,
-            )
-            return good_keys, last_error_msg
+        logger.warning(special_case_message, provider)
 
         _remove_key(good_keys, current_api_key)
         timeout_strikes.pop(current_api_key, None)

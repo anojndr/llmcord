@@ -4,9 +4,9 @@ import asyncio
 import importlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import litellm
@@ -14,10 +14,6 @@ import litellm
 from llmcord.core.config import get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
-from llmcord.core.exceptions import (
-    FirstTokenTimeoutError,
-    get_first_token_timeout_seconds,
-)
 from llmcord.logic.fallbacks import (
     FallbackModel,
     apply_fallback_config,
@@ -74,55 +70,12 @@ def _get_decider_runner() -> Callable[
     return search_module.run_decider_once
 
 
-async def _iter_stream_with_first_chunk(
-    stream_iter: AsyncIterator[object],
-    *,
-    timeout_seconds: int,
-    chunk_has_token: Callable[[object], bool] | None = None,
-) -> AsyncIterator[object]:
-    start_time = asyncio.get_running_loop().time()
-    buffered_chunks: list[object] = []
-
-    try:
-        while True:
-            elapsed = asyncio.get_running_loop().time() - start_time
-            remaining_timeout = max(timeout_seconds - elapsed, 0.0)
-            chunk = await asyncio.wait_for(
-                stream_iter.__anext__(),
-                timeout=remaining_timeout,
-            )
-            buffered_chunks.append(chunk)
-            if chunk_has_token is None or chunk_has_token(chunk):
-                break
-    except StopAsyncIteration:
-        for buffered_chunk in buffered_chunks:
-            yield buffered_chunk
-        return
-    except TimeoutError as exc:
-        raise FirstTokenTimeoutError(timeout_seconds=timeout_seconds) from exc
-
-    for buffered_chunk in buffered_chunks:
-        yield buffered_chunk
-    async for chunk in stream_iter:
-        yield chunk
-
-
-def _google_gemini_cli_chunk_has_token(chunk: object) -> bool:
-    delta_content, _chunk_finish_reason, _is_thinking = cast(
-        "tuple[str, object | None, bool]",
-        chunk,
-    )
-    return bool(delta_content)
-
-
 async def _get_decider_response_text(
     *,
     run_config: DeciderRunConfig,
     current_api_key: str,
     litellm_messages: list[dict[str, object]],
 ) -> str:
-    first_token_timeout_seconds = get_first_token_timeout_seconds()
-
     if run_config.provider in {"google-gemini-cli", "google-antigravity"}:
         response_chunks: list[str] = []
         stream = stream_google_gemini_cli(
@@ -134,15 +87,8 @@ async def _get_decider_response_text(
             extra_headers=run_config.extra_headers,
             model_parameters=run_config.model_parameters,
         )
-        async for chunk in _iter_stream_with_first_chunk(
-            stream,
-            timeout_seconds=first_token_timeout_seconds,
-            chunk_has_token=_google_gemini_cli_chunk_has_token,
-        ):
-            delta_content, _chunk_finish_reason, is_thinking = cast(
-                "tuple[str, object | None, bool]",
-                chunk,
-            )
+        async for chunk in stream:
+            delta_content, _chunk_finish_reason, is_thinking = chunk
             if delta_content and not is_thinking:
                 response_chunks.append(delta_content)
         return "".join(response_chunks).strip()
@@ -266,15 +212,6 @@ async def _run_decider_once(
             httpx.HTTPError,
             *DECIDER_RETRYABLE_EXCEPTIONS,
         ) as exc:
-            if isinstance(exc, FirstTokenTimeoutError):
-                logger.warning(
-                    "Search decider first-token timeout exceeded %ss "
-                    "for provider '%s'; "
-                    "continuing key rotation and falling "
-                    "back to fallback chain if keys are exhausted.",
-                    exc.timeout_seconds,
-                    run_config.provider,
-                )
             log_exception(
                 logger=logger,
                 message="Error in web search decider",

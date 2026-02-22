@@ -1,23 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-from collections.abc import AsyncIterator
-from typing import cast
 
 import httpx
 import pytest
 
-from llmcord.core.exceptions import (
-    FIRST_TOKEN_TIMEOUT_SECONDS,
-    FirstTokenTimeoutError,
-)
 from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_metadata
 from llmcord.services.search.decider import (
     DeciderRunConfig,
-    _get_decider_response_text,
-    _google_gemini_cli_chunk_has_token,
-    _iter_stream_with_first_chunk,
     _run_decider_once,
     decide_web_search,
 )
@@ -412,80 +402,6 @@ async def test_decider_empty_response_skips_json_parse_warning(
 
 
 @pytest.mark.asyncio
-async def test_decider_google_gemini_cli_uses_first_token_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured_timeout: int | None = None
-    configured_timeout = 53
-
-    async def _fake_stream_google_gemini_cli(
-        **_kwargs: object,
-    ):
-        yield '{"needs_search":false}', None, False
-
-    async def _fake_iter_stream_with_first_chunk(
-        stream_iter: AsyncIterator[tuple[str, object | None, bool]],
-        *,
-        timeout_seconds: int,
-        chunk_has_token: object | None = None,
-    ) -> AsyncIterator[tuple[str, object | None, bool]]:
-        nonlocal captured_timeout
-        captured_timeout = timeout_seconds
-        assert chunk_has_token is not None
-        async for chunk in stream_iter:
-            yield chunk
-
-    monkeypatch.setattr(
-        "llmcord.services.search.decider.stream_google_gemini_cli",
-        _fake_stream_google_gemini_cli,
-    )
-    monkeypatch.setattr(
-        "llmcord.services.search.decider._iter_stream_with_first_chunk",
-        _fake_iter_stream_with_first_chunk,
-    )
-    monkeypatch.setattr(
-        "llmcord.services.search.decider.get_first_token_timeout_seconds",
-        lambda: configured_timeout,
-    )
-
-    response = await _get_decider_response_text(
-        run_config=DeciderRunConfig(
-            provider="google-gemini-cli",
-            model="gemini-3-flash-preview-minimal",
-            api_keys=["refresh-token"],
-            base_url="https://cloudcode-pa.googleapis.com",
-            extra_headers=None,
-            model_parameters=None,
-        ),
-        current_api_key="refresh-token",
-        litellm_messages=[{"role": "user", "content": "hello"}],
-    )
-
-    assert response == '{"needs_search":false}'
-    assert captured_timeout == configured_timeout
-
-
-@pytest.mark.asyncio
-async def test_decider_iter_stream_timeout_accepts_first_thinking_token() -> None:
-    async def _stream() -> AsyncIterator[tuple[str, object | None, bool]]:
-        await asyncio.sleep(0.01)
-        yield '{"needs_search":', None, True
-        await asyncio.sleep(1.1)
-        yield "false}", None, False
-
-    received_chunks: list[tuple[str, object | None, bool]] = []
-    async for chunk in _iter_stream_with_first_chunk(
-        _stream(),
-        timeout_seconds=1,
-        chunk_has_token=_google_gemini_cli_chunk_has_token,
-    ):
-        received_chunks.append(cast("tuple[str, object | None, bool]", chunk))
-        break
-
-    assert received_chunks == [('{"needs_search":', None, True)]
-
-
-@pytest.mark.asyncio
 async def test_decider_httpx_timeout_marks_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -607,64 +523,6 @@ async def test_decider_uses_custom_fallback_chain(
         "gemini/gemini-3-flash-preview",
         "mistral/mistral-large-latest",
     ]
-
-
-@pytest.mark.asyncio
-async def test_decider_first_token_timeout_triggers_fallback_chain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def _fake_get_decider_response_text(
-        *,
-        run_config: DeciderRunConfig,
-        **_kwargs: object,
-    ) -> str:
-        if run_config.provider == "google-gemini-cli":
-            raise FirstTokenTimeoutError(
-                timeout_seconds=FIRST_TOKEN_TIMEOUT_SECONDS,
-            )
-        return '{"needs_search":false}'
-
-    monkeypatch.setattr(
-        "llmcord.services.search.decider._get_decider_response_text",
-        _fake_get_decider_response_text,
-    )
-    monkeypatch.setattr(
-        "llmcord.services.search.decider._get_decider_runner",
-        lambda: _run_decider_once,
-    )
-    monkeypatch.setattr(
-        "llmcord.services.search.decider.get_config",
-        lambda: {
-            "providers": {
-                "mistral": {
-                    "api_key": ["mistral-key"],
-                    "base_url": "https://api.mistral.ai/v1",
-                },
-            },
-            "models": {},
-        },
-    )
-
-    result = await decide_web_search(
-        [{"role": "user", "content": "hello"}],
-        {
-            "provider": "google-gemini-cli",
-            "model": "gemini-3-flash-preview-minimal",
-            "api_keys": ["refresh-token"],
-            "base_url": "https://cloudcode-pa.googleapis.com",
-            "extra_headers": None,
-            "model_parameters": None,
-            "fallback_chain": [
-                (
-                    "mistral",
-                    "mistral-large-latest",
-                    "mistral/mistral-large-latest",
-                ),
-            ],
-        },
-    )
-
-    assert result == {"needs_search": False}
 
 
 @pytest.mark.asyncio

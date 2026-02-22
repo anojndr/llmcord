@@ -87,10 +87,6 @@ Or run local models with:
 ### Profiles
 `config.yaml` supports `main` and `test` profiles. Set `profile: main` to select which one to run. Profile-specific settings include `port` and `bot_token`.
 
-### Time To First Token
-- Configure `first_token_timeout_seconds` in `config.yaml` to control how long llmcord waits for the first streamed token before rotating keys or falling back.
-- Default is `30` seconds when omitted or invalid.
-
 ### Web Search
 - **Tavily** (requires API key) and **Exa MCP** are supported.
 - Set `web_search_provider: auto` to prefer Tavily when keys exist, falling back to Exa.

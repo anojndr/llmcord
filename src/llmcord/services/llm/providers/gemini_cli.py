@@ -1604,7 +1604,7 @@ async def stream_google_gemini_cli(
                                         provider_id == GOOGLE_ANTIGRAVITY_PROVIDER
                                         and isinstance(function_name, str)
                                     ):
-                                        # Prevent upstream first-token timeout.
+                                        # Keep the stream active while the tool runs.
                                         yield "", None, False
                                         tool_result_text = await _run_image_tool(
                                             endpoint=endpoint,

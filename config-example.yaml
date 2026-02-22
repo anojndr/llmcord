@@ -18,7 +18,6 @@ status_message:
 # Response behavior:
 
 allow_dms: true
-first_token_timeout_seconds: 30  # Timeout waiting for first token from providers.
 
 # Message limits:
 
