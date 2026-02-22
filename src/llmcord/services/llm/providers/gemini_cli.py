@@ -15,6 +15,7 @@ import urllib.parse
 import webbrowser
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Event
 from typing import Any, cast
@@ -163,6 +164,38 @@ IMAGE_TOOL_DECLARATION: dict[str, object] = {
         "required": ["prompt"],
     },
 }
+
+
+_RETRYABLE_ERROR_PATTERN = re.compile(
+    r"resource.?exhausted|rate.?limit|overloaded|service.?unavailable|other.?side.?closed",
+    re.IGNORECASE,
+)
+
+
+def _is_retryable_error(status_code: int, error_text: str) -> bool:
+    """Check if an error is retryable (rate limit, server error, etc.)."""
+    if status_code in {429, 500, 502, 503, 504}:
+        return True
+    return bool(_RETRYABLE_ERROR_PATTERN.search(error_text))
+
+
+def _extract_error_message(error_text: str) -> str:
+    """Extract a clean, user-friendly error message from API error response.
+
+    Parses JSON error responses and returns just the ``message`` field when
+    available, otherwise falls back to the raw text.
+    """
+    try:
+        parsed = json.loads(error_text)
+        if isinstance(parsed, dict):
+            error_obj = parsed.get("error")
+            if isinstance(error_obj, dict):
+                message = error_obj.get("message")
+                if isinstance(message, str) and message:
+                    return message
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return error_text
 
 
 def _get_antigravity_headers() -> dict[str, str]:
@@ -905,41 +938,120 @@ def _build_cloudcode_request(
     return request_payload
 
 
-def _extract_retry_delay_ms(response: httpx.Response, response_text: str) -> int | None:
+_RETRY_DELAY_BUFFER_MS = 1000
+_MAX_RETRY_DELAY_MS = 60_000
+
+
+def _normalize_retry_delay(ms: float) -> int | None:
+    """Add a 1-second buffer and return the delay in milliseconds.
+
+    Mirrors the reference ``normalizeDelay`` behaviour so that the caller
+    always waits *slightly* longer than the server-advertised window.
+    """
+    if ms <= 0:
+        return None
+    return int(ms) + _RETRY_DELAY_BUFFER_MS
+
+
+def _extract_retry_delay_ms(  # noqa: PLR0911
+    response: httpx.Response,
+    response_text: str,
+) -> int | None:
+    """Extract retry delay from error response (milliseconds).
+
+    Checks response headers first (Retry-After, x-ratelimit-reset,
+    x-ratelimit-reset-after), then falls back to body text patterns:
+    - ``Your quota will reset after 18h31m10s``
+    - ``Please retry in Xs`` / ``Please retry in Xms``
+    - ``"retryDelay": "34.074824224s"`` (JSON field)
+    """
+    # --- Header: Retry-After (seconds or HTTP-date) ---
     retry_after = response.headers.get("retry-after")
     if retry_after:
         try:
-            return int(float(retry_after) * 1000)
+            delay = _normalize_retry_delay(float(retry_after) * 1000)
+            if delay is not None:
+                return delay
         except ValueError:
-            return None
+            pass
+        # Try as HTTP-date (e.g. "Fri, 31 Dec 1999 23:59:59 GMT")
+        try:
+            retry_dt = parsedate_to_datetime(retry_after)
+            delay = _normalize_retry_delay(
+                retry_dt.timestamp() * 1000 - _now_ms(),
+            )
+            if delay is not None:
+                return delay
+        except (ValueError, TypeError):
+            pass
 
-    match = None
+    # --- Header: x-ratelimit-reset (unix epoch seconds) ---
+    ratelimit_reset = response.headers.get("x-ratelimit-reset")
+    if ratelimit_reset:
+        try:
+            reset_seconds = int(ratelimit_reset)
+            delay = _normalize_retry_delay(reset_seconds * 1000 - _now_ms())
+            if delay is not None:
+                return delay
+        except ValueError:
+            pass
 
+    # --- Header: x-ratelimit-reset-after (seconds) ---
+    ratelimit_reset_after = response.headers.get("x-ratelimit-reset-after")
+    if ratelimit_reset_after:
+        try:
+            delay = _normalize_retry_delay(float(ratelimit_reset_after) * 1000)
+            if delay is not None:
+                return delay
+        except ValueError:
+            pass
+
+    # --- Body pattern 1: "Your quota will reset after 18h31m10s" ---
+    duration_match = re.search(
+        r"reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s",
+        response_text,
+        re.IGNORECASE,
+    )
+    if duration_match:
+        hours = int(duration_match.group(1)) if duration_match.group(1) else 0
+        minutes = int(duration_match.group(2)) if duration_match.group(2) else 0
+        seconds = float(duration_match.group(3))
+        total_ms = ((hours * 60 + minutes) * 60 + seconds) * 1000
+        delay = _normalize_retry_delay(total_ms)
+        if delay is not None:
+            return delay
+
+    # --- Body pattern 2: "Please retry in Xs" / "Please retry in Xms" ---
     retry_in_match = re.search(
         r"Please retry in ([0-9.]+)(ms|s)",
         response_text,
         re.IGNORECASE,
     )
     if retry_in_match:
-        match = retry_in_match
-    if match is None:
-        retry_delay_match = re.search(
-            r'"retryDelay":\s*"([0-9.]+)(ms|s)"',
-            response_text,
-            re.IGNORECASE,
-        )
-        if retry_delay_match:
-            match = retry_delay_match
+        value = float(retry_in_match.group(1))
+        unit = retry_in_match.group(2).lower()
+        if value > 0:
+            ms = value if unit == "ms" else value * 1000
+            delay = _normalize_retry_delay(ms)
+            if delay is not None:
+                return delay
 
-    if match is None:
-        return None
-    value = float(match.group(1))
-    unit = match.group(2).lower()
-    if value <= 0:
-        return None
-    if unit == "ms":
-        return int(value)
-    return int(value * 1000)
+    # --- Body pattern 3: "retryDelay": "34.074824224s" ---
+    retry_delay_match = re.search(
+        r'"retryDelay":\s*"([0-9.]+)(ms|s)"',
+        response_text,
+        re.IGNORECASE,
+    )
+    if retry_delay_match:
+        value = float(retry_delay_match.group(1))
+        unit = retry_delay_match.group(2).lower()
+        if value > 0:
+            ms = value if unit == "ms" else value * 1000
+            delay = _normalize_retry_delay(ms)
+            if delay is not None:
+                return delay
+
+    return None
 
 
 def _normalize_aspect_ratio(value: object) -> str:
@@ -1300,6 +1412,44 @@ async def _execute_antigravity_image_tool_call(
     return f"{summary}\n{data_url}"
 
 
+def _raise_cloud_code_error(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def _raise_image_tool_error(exc: Exception) -> None:
+    msg = f"Image tool call failed: {str(exc).strip() or type(exc).__name__}"
+    raise RuntimeError(msg) from exc
+
+
+async def _run_image_tool(
+    *,
+    endpoint: str,
+    headers: dict[str, str],
+    credentials: GeminiCliCredentials,
+    messages: list[dict[str, object]],
+    name: str,
+    args: dict[str, object],
+) -> str:
+    """Execute an image tool call, wrapping errors."""
+    try:
+        return await _execute_antigravity_image_tool_call(
+            endpoint=endpoint,
+            headers=headers,
+            credentials=credentials,
+            messages=messages,
+            call_name=name,
+            call_args=args,
+        )
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        httpx.HTTPError,
+    ) as exc:
+        _raise_image_tool_error(exc)
+    return ""  # unreachable, keeps mypy happy
+
+
 async def stream_google_gemini_cli(
     *,
     provider_id: str = GOOGLE_GEMINI_CLI_PROVIDER,
@@ -1348,121 +1498,168 @@ async def stream_google_gemini_cli(
     if extra_headers:
         headers.update(extra_headers)
 
-    max_attempts = 3
-    attempt = 0
-    while True:
-        attempt += 1
-        endpoint = endpoints[min(attempt - 1, len(endpoints) - 1)]
+    # --- Retry loop (matches reference: MAX_RETRIES=3, attempt 0..3) ---
+    max_retries = 3
+    base_delay_ms = 1000
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        endpoint = endpoints[min(attempt, len(endpoints) - 1)]
         url = f"{endpoint}/v1internal:streamGenerateContent?alt=sse"
-        async with (
-            httpx.AsyncClient(timeout=30) as client,
-            client.stream(
-                "POST",
-                url,
-                headers=headers,
-                json=body,
-            ) as response,
-        ):
-            if not response.is_success:
-                error_text = await response.aread()
-                decoded_error = error_text.decode("utf-8", errors="replace")
-                retryable = response.status_code in {429, 500, 502, 503, 504}
-                if retryable and attempt < max_attempts:
-                    delay_ms = _extract_retry_delay_ms(response, decoded_error)
-                    delay_seconds = (delay_ms or (1000 * (2 ** (attempt - 1)))) / 1000
-                    await asyncio.sleep(delay_seconds)
-                    continue
-                msg = (
-                    "Cloud Code Assist API error "
-                    f"({response.status_code}): {decoded_error}"
-                )
-                raise RuntimeError(msg)
 
-            async for line in response.aiter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if not payload:
-                    continue
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(chunk, dict):
-                    continue
+        try:
+            async with (
+                httpx.AsyncClient(timeout=30) as client,
+                client.stream(
+                    "POST",
+                    url,
+                    headers=headers,
+                    json=body,
+                ) as response,
+            ):
+                if not response.is_success:
+                    error_bytes = await response.aread()
+                    decoded_error = error_bytes.decode("utf-8", errors="replace")
 
-                response_data = chunk.get("response")
-                if not isinstance(response_data, dict):
-                    continue
-                candidates = response_data.get("candidates")
-                if not isinstance(candidates, list) or not candidates:
-                    continue
-                candidate = candidates[0]
-                if not isinstance(candidate, dict):
-                    continue
+                    if attempt < max_retries and _is_retryable_error(
+                        response.status_code,
+                        decoded_error,
+                    ):
+                        server_delay = _extract_retry_delay_ms(
+                            response,
+                            decoded_error,
+                        )
+                        delay_ms = server_delay or (base_delay_ms * (2**attempt))
 
-                content = candidate.get("content")
-                if isinstance(content, dict):
-                    parts = content.get("parts")
-                    if isinstance(parts, list):
-                        for part in parts:
-                            if not isinstance(part, dict):
-                                continue
-                            function_call = part.get("functionCall")
-                            if isinstance(function_call, dict):
-                                function_call_dict = cast(
-                                    "dict[str, object]",
-                                    function_call,
-                                )
-                                function_name = function_call_dict.get("name")
-                                function_args = function_call_dict.get("args")
-                                call_args: dict[str, object] = {}
-                                if isinstance(function_args, dict):
-                                    call_args = cast(
+                        # Cap server-provided delay at 60 seconds
+                        if (
+                            server_delay is not None
+                            and server_delay > _MAX_RETRY_DELAY_MS
+                        ):
+                            delay_seconds = (server_delay + 999) // 1000
+                            max_seconds = _MAX_RETRY_DELAY_MS // 1000
+                            _raise_cloud_code_error(
+                                f"Server requested {delay_seconds}s retry "
+                                f"delay (max: {max_seconds}s). "
+                                f"{_extract_error_message(decoded_error)}",
+                            )
+
+                        await asyncio.sleep(delay_ms / 1000)
+                        continue
+
+                    _raise_cloud_code_error(
+                        "Cloud Code Assist API error "
+                        f"({response.status_code}): "
+                        f"{_extract_error_message(decoded_error)}",
+                    )
+
+                # --- Stream SSE response ---
+                has_content = False
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data:"):
+                        continue
+                    payload = line[5:].strip()
+                    if not payload:
+                        continue
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+
+                    response_data = chunk.get("response")
+                    if not isinstance(response_data, dict):
+                        continue
+                    candidates = response_data.get("candidates")
+                    if not isinstance(candidates, list) or not candidates:
+                        continue
+                    candidate = candidates[0]
+                    if not isinstance(candidate, dict):
+                        continue
+
+                    content = candidate.get("content")
+                    if isinstance(content, dict):
+                        parts = content.get("parts")
+                        if isinstance(parts, list):
+                            for part in parts:
+                                if not isinstance(part, dict):
+                                    continue
+                                function_call = part.get("functionCall")
+                                if isinstance(function_call, dict):
+                                    function_call_dict = cast(
                                         "dict[str, object]",
-                                        function_args,
+                                        function_call,
                                     )
-
-                                if (
-                                    provider_id == GOOGLE_ANTIGRAVITY_PROVIDER
-                                    and isinstance(function_name, str)
-                                ):
-                                    # Prevent upstream first-token timeout.
-                                    yield "", None, False
-                                    try:
-                                        tool_result_text = (
-                                            await _execute_antigravity_image_tool_call(
-                                                endpoint=endpoint,
-                                                headers=provider_headers,
-                                                credentials=credentials,
-                                                messages=messages,
-                                                call_name=function_name,
-                                                call_args=call_args,
-                                            )
+                                    function_name = function_call_dict.get("name")
+                                    function_args = function_call_dict.get("args")
+                                    call_args: dict[str, object] = {}
+                                    if isinstance(function_args, dict):
+                                        call_args = cast(
+                                            "dict[str, object]",
+                                            function_args,
                                         )
-                                    except (
-                                        OSError,
-                                        RuntimeError,
-                                        ValueError,
-                                        httpx.HTTPError,
-                                    ) as exc:
-                                        msg = (
-                                            "Image tool call failed: "
-                                            f"{str(exc).strip() or type(exc).__name__}"
+
+                                    if (
+                                        provider_id == GOOGLE_ANTIGRAVITY_PROVIDER
+                                        and isinstance(function_name, str)
+                                    ):
+                                        # Prevent upstream first-token timeout.
+                                        yield "", None, False
+                                        tool_result_text = await _run_image_tool(
+                                            endpoint=endpoint,
+                                            headers=provider_headers,
+                                            credentials=credentials,
+                                            messages=messages,
+                                            name=function_name,
+                                            args=call_args,
                                         )
-                                        raise RuntimeError(msg) from exc
-                                    if tool_result_text:
-                                        yield tool_result_text, None, False
+                                        if tool_result_text:
+                                            yield tool_result_text, None, False
 
-                            text = part.get("text")
-                            if isinstance(text, str) and text:
-                                yield text, None, bool(part.get("thought"))
+                                text = part.get("text")
+                                if isinstance(text, str) and text:
+                                    has_content = True
+                                    yield text, None, bool(part.get("thought"))
 
-                finish_reason = candidate.get("finishReason")
-                if finish_reason is not None:
-                    yield "", finish_reason, False
+                    finish_reason = candidate.get("finishReason")
+                    if finish_reason is not None:
+                        has_content = True
+                        yield "", finish_reason, False
 
-            return
+                if has_content:
+                    return
+
+                # Empty stream — retry if we have attempts left
+                if attempt < max_retries:
+                    await asyncio.sleep(0.5 * (2**attempt))
+                    continue
+
+                _raise_cloud_code_error(
+                    "Cloud Code Assist API returned an empty response",
+                )
+
+        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            last_error = exc
+            if attempt < max_retries:
+                await asyncio.sleep(base_delay_ms * (2**attempt) / 1000)
+                continue
+            msg = f"Network error: {exc}"
+            raise RuntimeError(msg) from exc
+        except RuntimeError:
+            raise
+        except httpx.HTTPError as exc:
+            last_error = exc
+            if attempt < max_retries:
+                await asyncio.sleep(base_delay_ms * (2**attempt) / 1000)
+                continue
+            raise
+
+    if last_error is not None:
+        msg = f"Failed after {max_retries + 1} attempts: {last_error}"
+        raise RuntimeError(msg) from last_error
+    msg = "Failed to get response after retries"
+    raise RuntimeError(msg)
 
 
 def _generate_pkce() -> tuple[str, str]:
