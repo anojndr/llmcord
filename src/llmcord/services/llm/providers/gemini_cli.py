@@ -91,6 +91,29 @@ ANTIGRAVITY_SYSTEM_INSTRUCTION = (
     "**Proactiveness**"
 )
 
+DEFAULT_SAFETY_SETTINGS: list[dict[str, str]] = [
+    {
+        "category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "OFF",
+    },
+    {
+        "category": "HARM_CATEGORY_HATE_SPEECH",
+        "threshold": "OFF",
+    },
+    {
+        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "threshold": "OFF",
+    },
+    {
+        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "threshold": "OFF",
+    },
+    {
+        "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+        "threshold": "OFF",
+    },
+]
+
 IMAGE_TOOL_NAME = "generate_image"
 IMAGE_TOOL_DEFAULT_MODEL = "gemini-3-pro-image"
 IMAGE_TOOL_DEFAULT_ASPECT_RATIO = "1:1"
@@ -850,6 +873,8 @@ def _build_cloudcode_request(
     if generation_config:
         request_body["generationConfig"] = generation_config
 
+    request_body["safetySettings"] = DEFAULT_SAFETY_SETTINGS
+
     if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
         request_body["tools"] = [
             {
@@ -1049,28 +1074,7 @@ def _build_antigravity_image_request(
                 "imageConfig": {"aspectRatio": aspect_ratio},
                 "candidateCount": 1,
             },
-            "safetySettings": [
-                {
-                    "category": "HARM_CATEGORY_HARASSMENT",
-                    "threshold": "BLOCK_ONLY_HIGH",
-                },
-                {
-                    "category": "HARM_CATEGORY_HATE_SPEECH",
-                    "threshold": "BLOCK_ONLY_HIGH",
-                },
-                {
-                    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                    "threshold": "BLOCK_ONLY_HIGH",
-                },
-                {
-                    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                    "threshold": "BLOCK_ONLY_HIGH",
-                },
-                {
-                    "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
-                    "threshold": "BLOCK_ONLY_HIGH",
-                },
-            ],
+            "safetySettings": DEFAULT_SAFETY_SETTINGS,
         },
         "requestType": "agent",
         "userAgent": "antigravity",
