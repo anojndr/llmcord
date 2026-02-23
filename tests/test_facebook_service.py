@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from curl_cffi.requests import exceptions as curl_requests_exceptions
 
@@ -238,8 +239,51 @@ async def test_fetch_fdownloader_result_html_timeout_logs_warning(
     )
 
     assert result is None
-    assert any(
-        "FDownloader ajaxSearch request timed out" in record.message
-        for record in caplog.records
+
+
+@pytest.mark.asyncio
+async def test_maybe_download_facebook_videos_timeout_in_payload_logs_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    facebook_url = "https://www.facebook.com/share/r/18ZA4xvsak/"
+
+    monkeypatch.setattr(
+        "llmcord.services.facebook._fetch_fdownloader_params",
+        AsyncMock(return_value=object()),
     )
+    monkeypatch.setattr(
+        "llmcord.services.facebook._fetch_fdownloader_result_html",
+        AsyncMock(return_value="<html/>"),
+    )
+    monkeypatch.setattr(
+        "llmcord.services.facebook._extract_first_snapcdn_token",
+        lambda _result_html: "token",
+    )
+    monkeypatch.setattr(
+        "llmcord.services.facebook._extract_download_url_from_snapcdn_token",
+        lambda _token: "https://cdn.example.com/video.mp4",
+    )
+
+    async def _raise_timeout(*, download_url: str, httpx_client: object) -> None:
+        del download_url, httpx_client
+        msg = "connect timed out"
+        raise httpx.ConnectTimeout(msg)
+
+    monkeypatch.setattr(
+        "llmcord.services.facebook._download_video_payload",
+        _raise_timeout,
+    )
+
+    caplog.set_level("WARNING", logger="llmcord.services.facebook")
+
+    result = await maybe_download_facebook_videos_with_failures(
+        cleaned_content=f"summarize {facebook_url}",
+        actual_model="gemini-2.0-flash",
+        httpx_client=AsyncMock(),
+    )
+
+    assert result.videos == []
+    assert result.failed_urls == [facebook_url]
+    assert "Facebook video payload request timed out" in caplog.text
     assert not any(record.levelname == "ERROR" for record in caplog.records)

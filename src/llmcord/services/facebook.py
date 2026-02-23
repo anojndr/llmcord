@@ -17,6 +17,7 @@ from curl_cffi.requests import exceptions as curl_requests_exceptions
 
 from llmcord.core.config import DEFAULT_USER_AGENT, is_gemini_model
 from llmcord.core.error_handling import log_exception
+from llmcord.services.http import RetryOptions, request_with_retries
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,12 @@ _FACEBOOK_URL_RE = re.compile(
 
 _FDOWNLOADER_URL = "https://fdownloader.net/en"
 _FDOWNLOADER_REQUEST_TIMEOUT_SECONDS = 12.0
+
+_FACEBOOK_VIDEO_CONNECT_TIMEOUT_SECONDS = 15.0
+_FACEBOOK_VIDEO_READ_TIMEOUT_SECONDS = 30.0
+_FACEBOOK_VIDEO_WRITE_TIMEOUT_SECONDS = 15.0
+_FACEBOOK_VIDEO_POOL_TIMEOUT_SECONDS = 10.0
+_FACEBOOK_VIDEO_RETRIES = 1
 _K_URL_SEARCH_RE = re.compile(r'k_url_search="(?P<url>https://[^"]+/api/ajaxSearch)"')
 _K_EXP_RE = re.compile(r'k_exp="(?P<exp>\d+)"')
 _K_TOKEN_RE = re.compile(r'k_token="(?P<token>[0-9a-f]{64})"', re.IGNORECASE)
@@ -239,10 +246,22 @@ async def _download_video_payload(
     download_url: str,
     httpx_client: httpx.AsyncClient,
 ) -> DownloadedFacebookVideo | None:
-    video_response = await httpx_client.get(
-        download_url,
-        headers={"User-Agent": DEFAULT_USER_AGENT},
-        follow_redirects=True,
+    timeout = httpx.Timeout(
+        connect=_FACEBOOK_VIDEO_CONNECT_TIMEOUT_SECONDS,
+        read=_FACEBOOK_VIDEO_READ_TIMEOUT_SECONDS,
+        write=_FACEBOOK_VIDEO_WRITE_TIMEOUT_SECONDS,
+        pool=_FACEBOOK_VIDEO_POOL_TIMEOUT_SECONDS,
+    )
+
+    video_response = await request_with_retries(
+        lambda: httpx_client.get(
+            download_url,
+            headers={"User-Agent": DEFAULT_USER_AGENT},
+            follow_redirects=True,
+            timeout=timeout,
+        ),
+        options=RetryOptions(retries=_FACEBOOK_VIDEO_RETRIES),
+        log_context="facebook video payload",
     )
     video_response.raise_for_status()
 
@@ -317,6 +336,13 @@ async def maybe_download_facebook_videos_with_failures(
                     download_url=download_url,
                     httpx_client=httpx_client,
                 )
+            except httpx.TimeoutException as exc:
+                logger.warning(
+                    "Facebook video payload request timed out url=%s error=%s",
+                    facebook_url,
+                    exc,
+                )
+                return facebook_url, None
             except (
                 curl_requests_exceptions.RequestException,
                 httpx.HTTPError,
