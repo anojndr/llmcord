@@ -20,6 +20,29 @@ else:
 
 logger = logging.getLogger(__name__)
 
+_SURROGATE_MIN = 0xD800
+_SURROGATE_MAX = 0xDFFF
+_SURROGATE_REPLACEMENT = "\ufffd"
+
+
+def _sanitize_sqlite_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    # SQLite (via the stdlib sqlite3 module) encodes Python str to UTF-8 when
+    # binding parameters. If the str contains unpaired surrogate code points
+    # (U+D800..U+DFFF), that encoding raises UnicodeEncodeError.
+    changed = False
+    chars: list[str] = []
+    for ch in value:
+        codepoint = ord(ch)
+        if _SURROGATE_MIN <= codepoint <= _SURROGATE_MAX:
+            chars.append(_SURROGATE_REPLACEMENT)
+            changed = True
+        else:
+            chars.append(ch)
+    return "".join(chars) if changed else value
+
 
 @dataclass(slots=True)
 class MessageResponsePayload:
@@ -141,17 +164,20 @@ class MessageDataMixin(_Base):
             msg_id_str = str(int(message_id))
         except (ValueError, TypeError):
             msg_id_str = str(message_id)
+        msg_id_str = _sanitize_sqlite_text(msg_id_str) or ""
 
         # Ensure search_results is a plain string or None
         search_results_str: str | None = None
         if search_results:
-            search_results_str = str(search_results)
+            search_results_str = _sanitize_sqlite_text(str(search_results))
 
         # Serialize metadata with fallback for non-JSON types
         tavily_json: str | None = None
         if tavily_metadata:
             try:
-                tavily_json = json.dumps(tavily_metadata, default=str)
+                tavily_json = _sanitize_sqlite_text(
+                    json.dumps(tavily_metadata, default=str),
+                )
             except (TypeError, ValueError) as exc:
                 logger.warning("Failed to serialize tavily_metadata: %s", exc)
                 tavily_json = None
@@ -159,7 +185,7 @@ class MessageDataMixin(_Base):
         # Ensure lens_results is a plain string or None
         lens_results_str: str | None = None
         if lens_results:
-            lens_results_str = str(lens_results)
+            lens_results_str = _sanitize_sqlite_text(str(lens_results))
 
         # Build params tuple with verified types
         params = (
@@ -189,13 +215,13 @@ class MessageDataMixin(_Base):
                 params,
             )
         except ValueError as exc:
-            # Log parameter types to help debug "Unsupported parameter type" errors
+            # Log parameter types to help debug binding/encoding errors.
             param_types = [
                 (i, type(p).__name__, repr(p)[:100]) for i, p in enumerate(params)
             ]
             log_exception(
                 logger=logger,
-                message="SQLite parameter type error",
+                message="SQLite write error",
                 error=exc,
                 context={"message_id": message_id, "param_types": param_types},
             )
@@ -274,11 +300,30 @@ class MessageDataMixin(_Base):
         conn = await self._get_connection()
         request_message_id = payload.request_message_id
         request_user_id = payload.request_user_id
-        full_response = payload.full_response
-        thought_process = payload.thought_process
+        full_response = _sanitize_sqlite_text(payload.full_response)
+        thought_process = _sanitize_sqlite_text(payload.thought_process)
         grounding_metadata = payload.grounding_metadata
         tavily_metadata = payload.tavily_metadata
         failed_extractions = payload.failed_extractions
+
+        request_message_id_str = _sanitize_sqlite_text(str(request_message_id)) or ""
+        request_user_id_str = _sanitize_sqlite_text(str(request_user_id)) or ""
+
+        grounding_metadata_json = (
+            _sanitize_sqlite_text(json.dumps(grounding_metadata))
+            if grounding_metadata
+            else None
+        )
+        tavily_metadata_json = (
+            _sanitize_sqlite_text(json.dumps(tavily_metadata))
+            if tavily_metadata
+            else None
+        )
+        failed_extractions_json = (
+            _sanitize_sqlite_text(json.dumps(failed_extractions))
+            if failed_extractions
+            else None
+        )
         await conn.execute(
             """INSERT INTO message_response_data (
                    message_id,
@@ -300,21 +345,21 @@ class MessageDataMixin(_Base):
                    tavily_metadata = COALESCE(?, tavily_metadata),
                    failed_extractions = COALESCE(?, failed_extractions)""",
             (
-                str(message_id),
-                str(request_message_id),
-                str(request_user_id),
+                _sanitize_sqlite_text(str(message_id)),
+                request_message_id_str,
+                request_user_id_str,
                 full_response,
                 thought_process,
-                json.dumps(grounding_metadata) if grounding_metadata else None,
-                json.dumps(tavily_metadata) if tavily_metadata else None,
-                json.dumps(failed_extractions) if failed_extractions else None,
-                str(request_message_id),
-                str(request_user_id),
+                grounding_metadata_json,
+                tavily_metadata_json,
+                failed_extractions_json,
+                request_message_id_str,
+                request_user_id_str,
                 full_response,
                 thought_process,
-                json.dumps(grounding_metadata) if grounding_metadata else None,
-                json.dumps(tavily_metadata) if tavily_metadata else None,
-                json.dumps(failed_extractions) if failed_extractions else None,
+                grounding_metadata_json,
+                tavily_metadata_json,
+                failed_extractions_json,
             ),
         )
         await conn.commit()
