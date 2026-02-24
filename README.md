@@ -100,61 +100,68 @@ Or run local models with:
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/jakobdylanc/llmcord
+   git clone [https://github.com/jakobdylanc/llmcord](https://github.com/jakobdylanc/llmcord)
    cd llmcord
-   ```
 
-2. Install dependencies (using [uv](https://github.com/astral-sh/uv) is recommended):
-  ```bash
-  uv venv
-  # Windows:
-  .venv\Scripts\activate
-  # Linux/macOS:
-  source .venv/bin/activate
+```
 
-  uv pip install -r pyproject.toml
-  uv pip install -e .
-  ```
+2. Install dependencies (using [uv](https://docs.astral.sh/uv/) will automatically create a virtual environment and sync everything):
+```bash
+uv sync
+
+```
+
 
 3. Create a copy of `config-example.yaml` named `config.yaml` and set your `bot_token`, `providers`, and `models`.
 
 #### For Google Gemini CLI support:
+
 Run the login helper to generate your API key JSON:
+
 ```bash
 uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_main; raise SystemExit(cli_login_main())"
+
 ```
+
 Paste the resulting JSON into `providers.google-gemini-cli.api_key`.
 
 #### For Google Antigravity support:
+
 Run the Antigravity login helper to generate your API key JSON:
+
 ```bash
 uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_login_antigravity_main; raise SystemExit(cli_login_antigravity_main())"
+
 ```
+
 Paste the resulting JSON into `providers.google-antigravity.api_key`.
 
 4. Run the bot:
-  ```bash
-  python -m llmcord
-  ```
+```bash
+uv run python -m llmcord
+
+```
+
+
 
 ## Development
 
-- Run tests: `pytest`
-- Linting: `ruff check --select ALL . --fix`
-- Type checking: `ty check`
+* Run tests: `uv run pytest`
+* Linting: `uv run ruff check --select ALL . --fix`
+* Type checking: `uv run ty check`
 
 ## Notes
 
-- For improved PDF layout analysis, install [pymupdf-layout](https://pypi.org/project/pymupdf-layout/).
-- User identity awareness (the `name` parameter) is currently supported for OpenAI and xAI providers.
-- PRs are welcome!
+* For improved PDF layout analysis, install [pymupdf-layout](https://pypi.org/project/pymupdf-layout/).
+* User identity awareness (the `name` parameter) is currently supported for OpenAI and xAI providers.
+* PRs are welcome!
 
 ## Star History
 
 <a href="https://star-history.com/#jakobdylanc/llmcord&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date" />
-  </picture>
+<picture>
+<source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date&theme=dark" />
+<source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date" />
+<img alt="Star History Chart" src="https://api.star-history.com/svg?repos=jakobdylanc/llmcord&type=Date" />
+</picture>
 </a>
