@@ -556,15 +556,52 @@ def _clean_message_content(
 ) -> str:
     if not discord_bot.user:
         return curr_msg.content
-    cleaned_content = curr_msg.content.removeprefix(
-        discord_bot.user.mention,
-    ).lstrip()
-    return re.sub(
+
+    # Discord can emit mentions as either <@ID> or <@!ID>. Strip either if the
+    # message starts with a bot mention.
+    bot_id = getattr(discord_bot.user, "id", None)
+    if bot_id is None:
+        return curr_msg.content
+
+    cleaned_content = re.sub(
+        rf"^\s*<@!?{bot_id}>\s*",
+        "",
+        curr_msg.content,
+    )
+
+    cleaned_content = re.sub(
         r"\bat ai\b",
         "",
         cleaned_content,
         flags=re.IGNORECASE,
     ).lstrip()
+
+    # If the message was *only* a trigger ("at ai" and/or a bot mention) with no
+    # other content (in any order), use '.' as a minimal continuation prompt.
+    if not curr_msg.embeds:
+        trigger_present = bool(
+            re.search(
+                rf"<@!?{bot_id}>|\bat ai\b",
+                curr_msg.content,
+                flags=re.IGNORECASE,
+            ),
+        )
+        content_without_triggers = re.sub(
+            rf"<@!?{bot_id}>",
+            "",
+            curr_msg.content,
+            flags=re.IGNORECASE,
+        )
+        content_without_triggers = re.sub(
+            r"\bat ai\b",
+            "",
+            content_without_triggers,
+            flags=re.IGNORECASE,
+        )
+        if trigger_present and not content_without_triggers.strip():
+            return "."
+
+    return cleaned_content
 
 
 async def _load_cached_search_data(
