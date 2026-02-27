@@ -1028,7 +1028,7 @@ async def _resolve_reddit_share_url(
 
     # Strip query params added by Reddit share redirect
     if "?" in resolved_url:
-        resolved_url = resolved_url.split("?")[0]
+        resolved_url = resolved_url.split("?", maxsplit=1)[0]
     return resolved_url
 
 

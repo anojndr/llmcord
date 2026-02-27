@@ -182,7 +182,7 @@ class TavilySourcesView(discord.ui.View):
         if current_page:
             pages.append(current_page)
 
-        return pages if pages else [[]]
+        return pages or [[]]
 
     def update_buttons(self) -> None:
         """Update button disabled states based on current page."""

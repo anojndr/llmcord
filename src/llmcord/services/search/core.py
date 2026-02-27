@@ -116,7 +116,7 @@ def _format_result_item(
 
     raw_content = item.get("raw_content", "")
     content = item.get("content", "") or item.get("text", "")
-    page_content = raw_content if raw_content else content
+    page_content = raw_content or content
     page_content = page_content[:max_chars_per_url] if page_content else ""
 
     score_str = f" (relevance: {score:.2f})" if score is not None else ""

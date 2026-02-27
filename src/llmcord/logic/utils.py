@@ -34,7 +34,7 @@ def script_url(k: str, v: str) -> str:
 def patched_get_scripts_list(text: str) -> Iterator[str]:
     """Patched function for twscrape to handle script parsing."""
     try:
-        scripts = text.split('e=>e+"."+')[1].split('[e]+"a.js"')[0]
+        scripts = text.split('e=>e+"."+')[1].split('[e]+"a.js"', maxsplit=1)[0]
     except IndexError:
         logger.warning("Failed to extract scripts from Twitter page.")
         return

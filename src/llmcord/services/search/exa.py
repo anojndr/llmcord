@@ -66,7 +66,7 @@ def _safe_json_loads(text: str) -> object | None:
 def _as_str(value: object) -> str | None:
     if isinstance(value, str):
         stripped = value.strip()
-        return stripped if stripped else None
+        return stripped or None
     return None
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import email.utils
 import logging
+import math
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,7 +35,7 @@ def _parse_retry_after_seconds(value: str) -> float | None:
         seconds = None
 
     if seconds is not None:
-        if seconds >= 0:
+        if seconds >= 0 and math.isfinite(seconds):
             result = seconds
         return result
 
@@ -57,7 +58,7 @@ async def wait_before_retry(
     attempt: int,
     *,
     response: httpx.Response | None = None,
-    max_backoff_seconds: float = 30.0,
+    max_backoff_seconds: float = 10.0,
     unused_delay_1: float = 0.0,
     unused_delay_2: float = 0.0,
 ) -> None:
@@ -75,7 +76,7 @@ async def wait_before_retry(
             retry_after_seconds = _parse_retry_after_seconds(retry_after_header)
 
     if retry_after_seconds is not None:
-        delay = retry_after_seconds
+        delay = min(max_backoff_seconds, retry_after_seconds)
     else:
         base = 2 ** (attempt + 1)
         jitter = _JITTER_RANDOM.random()
