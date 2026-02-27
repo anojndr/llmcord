@@ -20,7 +20,6 @@ from llmcord.core.config import (
     get_or_create_httpx_client,
 )
 from llmcord.core.error_handling import log_exception
-from llmcord.services.http import DEFAULT_RETRYABLE_STATUSES, wait_before_retry
 from llmcord.services.search.config import EXA_MCP_URL, HTTP_OK, MAX_ERROR_CHARS
 
 logger = logging.getLogger(__name__)
@@ -705,58 +704,23 @@ def _extract_exa_results(result: dict, query: str) -> dict:
 
 async def _do_exa_request(
     client: httpx.AsyncClient,
-    client_type: str,
     exa_mcp_url: str,
     payload: dict,
     query: str,
-) -> dict | None:
-    """Execute Exa MCP search with retries for a specific client."""
-    retries = 2
-    for attempt in range(retries + 1):
-        try:
-            async with client.stream(
-                "POST",
-                exa_mcp_url,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                },
-                timeout=60.0,
-            ) as response:
-                if (
-                    response.status_code in DEFAULT_RETRYABLE_STATUSES
-                    and attempt < retries
-                ):
-                    logger.warning(
-                        "Exa MCP transient HTTP %s (%s) for query '%s', "
-                        "retrying (%s/%s)",
-                        response.status_code,
-                        client_type,
-                        query,
-                        attempt + 1,
-                        retries,
-                    )
-                    await wait_before_retry(attempt, response=response)
-                    continue
-
-                result = await _parse_exa_http_response(response, query)
-                return _extract_exa_results(result, query)
-
-        except (httpx.TimeoutException, httpx.RequestError) as exc:
-            if attempt < retries:
-                logger.warning(
-                    "Exa MCP %s error (%s) for query '%s', retrying (%s/%s)",
-                    type(exc).__name__,
-                    client_type,
-                    query,
-                    attempt + 1,
-                    retries,
-                )
-                await wait_before_retry(attempt)
-                continue
-            raise
-    return None
+) -> dict:
+    """Execute Exa MCP search for a specific client."""
+    async with client.stream(
+        "POST",
+        exa_mcp_url,
+        json=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        },
+        timeout=60.0,
+    ) as response:
+        result = await _parse_exa_http_response(response, query)
+        return _extract_exa_results(result, query)
 
 
 async def exa_search(
@@ -791,7 +755,6 @@ async def exa_search(
     try:
         result = await _do_exa_request(
             client,
-            "direct",
             exa_mcp_url,
             payload,
             query,
@@ -813,4 +776,4 @@ async def exa_search(
         )
         return {"error": str(exc), "query": query}
 
-    return result or {"error": "Retry attempts exhausted", "query": query}
+    return result
