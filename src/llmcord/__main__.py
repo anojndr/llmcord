@@ -1,6 +1,7 @@
 """Main entry point for running the llmcord application."""
 
 import asyncio
+import contextlib
 
 import llmcord.entrypoint
 from llmcord.core.error_handling import (
@@ -18,7 +19,8 @@ def main() -> None:
             runner.run(llmcord.entrypoint.main())
         except KeyboardInterrupt:
             # Ensure the Discord client is closed before the event loop is torn down.
-            runner.run(llmcord.entrypoint.shutdown())
+            with contextlib.suppress(KeyboardInterrupt):
+                runner.run(llmcord.entrypoint.shutdown())
 
 
 if __name__ == "__main__":
