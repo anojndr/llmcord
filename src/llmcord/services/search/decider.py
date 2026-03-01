@@ -91,6 +91,7 @@ async def _get_decider_response_text(
             base_url=run_config.base_url,
             extra_headers=run_config.extra_headers,
             model_parameters=run_config.model_parameters,
+            disable_tools=True,
         )
         async for chunk in stream:
             delta_content, _chunk_finish_reason, is_thinking = chunk

@@ -153,7 +153,9 @@ IMAGE_TOOL_DECLARATION: dict[str, object] = {
             },
             "model": {
                 "type": "string",
-                "description": ("Image model id (e.g., gemini-3.1-flash-image, imagen-3)."),
+                "description": (
+                    "Image model id (e.g., gemini-3.1-flash-image, imagen-3)."
+                ),
             },
             "aspectRatio": {
                 "type": "string",
@@ -868,6 +870,7 @@ def _build_cloudcode_request(
     project_id: str,
     messages: list[dict[str, object]],
     model_parameters: dict[str, object] | None,
+    disable_tools: bool = False,
 ) -> dict[str, object]:
     clean_model = _strip_thinking_level_suffix(model)
     contents, system_prompt = _convert_messages(messages)
@@ -908,7 +911,7 @@ def _build_cloudcode_request(
 
     request_body["safetySettings"] = DEFAULT_SAFETY_SETTINGS
 
-    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER:
+    if provider_id == GOOGLE_ANTIGRAVITY_PROVIDER and not disable_tools:
         request_body["tools"] = [
             {
                 "functionDeclarations": [IMAGE_TOOL_DECLARATION],
@@ -1459,6 +1462,7 @@ async def stream_google_gemini_cli(
     base_url: str | None,
     extra_headers: dict[str, str] | None,
     model_parameters: dict[str, object] | None,
+    disable_tools: bool = False,
 ) -> AsyncIterator[tuple[str, object | None, bool]]:
     """Stream text deltas from Cloud Code Assist SSE endpoint."""
     credentials = await get_valid_cloud_code_assist_credentials(api_key, provider_id)
@@ -1472,6 +1476,7 @@ async def stream_google_gemini_cli(
         project_id=credentials.project_id,
         messages=messages,
         model_parameters=model_parameters,
+        disable_tools=disable_tools,
     )
 
     endpoints = [
