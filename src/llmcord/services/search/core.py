@@ -162,6 +162,64 @@ def _format_query_results(
     return query_results, urls
 
 
+def _deduplicate_results(results: list[dict], queries: list[str]) -> list[dict]:
+    """Remove duplicate result items across queries, keeping the first occurrence.
+
+    Two items are considered duplicates when they share the same non-empty URL.
+    """
+    seen_urls: set[str] = set()
+    deduped: list[dict] = []
+
+    for result in results:
+        if not isinstance(result, dict):
+            deduped.append(result)
+            continue
+
+        if "error" in result:
+            deduped.append(result)
+            continue
+
+        items = result.get("results", [])
+        if not isinstance(items, list):
+            deduped.append(result)
+            continue
+
+        unique_items: list[dict] = []
+        for item in items:
+            url = item.get("url", "")
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            unique_items.append(item)
+
+        deduped_result = dict(result)
+        deduped_result["results"] = unique_items
+        deduped.append(deduped_result)
+
+    total_before = sum(
+        len(r.get("results", []))
+        for r in results
+        if isinstance(r, dict) and "error" not in r
+    )
+    total_after = sum(
+        len(r.get("results", []))
+        for r in deduped
+        if isinstance(r, dict) and "error" not in r
+    )
+    if total_before != total_after:
+        logger.info(
+            "Deduplicated search results: %s -> %s items"
+            " (removed %s duplicates across %s queries)",
+            total_before,
+            total_after,
+            total_before - total_after,
+            len(queries),
+        )
+
+    return deduped
+
+
 def _format_search_results(
     results: list[dict],
     queries: list[str],
@@ -180,7 +238,9 @@ def _format_search_results(
         len(queries),
     )
 
-    for query, result in zip(queries, results, strict=True):
+    deduped_results = _deduplicate_results(results, queries)
+
+    for query, result in zip(queries, deduped_results, strict=True):
         query_results, query_urls = _format_query_results(
             query,
             result,

@@ -73,9 +73,10 @@ ignore = [
     "C901", # extraction logic with fallback/retry is complex by design
 ]
 "tests/**" = [
-    "ANN",   # allow dynamic typing in tests
-    "ARG",   # allow unused fixture args in helpers
-    "D",     # no docstring requirements in tests
-    "S101",  # allow asserts in tests
-    "TC003", # don't require TYPE_CHECKING moves in tests
+    "ANN",     # allow dynamic typing in tests
+    "ARG",     # allow unused fixture args in helpers
+    "D",       # no docstring requirements in tests
+    "PLR2004", # allow magic values in test assertions
+    "S101",    # allow asserts in tests
+    "TC003",   # don't require TYPE_CHECKING moves in tests
 ]
