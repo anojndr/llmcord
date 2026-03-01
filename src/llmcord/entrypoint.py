@@ -33,6 +33,9 @@ async def shutdown() -> None:
     if not discord_bot.is_closed():
         with contextlib.suppress(Exception):
             await discord_bot.close()
+            # Wait for discord.py keep-alive threads to exit cleanly before the
+            # event loop is closed to prevent "Event loop is closed" errors.
+            await asyncio.sleep(0.25)
 
     if httpx_client is not None:
         with contextlib.suppress(Exception):
