@@ -116,7 +116,7 @@ DEFAULT_SAFETY_SETTINGS: list[dict[str, str]] = [
 ]
 
 IMAGE_TOOL_NAME = "generate_image"
-IMAGE_TOOL_DEFAULT_MODEL = "gemini-3-pro-image"
+IMAGE_TOOL_DEFAULT_MODEL = "gemini-3.1-flash-image"
 IMAGE_TOOL_DEFAULT_ASPECT_RATIO = "1:1"
 IMAGE_TOOL_READ_TIMEOUT_SECONDS = 180
 IMAGE_TOOL_MAX_ATTEMPTS_PER_ENDPOINT = 2
@@ -153,7 +153,7 @@ IMAGE_TOOL_DECLARATION: dict[str, object] = {
             },
             "model": {
                 "type": "string",
-                "description": ("Image model id (e.g., gemini-3-pro-image, imagen-3)."),
+                "description": ("Image model id (e.g., gemini-3.1-flash-image, imagen-3)."),
             },
             "aspectRatio": {
                 "type": "string",
