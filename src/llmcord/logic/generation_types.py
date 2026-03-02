@@ -126,3 +126,4 @@ class GenerationLoopState:
     timeout_strikes: dict[str, int] = field(default_factory=dict)
     image_input_removed: bool = False
     developer_instruction_removed: bool = False
+    total_attempts: int = 0

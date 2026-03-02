@@ -66,6 +66,7 @@ IMAGE_DATA_URL_RE = re.compile(r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=
 _THINKING_OPEN_TAG = "<thinking>"
 _THINKING_CLOSE_TAG = "</thinking>"
 SERVER_ERROR_STATUS_MIN = 500
+MAX_TOTAL_GENERATION_ATTEMPTS = 20
 
 _GEMINI_PROVIDER_IDS = {"gemini", "google-gemini-cli", "google-antigravity"}
 
@@ -1298,7 +1299,7 @@ async def _stream_response(
     state.grounding_metadata = grounding_metadata
 
 
-async def _run_generation_loop(  # noqa: C901
+async def _run_generation_loop(  # noqa: C901, PLR0915
     *,
     context: GenerationContext,
     state: GenerationState,
@@ -1325,6 +1326,21 @@ async def _run_generation_loop(  # noqa: C901
         state.thought_process = ""
         state.full_history_response = ""
         loop_state.attempt_count += 1
+        loop_state.total_attempts += 1
+
+        if loop_state.total_attempts > MAX_TOTAL_GENERATION_ATTEMPTS:
+            logger.error(
+                "Exceeded %s total generation attempts; aborting to prevent "
+                "infinite cycling",
+                MAX_TOTAL_GENERATION_ATTEMPTS,
+            )
+            state.response_contents = await render_exhausted_response(
+                state=state,
+                reply_helper=reply_helper,
+                last_error_msg=loop_state.last_error_msg,
+                fallback_state=loop_state.fallback_state,
+            )
+            break
 
         circuit_key = _circuit_breaker_key(loop_state.provider, loop_state.base_url)
         if loop_state.fallback_chain and await GLOBAL_PROVIDER_CIRCUIT_BREAKER.is_open(
