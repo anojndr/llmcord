@@ -6,7 +6,7 @@ import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from llmcord.globals import config, discord_bot, httpx_client
+from llmcord.globals import config, discord_bot, httpx_client, reddit_client
 from llmcord.server import start_server
 from llmcord.services.database import init_db
 
@@ -40,6 +40,10 @@ async def shutdown() -> None:
     if httpx_client is not None:
         with contextlib.suppress(Exception):
             await httpx_client.aclose()
+
+    if reddit_client is not None:
+        with contextlib.suppress(Exception):
+            await reddit_client.close()
 
     if _STATE.db_instance is not None:
         with contextlib.suppress(Exception):
