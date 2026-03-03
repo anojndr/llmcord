@@ -72,11 +72,28 @@ ignore = [
 "src/llmcord/services/extractors.py" = [
     "C901", # extraction logic with fallback/retry is complex by design
 ]
+"src/llmcord/services/llm/providers/openai_codex.py" = [
+    "A002",    # stdlib override requires parameter name `format`
+    "ANN401",  # stdlib override requires Any for variadic log_message args
+    "C901",    # OAuth and stream orchestration is intentionally complex
+    "EM101",   # runtime errors use explicit user-facing messages
+    "PLR0911", # parser helpers return early by design
+    "PLR0912", # stream parsing has multiple protocol branches
+    "PLR0913", # stream helper needs explicit request fields
+    "PLR0915", # provider flow has many statements by design
+    "S105",    # OAuth/token endpoint constants are not credentials
+    "TC003",   # keep runtime type imports explicit in this provider module
+    "TRY003",  # runtime errors are used for user-facing flow failures
+    "TRY301",  # direct raises keep stream handling explicit
+]
 "tests/**" = [
-    "ANN",     # allow dynamic typing in tests
-    "ARG",     # allow unused fixture args in helpers
-    "D",       # no docstring requirements in tests
-    "PLR2004", # allow magic values in test assertions
-    "S101",    # allow asserts in tests
-    "TC003",   # don't require TYPE_CHECKING moves in tests
+    "ANN",      # allow dynamic typing in tests
+    "ARG",      # allow unused fixture args in helpers
+    "ASYNC240", # allow pathlib in async tests for fixture readability
+    "D",        # no docstring requirements in tests
+    "PERF401",  # explicit append loops are fine in tests
+    "PLR2004",  # allow magic values in test assertions
+    "PLW0108",  # allow simple lambda monkeypatch helpers in tests
+    "S101",     # allow asserts in tests
+    "TC003",    # don't require TYPE_CHECKING moves in tests
 ]

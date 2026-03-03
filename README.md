@@ -38,6 +38,7 @@ llmcord supports remote models from:
 - [Google Gemini API](https://ai.google.dev/gemini-api/docs/models)
 - **Google Cloud Code Assist (Gemini CLI OAuth)**
 - **Google Antigravity (Gemini 3 / Claude / GPT-OSS via OAuth)**
+- **OpenAI Codex (ChatGPT OAuth)**
 - [Mistral API](https://docs.mistral.ai/getting-started/models/models_overview)
 - [Groq API](https://console.groq.com/docs/models)
 - [OpenRouter](https://openrouter.ai/models)
@@ -136,6 +137,20 @@ uv run python -c "from llmcord.services.llm.providers.gemini_cli import cli_logi
 
 Paste the resulting JSON into `providers.google-antigravity.api_key`.
 
+#### For OpenAI Codex support:
+
+Run the Codex login helper to generate your API key JSON:
+
+```bash
+uv run python -c "from llmcord.services.llm.providers.openai_codex import cli_login_openai_codex_main; raise SystemExit(cli_login_openai_codex_main())"
+
+```
+
+Paste the resulting JSON into `providers.openai-codex.api_key`.
+
+You can also use reasoning-effort aliases in model names, e.g.
+`openai-codex/gpt-5.2-xhigh` (sends `gpt-5.2` with `reasoning.effort=xhigh`).
+
 4. Run the bot:
 ```bash
 uv run python -m llmcord
@@ -153,7 +168,7 @@ uv run python -m llmcord
 ## Notes
 
 * For improved PDF layout analysis, install [pymupdf-layout](https://pypi.org/project/pymupdf-layout/).
-* User identity awareness (the `name` parameter) is currently supported for OpenAI and xAI providers.
+* User identity awareness (the `name` parameter) is currently supported for OpenAI, OpenAI Codex, and xAI providers.
 * PRs are welcome!
 
 ## Star History

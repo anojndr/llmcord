@@ -56,6 +56,10 @@ from llmcord.services.database.messages import MessageResponsePayload
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 from llmcord.services.llm.providers.gemini_errors import classify_gemini_error
+from llmcord.services.llm.providers.openai_codex import (
+    OPENAI_CODEX_PROVIDER,
+    stream_openai_codex,
+)
 from llmcord.services.llm.providers.openrouter_errors import (
     classify_openrouter_error,
     raise_for_openrouter_payload_error,
@@ -440,6 +444,25 @@ async def _get_stream(
                 chunk_finish_reason,
                 None,
                 image_payloads,
+                is_thinking,
+            )
+        return
+
+    if stream_config.provider == OPENAI_CODEX_PROVIDER:
+        stream = stream_openai_codex(
+            model=stream_config.actual_model,
+            messages=context.messages[::-1],
+            api_key=stream_config.api_key,
+            base_url=stream_config.base_url,
+            extra_headers=stream_config.extra_headers,
+            model_parameters=stream_config.model_parameters,
+        )
+        async for delta_content, chunk_finish_reason, is_thinking in stream:
+            yield (
+                delta_content,
+                chunk_finish_reason,
+                None,
+                [],
                 is_thinking,
             )
         return

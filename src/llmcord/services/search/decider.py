@@ -23,6 +23,10 @@ from llmcord.logic.generation_types import FallbackState
 from llmcord.services.llm import LiteLLMOptions, prepare_litellm_kwargs
 from llmcord.services.llm.providers.gemini_cli import stream_google_gemini_cli
 from llmcord.services.llm.providers.gemini_errors import classify_gemini_error
+from llmcord.services.llm.providers.openai_codex import (
+    OPENAI_CODEX_PROVIDER,
+    stream_openai_codex,
+)
 from llmcord.services.llm.providers.openrouter_errors import (
     classify_openrouter_error,
     raise_for_openrouter_payload_error,
@@ -95,6 +99,22 @@ async def _get_decider_response_text(
         )
         async for chunk in stream:
             delta_content, _chunk_finish_reason, is_thinking = chunk
+            if delta_content and not is_thinking:
+                response_chunks.append(delta_content)
+        return "".join(response_chunks).strip()
+
+    if run_config.provider == OPENAI_CODEX_PROVIDER:
+        response_chunks = []
+        stream = stream_openai_codex(
+            model=run_config.model,
+            messages=litellm_messages,
+            api_key=current_api_key,
+            base_url=run_config.base_url,
+            extra_headers=run_config.extra_headers,
+            model_parameters=run_config.model_parameters,
+            disable_tools=True,
+        )
+        async for delta_content, _chunk_finish_reason, is_thinking in stream:
             if delta_content and not is_thinking:
                 response_chunks.append(delta_content)
         return "".join(response_chunks).strip()

@@ -368,6 +368,44 @@ async def test_decider_google_antigravity_uses_native_stream(
 
 
 @pytest.mark.asyncio
+async def test_decider_openai_codex_uses_native_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_stream_openai_codex(**kwargs: object):
+        assert kwargs.get("model") == "gpt-5.2"
+        assert kwargs.get("disable_tools") is True
+        yield '{"needs_search":false}', None, False
+
+    async def _fail_litellm_call(**_kwargs: object) -> object:
+        msg = "litellm path should not be used for openai-codex decider"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.stream_openai_codex",
+        _fake_stream_openai_codex,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.litellm.acompletion",
+        _fail_litellm_call,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="openai-codex",
+            model="gpt-5.2",
+            api_keys=["codex-json-token"],
+            base_url="https://chatgpt.com/backend-api",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert exhausted is False
+    assert result == {"needs_search": False}
+
+
+@pytest.mark.asyncio
 async def test_decider_empty_response_skips_json_parse_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

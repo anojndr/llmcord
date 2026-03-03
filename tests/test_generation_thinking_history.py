@@ -202,6 +202,46 @@ async def test_google_antigravity_stream_uses_native_stream(
 
 
 @pytest.mark.asyncio
+async def test_openai_codex_stream_uses_native_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_openai_codex_stream(
+        **kwargs: object,
+    ) -> AsyncIterator[tuple[str, object | None, bool]]:
+        assert kwargs.get("model") == "gpt-5.2"
+        yield "hello", "stop", False
+
+    monkeypatch.setattr(
+        "llmcord.logic.generation.stream_openai_codex",
+        _fake_openai_codex_stream,
+    )
+
+    context = cast(
+        "GenerationContext",
+        SimpleNamespace(
+            messages=[{"role": "user", "content": "hello"}],
+            new_msg=SimpleNamespace(content="hello"),
+        ),
+    )
+
+    stream = _get_stream(
+        context=context,
+        stream_config=StreamConfig(
+            provider="openai-codex",
+            actual_model="gpt-5.2",
+            api_key="dummy-key",
+            base_url="https://chatgpt.com/backend-api",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+    chunk = await anext(stream)
+
+    assert chunk[0] == "hello"
+    assert chunk[1] == "stop"
+
+
+@pytest.mark.asyncio
 async def test_google_native_stream_extracts_and_sanitizes_image_data_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
