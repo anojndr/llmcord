@@ -8,10 +8,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import cast
 
 import discord
-import tiktoken
 from twscrape import xclid
-
-from llmcord.core.error_handling import log_exception
 
 try:
     import pymupdf.layout as pymupdf_layout  # type: ignore[import-not-found]
@@ -19,6 +16,8 @@ except ImportError:  # pragma: no cover - optional dependency
     pymupdf_layout = None
 
 logger = logging.getLogger(__name__)
+_ESTIMATED_CHARS_PER_TOKEN = 4
+_ESTIMATED_MULTIMODAL_PART_CHARS = 4800
 
 
 # =============================================================================
@@ -66,25 +65,6 @@ setattr(  # noqa: B010
 # =============================================================================
 # Message Processing Helpers (formerly logic/helpers.py)
 # =============================================================================
-
-# Pre-load tiktoken encoding at module load time to avoid first-message delay
-# This shifts the ~1-2s loading cost from first message to bot startup
-_tiktoken_encoding: tiktoken.Encoding | None
-try:
-    _tiktoken_encoding = tiktoken.get_encoding("o200k_base")
-except (KeyError, RuntimeError, ValueError) as exc:
-    log_exception(
-        logger=logger,
-        message="Failed to load tiktoken encoding",
-        error=exc,
-    )
-    _tiktoken_encoding = None
-
-
-def _get_tiktoken_encoding() -> tiktoken.Encoding | None:
-    """Get the pre-loaded tiktoken encoding."""
-    return _tiktoken_encoding
-
 
 _pymupdf_layout_activation_lock = threading.Lock()
 _pymupdf_layout_state: dict[str, bool | None] = {"activated": None}
@@ -240,52 +220,46 @@ def extract_research_command(
     return None, stripped
 
 
-def _count_msg_part_tokens(part: object, enc: tiktoken.Encoding) -> int:
-    """Count tokens in a single message part."""
+def _estimate_tokens_from_chars(char_count: int) -> int:
+    """Estimate token count using the compaction chars-per-token heuristic."""
+    if char_count <= 0:
+        return 0
+    return (char_count + _ESTIMATED_CHARS_PER_TOKEN - 1) // _ESTIMATED_CHARS_PER_TOKEN
+
+
+def _estimate_msg_part_chars(part: object) -> int:
+    """Estimate character count for a single multimodal message part."""
     if isinstance(part, Mapping):
         mapping = cast("Mapping[str, object]", part)
-        if mapping.get("type") != "text":
-            return 0
+        part_type = mapping.get("type")
         text = mapping.get("text", "")
-        if isinstance(text, str):
-            return len(enc.encode(text))
+        if part_type == "text" or (part_type is None and isinstance(text, str)):
+            if isinstance(text, str):
+                return len(text)
+            return 0
+        if part_type in {"image_url", "file"}:
+            # Match the compaction heuristic's fixed-size treatment for
+            # non-text multimodal inputs so data URLs do not dominate counts.
+            return _ESTIMATED_MULTIMODAL_PART_CHARS
+    return 0
+
+
+def _estimate_message_tokens(message: Mapping[str, object]) -> int:
+    """Estimate tokens for one OpenAI-style chat message."""
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return _estimate_tokens_from_chars(len(content))
+    if isinstance(content, list):
+        char_count = sum(_estimate_msg_part_chars(part) for part in content)
+        return _estimate_tokens_from_chars(char_count)
     return 0
 
 
 def count_conversation_tokens(messages: list[dict[str, object]]) -> int:
-    """Count tokens in the entire conversation using tiktoken."""
-    try:
-        # Use cached encoding for performance
-        enc = _get_tiktoken_encoding()
-        if not enc:
-            return 0
-        total_tokens = 0
-
-        for msg in messages:
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                # For multimodal content, count tokens in text parts only
-                for part in content:
-                    total_tokens += _count_msg_part_tokens(part, enc)
-            elif isinstance(content, str):
-                total_tokens += len(enc.encode(content))
-
-            # Count role tokens (approximation)
-            role = msg.get("role", "")
-            if isinstance(role, str):
-                total_tokens += len(enc.encode(role))
-    except (AttributeError, RuntimeError, TypeError, ValueError):
-        return 0
-    else:
-        return total_tokens
+    """Estimate conversation tokens using the compaction heuristic."""
+    return sum(_estimate_message_tokens(message) for message in messages)
 
 
 def count_text_tokens(text: str) -> int:
-    """Count tokens in a text string using tiktoken."""
-    try:
-        enc = _get_tiktoken_encoding()
-        if not enc:
-            return 0
-        return len(enc.encode(text))
-    except (AttributeError, RuntimeError, TypeError, ValueError):
-        return 0
+    """Estimate text tokens using the compaction heuristic."""
+    return _estimate_tokens_from_chars(len(text))

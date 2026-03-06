@@ -279,6 +279,25 @@ def test_footer_includes_image_removed_warning() -> None:
     assert "Image removed from input due to provider error" in footer_text
 
 
+def test_footer_formats_large_total_tokens_with_commas() -> None:
+    state = GenerationState(
+        response_msgs=[],
+        response_contents=["ok"],
+        input_tokens=0,
+        max_message_length=4096,
+        embed=None,
+        grounding_metadata=None,
+        last_edit_time=0.0,
+        generated_images=[],
+        generated_image_hashes=set(),
+        display_model="openrouter/openrouter/free",
+    )
+
+    footer_text = _build_footer_text(state=state, total_tokens=3575)
+
+    assert footer_text == "openrouter/openrouter/free | total tokens: 3,575"
+
+
 def test_not_found_error_is_retryable_generation_exception() -> None:
     assert litellm.exceptions.NotFoundError in GENERATION_EXCEPTIONS
 
