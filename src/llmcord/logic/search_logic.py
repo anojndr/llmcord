@@ -344,6 +344,7 @@ async def maybe_run_web_search(  # noqa: C901, PLR0912, PLR0915
             "base_url": decider_provider_config.get("base_url"),
             "extra_headers": decider_provider_config.get("extra_headers"),
             "model_parameters": decider_model_parameters,
+            "model_token_limits": context.config.get("model_token_limits"),
         }
 
         if decider_api_keys:

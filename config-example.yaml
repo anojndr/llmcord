@@ -159,6 +159,21 @@ models:
   # some-provider/some-model:
   #   disable_system_prompt: true
 
+# Context window / token limits used by automatic prompt compaction.
+# Keys may be either bare base model names or full provider/model strings.
+# Base-model entries apply to suffix aliases, for example:
+# - gpt-5.4 -> gpt-5.4-xhigh
+# - gemini-3.1-flash-preview -> gemini-3.1-flash-preview-high
+# Add future models here as needed.
+model_token_limits:
+  gpt-5.4: 257000
+  gemini-3-flash-preview: 249000
+  gemini-3.1-flash-preview: 249000
+  gemini-3.1-flash-lite-preview: 249000
+  openrouter/free: 199000
+  gemma-3-27b-it: 14000
+  mistral-large-latest: 255000
+
 # Channel model overrides (locks a channel to a specific model; disables /model there)
 channel_model_overrides:
   "123456789012345678": gemini/gemini-3-flash-low

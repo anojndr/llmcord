@@ -28,6 +28,7 @@ from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.response_view import (
     ResponseView,
 )
+from llmcord.logic.compaction import ModelRunConfig, compact_messages
 from llmcord.logic.content import is_googlelens_query
 from llmcord.logic.generation import GenerationContext, generate_response
 from llmcord.logic.messages import MessageBuildContext, build_messages
@@ -396,6 +397,25 @@ async def process_message(  # noqa: C901, PLR0915
             ),
             is_googlelens_query_func=is_googlelens_query,
         )
+        chronological_messages = messages[::-1]
+        compaction_result = await compact_messages(
+            chronological_messages,
+            config=ModelRunConfig(
+                provider=provider_settings.provider,
+                model=provider_settings.actual_model,
+                provider_slash_model=provider_settings.provider_slash_model,
+                api_keys=provider_settings.api_keys,
+                base_url=provider_settings.base_url,
+                extra_headers=provider_settings.extra_headers,
+                model_parameters=provider_settings.model_parameters,
+                configured_token_limits=cast(
+                    "dict[str, object] | None",
+                    config.get("model_token_limits"),
+                ),
+            ),
+        )
+        messages = compaction_result.messages[::-1]
+        user_warnings.update(compaction_result.warnings)
 
         await _update_processing_progress(
             processing_msg,

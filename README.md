@@ -97,6 +97,11 @@ Or run local models with:
 - Models are configured as `provider/model` (e.g., `gemini/gemini-2.5-pro`).
 - Add `:vision` to a model key to force vision support if not auto-detected.
 
+### Model token limits
+- Prompt compaction reads `model_token_limits` from `config.yaml`.
+- Keys may be either full `provider/model` strings or bare base model names.
+- Base-model entries apply to known suffix aliases such as `gpt-5.4-xhigh` and `gemini-3.1-flash-preview-high`.
+
 ## Instructions
 
 1. Clone the repo:

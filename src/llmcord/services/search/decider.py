@@ -16,6 +16,7 @@ import litellm
 from llmcord.core.config import get_config
 from llmcord.core.config.utils import is_gemini_model
 from llmcord.core.error_handling import log_exception
+from llmcord.logic.compaction import ModelRunConfig, compact_messages
 from llmcord.logic.fallbacks import (
     FallbackModel,
     apply_fallback_config,
@@ -74,6 +75,7 @@ class DeciderRunConfig:
     base_url: str | None
     extra_headers: dict[str, str] | None
     model_parameters: dict[str, object] | None
+    model_token_limits: dict[str, object] | None = None
 
 
 def _get_decider_runner() -> Callable[
@@ -285,6 +287,20 @@ async def _run_decider_once(
                 include_analysis_prompt=True,
                 is_gemini=decider_is_gemini,
             )
+            compaction_result = await compact_messages(
+                litellm_messages,
+                config=ModelRunConfig(
+                    provider=run_config.provider,
+                    model=run_config.model,
+                    api_keys=[current_api_key],
+                    base_url=run_config.base_url,
+                    extra_headers=run_config.extra_headers,
+                    model_parameters=run_config.model_parameters,
+                    configured_token_limits=run_config.model_token_limits,
+                ),
+                use_model_summary=False,
+            )
+            litellm_messages = compaction_result.messages
 
             if len(litellm_messages) <= MIN_DECIDER_MESSAGES:
                 exhausted_keys = False
@@ -415,6 +431,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
     base_url = decider_config.get("base_url")
     extra_headers = decider_config.get("extra_headers")
     model_parameters = decider_config.get("model_parameters")
+    model_token_limits = decider_config.get("model_token_limits")
 
     default_result = {"needs_search": False}
     config = get_config()
@@ -442,6 +459,7 @@ async def decide_web_search(messages: list, decider_config: dict) -> dict:
                 base_url=base_url,
                 extra_headers=extra_headers,
                 model_parameters=model_parameters,
+                model_token_limits=model_token_limits,
             ),
         )
         if result is not None:

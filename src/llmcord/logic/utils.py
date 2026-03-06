@@ -220,7 +220,7 @@ def extract_research_command(
     return None, stripped
 
 
-def _estimate_tokens_from_chars(char_count: int) -> int:
+def estimate_tokens_from_chars(char_count: int) -> int:
     """Estimate token count using the compaction chars-per-token heuristic."""
     if char_count <= 0:
         return 0
@@ -244,22 +244,22 @@ def _estimate_msg_part_chars(part: object) -> int:
     return 0
 
 
-def _estimate_message_tokens(message: Mapping[str, object]) -> int:
+def estimate_message_tokens(message: Mapping[str, object]) -> int:
     """Estimate tokens for one OpenAI-style chat message."""
     content = message.get("content", "")
     if isinstance(content, str):
-        return _estimate_tokens_from_chars(len(content))
+        return estimate_tokens_from_chars(len(content))
     if isinstance(content, list):
         char_count = sum(_estimate_msg_part_chars(part) for part in content)
-        return _estimate_tokens_from_chars(char_count)
+        return estimate_tokens_from_chars(char_count)
     return 0
 
 
 def count_conversation_tokens(messages: list[dict[str, object]]) -> int:
     """Estimate conversation tokens using the compaction heuristic."""
-    return sum(_estimate_message_tokens(message) for message in messages)
+    return sum(estimate_message_tokens(message) for message in messages)
 
 
 def count_text_tokens(text: str) -> int:
     """Estimate text tokens using the compaction heuristic."""
-    return _estimate_tokens_from_chars(len(text))
+    return estimate_tokens_from_chars(len(text))
