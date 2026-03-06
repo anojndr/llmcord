@@ -1,10 +1,12 @@
 """Web search decision logic."""
 
 import asyncio
+import contextlib
 import importlib
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -43,6 +45,9 @@ from llmcord.services.search.utils import (
 logger = logging.getLogger(__name__)
 
 _FALLBACK_MODEL_PARTS = 3
+_DECIDER_FIRST_TOKEN_TIMEOUT_SECONDS = 10.0
+
+DeciderStreamChunk = tuple[str, object | None, bool]
 
 
 def _collect_litellm_exceptions() -> tuple[type[Exception], ...]:
@@ -86,7 +91,6 @@ async def _get_decider_response_text(
     litellm_messages: list[dict[str, object]],
 ) -> str:
     if run_config.provider in {"google-gemini-cli", "google-antigravity"}:
-        response_chunks: list[str] = []
         stream = stream_google_gemini_cli(
             provider_id=run_config.provider,
             model=run_config.model,
@@ -97,14 +101,9 @@ async def _get_decider_response_text(
             model_parameters=run_config.model_parameters,
             disable_tools=True,
         )
-        async for chunk in stream:
-            delta_content, _chunk_finish_reason, is_thinking = chunk
-            if delta_content and not is_thinking:
-                response_chunks.append(delta_content)
-        return "".join(response_chunks).strip()
+        return await _collect_decider_stream_text(stream)
 
     if run_config.provider == OPENAI_CODEX_PROVIDER:
-        response_chunks = []
         stream = stream_openai_codex(
             model=run_config.model,
             messages=litellm_messages,
@@ -114,11 +113,83 @@ async def _get_decider_response_text(
             model_parameters=run_config.model_parameters,
             disable_tools=True,
         )
-        async for delta_content, _chunk_finish_reason, is_thinking in stream:
+        return await _collect_decider_stream_text(stream)
+
+    return await _collect_decider_stream_text(
+        _stream_litellm_decider_response(
+            run_config=run_config,
+            current_api_key=current_api_key,
+            litellm_messages=litellm_messages,
+        ),
+    )
+
+
+def _raise_decider_first_token_timeout() -> None:
+    msg = (
+        "Search decider model did not produce the first token within "
+        f"{_DECIDER_FIRST_TOKEN_TIMEOUT_SECONDS:.1f} seconds"
+    )
+    raise TimeoutError(msg)
+
+
+async def _close_async_iterator(stream: AsyncIterator[DeciderStreamChunk]) -> None:
+    aclose = getattr(stream, "aclose", None)
+    if callable(aclose):
+        with contextlib.suppress(Exception):
+            await aclose()
+
+
+def _remaining_decider_first_token_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        _raise_decider_first_token_timeout()
+    return remaining
+
+
+async def _collect_decider_stream_text(
+    stream: AsyncIterator[DeciderStreamChunk],
+) -> str:
+    response_chunks: list[str] = []
+    deadline = time.monotonic() + _DECIDER_FIRST_TOKEN_TIMEOUT_SECONDS
+    saw_first_token = False
+
+    try:
+        while True:
+            if saw_first_token:
+                delta_content, chunk_finish_reason, is_thinking = await anext(stream)
+            else:
+                try:
+                    (
+                        delta_content,
+                        chunk_finish_reason,
+                        is_thinking,
+                    ) = await asyncio.wait_for(
+                        anext(stream),
+                        timeout=_remaining_decider_first_token_timeout(deadline),
+                    )
+                except TimeoutError:
+                    _raise_decider_first_token_timeout()
+
             if delta_content and not is_thinking:
                 response_chunks.append(delta_content)
-        return "".join(response_chunks).strip()
+                saw_first_token = True
 
+            if chunk_finish_reason is not None:
+                break
+    except StopAsyncIteration:
+        return "".join(response_chunks).strip()
+    finally:
+        await _close_async_iterator(stream)
+
+    return "".join(response_chunks).strip()
+
+
+async def _stream_litellm_decider_response(
+    *,
+    run_config: DeciderRunConfig,
+    current_api_key: str,
+    litellm_messages: list[dict[str, object]],
+) -> AsyncIterator[DeciderStreamChunk]:
     litellm_kwargs = prepare_litellm_kwargs(
         provider=run_config.provider,
         model=run_config.model,
@@ -126,12 +197,25 @@ async def _get_decider_response_text(
         api_key=current_api_key,
         options=LiteLLMOptions(
             base_url=run_config.base_url,
+            extra_headers=run_config.extra_headers,
+            stream=True,
+            model_parameters=run_config.model_parameters,
         ),
     )
-    response = await litellm.acompletion(**litellm_kwargs)
-    if run_config.provider == "openrouter":
-        raise_for_openrouter_payload_error(payload_obj=response)
-    return (response.choices[0].message.content or "").strip()
+    litellm_kwargs["timeout"] = _DECIDER_FIRST_TOKEN_TIMEOUT_SECONDS
+
+    stream = await litellm.acompletion(**litellm_kwargs)
+    async for chunk in stream:
+        if run_config.provider == "openrouter":
+            raise_for_openrouter_payload_error(payload_obj=chunk)
+
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+
+        choice = choices[0]
+        delta_content = getattr(getattr(choice, "delta", None), "content", "") or ""
+        yield delta_content, getattr(choice, "finish_reason", None), False
 
 
 def _parse_decider_response(

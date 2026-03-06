@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import pathlib
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -43,6 +45,20 @@ class _FakeDB:
 class _DummyBot:
     def __init__(self, user_id: int = 999) -> None:
         self.user = FakeUser(user_id)
+
+
+def _make_litellm_chunk(
+    content: str,
+    finish_reason: object | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=content),
+                finish_reason=finish_reason,
+            ),
+        ],
+    )
 
 
 @pytest.mark.asyncio
@@ -552,6 +568,47 @@ async def test_decider_openai_codex_uses_native_stream(
 
 
 @pytest.mark.asyncio
+async def test_decider_litellm_stream_uses_ten_second_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    async def _fake_acompletion(**kwargs: object):
+        captured_kwargs.update(kwargs)
+
+        async def _fake_stream():
+            yield _make_litellm_chunk('{"needs_search":')
+            yield _make_litellm_chunk("false}", "stop")
+
+        return _fake_stream()
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.litellm.acompletion",
+        _fake_acompletion,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="openrouter",
+            model="free",
+            api_keys=["key"],
+            base_url="https://openrouter.ai/api/v1",
+            extra_headers={"HTTP-Referer": "https://example.com"},
+            model_parameters=None,
+        ),
+    )
+
+    assert exhausted is False
+    assert result == {"needs_search": False}
+    assert captured_kwargs["stream"] is True
+    assert captured_kwargs["timeout"] == 10.0
+    assert captured_kwargs["extra_headers"] == {
+        "HTTP-Referer": "https://example.com",
+    }
+
+
+@pytest.mark.asyncio
 async def test_decider_empty_response_skips_json_parse_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -597,6 +654,76 @@ async def test_decider_httpx_timeout_marks_exhausted(
     monkeypatch.setattr(
         "llmcord.services.search.decider._get_decider_response_text",
         _fake_get_decider_response_text,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="google-gemini-cli",
+            model="gemini-3-flash-preview-minimal",
+            api_keys=["refresh-token"],
+            base_url="https://cloudcode-pa.googleapis.com",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert result is None
+    assert exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_decider_litellm_first_token_timeout_marks_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_acompletion(**_kwargs: object):
+        async def _fake_stream():
+            await asyncio.sleep(0.05)
+            yield _make_litellm_chunk('{"needs_search":false}', "stop")
+
+        return _fake_stream()
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._DECIDER_FIRST_TOKEN_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.litellm.acompletion",
+        _fake_acompletion,
+    )
+
+    result, exhausted = await _run_decider_once(
+        [{"role": "user", "content": "hello"}],
+        DeciderRunConfig(
+            provider="openrouter",
+            model="free",
+            api_keys=["key"],
+            base_url="https://openrouter.ai/api/v1",
+            extra_headers=None,
+            model_parameters=None,
+        ),
+    )
+
+    assert result is None
+    assert exhausted is True
+
+
+@pytest.mark.asyncio
+async def test_decider_first_token_timeout_ignores_thinking_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_stream_google_gemini_cli(**_kwargs: object):
+        yield "", None, True
+        await asyncio.sleep(0.05)
+        yield '{"needs_search":false}', "stop", False
+
+    monkeypatch.setattr(
+        "llmcord.services.search.decider._DECIDER_FIRST_TOKEN_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "llmcord.services.search.decider.stream_google_gemini_cli",
+        _fake_stream_google_gemini_cli,
     )
 
     result, exhausted = await _run_decider_once(
