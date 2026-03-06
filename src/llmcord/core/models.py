@@ -23,6 +23,7 @@ class MsgNode:
     thought_signature: str | None = None
 
     has_bad_attachments: bool = False
+    has_failed_media_preprocessing: bool = False
     fetch_parent_failed: bool = False
 
     parent_msg: discord.Message | None = None

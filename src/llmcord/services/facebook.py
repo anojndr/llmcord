@@ -283,12 +283,14 @@ async def maybe_download_facebook_videos(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
+    force_download: bool = False,
 ) -> list[DownloadedFacebookVideo]:
     """Download Facebook videos via FDownloader for Gemini requests."""
     result = await maybe_download_facebook_videos_with_failures(
         cleaned_content=cleaned_content,
         actual_model=actual_model,
         httpx_client=httpx_client,
+        force_download=force_download,
     )
     return result.videos
 
@@ -298,9 +300,10 @@ async def maybe_download_facebook_videos_with_failures(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
+    force_download: bool = False,
 ) -> FacebookDownloadResult:
     """Download Facebook videos and return URLs that did not yield a video payload."""
-    if not is_gemini_model(actual_model):
+    if not force_download and not is_gemini_model(actual_model):
         return FacebookDownloadResult(videos=[], failed_urls=[])
 
     facebook_urls = _extract_facebook_urls(cleaned_content)
@@ -370,12 +373,14 @@ async def maybe_download_facebook_video(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
+    force_download: bool = False,
 ) -> DownloadedFacebookVideo | None:
     """Download the first Facebook video for Gemini requests when a URL is present."""
     downloaded_videos = await maybe_download_facebook_videos(
         cleaned_content=cleaned_content,
         actual_model=actual_model,
         httpx_client=httpx_client,
+        force_download=force_download,
     )
     if not downloaded_videos:
         return None

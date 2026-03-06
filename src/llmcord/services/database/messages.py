@@ -44,6 +44,12 @@ def _sanitize_sqlite_text(value: str | None) -> str | None:
     return "".join(chars) if changed else value
 
 
+def _sanitize_text_list(values: list[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    return [_sanitize_sqlite_text(str(value)) or "" for value in values]
+
+
 @dataclass(slots=True)
 class MessageResponsePayload:
     """Payload for storing message response data."""
@@ -69,6 +75,8 @@ class MessageDataMixin(_Base):
                 message_id TEXT PRIMARY KEY,
                 search_results TEXT,
                 tavily_metadata TEXT,
+                media_preprocessing_results TEXT,
+                media_preprocessing_failed INTEGER,
                 lens_results TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -144,6 +152,18 @@ class MessageDataMixin(_Base):
         with contextlib.suppress(sqlite3.Error, ValueError):
             await conn.execute(
                 "ALTER TABLE message_search_data ADD COLUMN lens_results TEXT",
+            )
+            await conn.commit()
+        with contextlib.suppress(sqlite3.Error, ValueError):
+            await conn.execute(
+                "ALTER TABLE message_search_data "
+                "ADD COLUMN media_preprocessing_results TEXT",
+            )
+            await conn.commit()
+        with contextlib.suppress(sqlite3.Error, ValueError):
+            await conn.execute(
+                "ALTER TABLE message_search_data "
+                "ADD COLUMN media_preprocessing_failed INTEGER",
             )
             await conn.commit()
 
@@ -245,6 +265,159 @@ class MessageDataMixin(_Base):
             search_results,
             tavily_metadata,
             lens_results,
+        )
+
+    async def _save_message_media_preprocessing_data_impl(
+        self,
+        message_id: str,
+        *,
+        media_preprocessing_results: list[str] | None = None,
+        media_preprocessing_failed: bool | None = None,
+    ) -> None:
+        """Save cached media-preprocessor output for a message."""
+        conn = await self._get_connection()
+
+        try:
+            msg_id_str = str(int(message_id))
+        except (ValueError, TypeError):
+            msg_id_str = str(message_id)
+        msg_id_str = _sanitize_sqlite_text(msg_id_str) or ""
+
+        media_preprocessing_json: str | None = None
+        if media_preprocessing_results is not None:
+            sanitized_media_preprocessing_results = _sanitize_text_list(
+                media_preprocessing_results,
+            )
+            media_preprocessing_json = _sanitize_sqlite_text(
+                json.dumps(sanitized_media_preprocessing_results, default=str),
+            )
+
+        media_preprocessing_failed_int: int | None = None
+        if isinstance(media_preprocessing_failed, bool):
+            media_preprocessing_failed_int = int(media_preprocessing_failed)
+
+        await conn.execute(
+            """INSERT INTO message_search_data (
+                   message_id,
+                   media_preprocessing_results,
+                   media_preprocessing_failed
+               )
+               VALUES (?, ?, ?)
+               ON CONFLICT(message_id) DO UPDATE SET
+                   media_preprocessing_results = COALESCE(
+                       ?,
+                       media_preprocessing_results
+                   ),
+                   media_preprocessing_failed = COALESCE(
+                       ?,
+                       media_preprocessing_failed
+                   )""",
+            (
+                msg_id_str,
+                media_preprocessing_json,
+                media_preprocessing_failed_int,
+                media_preprocessing_json,
+                media_preprocessing_failed_int,
+            ),
+        )
+        await conn.commit()
+        logger.info(
+            "Saved media preprocessing data for message %s",
+            message_id,
+        )
+
+    def save_message_media_preprocessing_data(
+        self,
+        message_id: str,
+        *,
+        media_preprocessing_results: list[str] | None = None,
+        media_preprocessing_failed: bool | None = None,
+    ) -> None:
+        """Save media-preprocessor output from sync code."""
+        self._run_db_call(
+            self._save_message_media_preprocessing_data_impl,
+            message_id,
+            media_preprocessing_results=media_preprocessing_results,
+            media_preprocessing_failed=media_preprocessing_failed,
+        )
+
+    async def asave_message_media_preprocessing_data(
+        self,
+        message_id: str,
+        *,
+        media_preprocessing_results: list[str] | None = None,
+        media_preprocessing_failed: bool | None = None,
+    ) -> None:
+        """Save media-preprocessor output without blocking the event loop."""
+        await self._run_db_call_async(
+            self._save_message_media_preprocessing_data_impl,
+            message_id,
+            media_preprocessing_results=media_preprocessing_results,
+            media_preprocessing_failed=media_preprocessing_failed,
+        )
+
+    async def _get_message_media_preprocessing_data_impl(
+        self,
+        message_id: str,
+    ) -> tuple[list[str] | None, bool | None]:
+        """Get cached media-preprocessor output for a message."""
+        conn = await self._get_connection()
+        async with conn.execute(
+            "SELECT media_preprocessing_results, media_preprocessing_failed "
+            "FROM message_search_data WHERE message_id = ?",
+            (str(message_id),),
+        ) as cursor:
+            result = await cursor.fetchone()
+
+        if not result:
+            return None, None
+
+        media_preprocessing_results: list[str] | None = None
+        if result[0]:
+            try:
+                loaded_results = json.loads(result[0])
+            except json.JSONDecodeError:
+                logger.warning(
+                    "Failed to decode media preprocessing cache for message %s",
+                    message_id,
+                )
+            else:
+                if isinstance(loaded_results, list):
+                    media_preprocessing_results = [
+                        _sanitize_sqlite_text(str(item)) or ""
+                        for item in loaded_results
+                    ]
+
+        media_preprocessing_failed: bool | None = None
+        if result[1] is not None:
+            media_preprocessing_failed = bool(result[1])
+
+        logger.info(
+            "Retrieved media preprocessing cache for message %s: results=%s failed=%s",
+            message_id,
+            bool(media_preprocessing_results),
+            media_preprocessing_failed,
+        )
+        return media_preprocessing_results, media_preprocessing_failed
+
+    def get_message_media_preprocessing_data(
+        self,
+        message_id: str,
+    ) -> tuple[list[str] | None, bool | None]:
+        """Get media-preprocessor output from sync code."""
+        return self._run_db_call(
+            self._get_message_media_preprocessing_data_impl,
+            message_id,
+        )
+
+    async def aget_message_media_preprocessing_data(
+        self,
+        message_id: str,
+    ) -> tuple[list[str] | None, bool | None]:
+        """Get media-preprocessor output without blocking the event loop."""
+        return await self._run_db_call_async(
+            self._get_message_media_preprocessing_data_impl,
+            message_id,
         )
 
     async def _get_message_search_data_impl(

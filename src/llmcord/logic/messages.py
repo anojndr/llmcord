@@ -27,6 +27,9 @@ from llmcord.logic.content import (
     get_allowed_attachment_types,
     is_googlelens_query,
 )
+from llmcord.logic.media_preprocessing import (
+    preprocess_media_attachments_with_gemini,
+)
 from llmcord.logic.utils import (
     append_search_to_content,
     build_node_text_parts,
@@ -37,6 +40,12 @@ from llmcord.services.facebook import maybe_download_facebook_videos_with_failur
 from llmcord.services.tiktok import maybe_download_tiktok_videos_with_failures
 
 logger = logging.getLogger(__name__)
+_SOCIAL_VIDEO_URL_TOKENS = (
+    "tiktok.com",
+    "vt.tiktok.com",
+    "facebook.com",
+    "fb.watch",
+)
 
 
 @dataclass(slots=True)
@@ -153,8 +162,23 @@ async def _populate_node_if_needed(
         curr_node=curr_node,
         context=context,
     )
+    (
+        cached_media_preprocessing_parts,
+        cached_media_preprocessing_failed,
+    ) = await _load_cached_media_preprocessing_data_if_needed(
+        cleaned_content=cleaned_content,
+        curr_msg=curr_msg,
+        context=context,
+    )
+    has_cached_media_preprocessing = (
+        cached_media_preprocessing_parts is not None
+        or cached_media_preprocessing_failed is not None
+    )
 
-    allowed_types = get_allowed_attachment_types(context.actual_model)
+    allowed_types = get_allowed_attachment_types(
+        context.actual_model,
+        include_audio_video_for_non_gemini=not has_cached_media_preprocessing,
+    )
     good_attachments = [
         att
         for att in curr_msg.attachments
@@ -176,12 +200,32 @@ async def _populate_node_if_needed(
         httpx_client=context.httpx_client,
     )
 
-    if is_gemini_model(context.actual_model):
+    if not has_cached_media_preprocessing:
         await _add_social_video_attachments(
             cleaned_content=cleaned_content,
             context=context,
             curr_node=curr_node,
             processed_attachments=processed_attachments,
+        )
+
+    if has_cached_media_preprocessing:
+        media_preprocessing_parts = cached_media_preprocessing_parts or []
+        curr_node.has_failed_media_preprocessing = bool(
+            cached_media_preprocessing_failed,
+        )
+    else:
+        (
+            media_preprocessing_parts,
+            curr_node.has_failed_media_preprocessing,
+        ) = await preprocess_media_attachments_with_gemini(
+            actual_model=context.actual_model,
+            processed_attachments=processed_attachments,
+            status_callback=context.status_callback,
+        )
+        await _save_cached_media_preprocessing_data_if_needed(
+            curr_msg=curr_msg,
+            media_preprocessing_parts=media_preprocessing_parts,
+            media_preprocessing_failed=curr_node.has_failed_media_preprocessing,
         )
 
     curr_node.text = _build_initial_text(
@@ -224,7 +268,7 @@ async def _populate_node_if_needed(
         curr_msg=curr_msg,
         good_attachments=good_attachments,
         attachment_responses=attachment_responses,
-        extra_parts=extra_parts,
+        extra_parts=[*media_preprocessing_parts, *extra_parts],
     )
 
     pdf_images = await extract_pdf_images_for_model(
@@ -252,6 +296,10 @@ async def _populate_node_if_needed(
     curr_node.user_id = curr_msg.author.id if curr_node.role == "user" else None
     curr_node.has_bad_attachments = len(curr_msg.attachments) > len(
         good_attachments,
+    ) + _count_skipped_cached_media_attachments(
+        curr_msg=curr_msg,
+        context=context,
+        has_cached_media_preprocessing=has_cached_media_preprocessing,
     )
 
     await _set_parent_message(
@@ -296,6 +344,7 @@ async def _add_social_video_attachments(
         cleaned_content=cleaned_content,
         actual_model=context.actual_model,
         httpx_client=context.httpx_client,
+        force_download=True,
     )
     if tiktok_result.failed_urls:
         curr_node.failed_extractions.extend(tiktok_result.failed_urls)
@@ -326,6 +375,7 @@ async def _add_social_video_attachments(
         cleaned_content=cleaned_content,
         actual_model=context.actual_model,
         httpx_client=context.httpx_client,
+        force_download=True,
     )
     if facebook_result.failed_urls:
         curr_node.failed_extractions.extend(facebook_result.failed_urls)
@@ -342,6 +392,102 @@ async def _add_social_video_attachments(
             "Added %s downloaded Facebook video attachment(s) for Gemini processing",
             len(facebook_result.videos),
         )
+
+
+def _message_has_direct_media_attachments(curr_msg: discord.Message) -> bool:
+    return any(
+        isinstance(att.content_type, str)
+        and att.content_type.startswith(("audio/", "video/"))
+        for att in curr_msg.attachments
+    )
+
+
+def _cleaned_content_has_social_video_urls(cleaned_content: str) -> bool:
+    cleaned_lower = cleaned_content.lower()
+    return any(token in cleaned_lower for token in _SOCIAL_VIDEO_URL_TOKENS)
+
+
+def _message_may_use_media_preprocessing(
+    *,
+    curr_msg: discord.Message,
+    cleaned_content: str,
+    context: MessageBuildContext,
+) -> bool:
+    return not is_gemini_model(context.actual_model) and (
+        _message_has_direct_media_attachments(curr_msg)
+        or _cleaned_content_has_social_video_urls(cleaned_content)
+    )
+
+
+async def _load_cached_media_preprocessing_data_if_needed(
+    *,
+    cleaned_content: str,
+    curr_msg: discord.Message,
+    context: MessageBuildContext,
+) -> tuple[list[str] | None, bool | None]:
+    if not _message_may_use_media_preprocessing(
+        curr_msg=curr_msg,
+        cleaned_content=cleaned_content,
+        context=context,
+    ):
+        return None, None
+
+    db = get_db()
+    async_get_data = getattr(db, "aget_message_media_preprocessing_data", None)
+    if callable(async_get_data):
+        return await async_get_data(str(curr_msg.id))
+
+    sync_get_data = getattr(db, "get_message_media_preprocessing_data", None)
+    if callable(sync_get_data):
+        return await asyncio.to_thread(sync_get_data, str(curr_msg.id))
+
+    return None, None
+
+
+async def _save_cached_media_preprocessing_data_if_needed(
+    *,
+    curr_msg: discord.Message,
+    media_preprocessing_parts: list[str],
+    media_preprocessing_failed: bool,
+) -> None:
+    if not media_preprocessing_parts and not media_preprocessing_failed:
+        return
+
+    db = get_db()
+    async_save_data = getattr(db, "asave_message_media_preprocessing_data", None)
+    if callable(async_save_data):
+        await async_save_data(
+            str(curr_msg.id),
+            media_preprocessing_results=media_preprocessing_parts,
+            media_preprocessing_failed=media_preprocessing_failed,
+        )
+        return
+
+    sync_save_data = getattr(db, "save_message_media_preprocessing_data", None)
+    if callable(sync_save_data):
+        await asyncio.to_thread(
+            sync_save_data,
+            str(curr_msg.id),
+            media_preprocessing_results=media_preprocessing_parts,
+            media_preprocessing_failed=media_preprocessing_failed,
+        )
+
+
+def _count_skipped_cached_media_attachments(
+    *,
+    curr_msg: discord.Message,
+    context: MessageBuildContext,
+    has_cached_media_preprocessing: bool,
+) -> int:
+    if not has_cached_media_preprocessing or is_gemini_model(context.actual_model):
+        return 0
+
+    return sum(
+        1
+        for att in curr_msg.attachments
+        if isinstance(att.content_type, str)
+        and att.content_type.startswith(("audio/", "video/"))
+    )
 
 
 def _supports_provider_model_image_input(*, context: MessageBuildContext) -> bool:
@@ -661,6 +807,8 @@ def _update_user_warnings(
         )
     if curr_node.has_bad_attachments:
         user_warnings.add("⚠️ Unsupported attachments")
+    if curr_node.has_failed_media_preprocessing:
+        user_warnings.add("⚠️ Some audio/video attachments could not be analyzed")
     if curr_node.fetch_parent_failed or (
         curr_node.parent_msg is not None and messages_len == context.max_messages
     ):

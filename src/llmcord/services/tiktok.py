@@ -191,12 +191,14 @@ async def maybe_download_tiktok_videos(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
+    force_download: bool = False,
 ) -> list[DownloadedTikTokVideo]:
     """Download TikTok videos via Snaptik for Gemini requests when URLs are present."""
     result = await maybe_download_tiktok_videos_with_failures(
         cleaned_content=cleaned_content,
         actual_model=actual_model,
         httpx_client=httpx_client,
+        force_download=force_download,
     )
     return result.videos
 
@@ -206,9 +208,10 @@ async def maybe_download_tiktok_videos_with_failures(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
+    force_download: bool = False,
 ) -> TikTokDownloadResult:
     """Download TikTok videos and return URLs that did not yield a video payload."""
-    if not is_gemini_model(actual_model):
+    if not force_download and not is_gemini_model(actual_model):
         return TikTokDownloadResult(videos=[], failed_urls=[])
 
     tiktok_urls = _extract_tiktok_urls(cleaned_content)
@@ -253,12 +256,14 @@ async def maybe_download_tiktok_video(
     cleaned_content: str,
     actual_model: str,
     httpx_client: httpx.AsyncClient,
+    force_download: bool = False,
 ) -> DownloadedTikTokVideo | None:
     """Download the first TikTok video for Gemini requests when a URL is present."""
     downloaded_videos = await maybe_download_tiktok_videos(
         cleaned_content=cleaned_content,
         actual_model=actual_model,
         httpx_client=httpx_client,
+        force_download=force_download,
     )
     if not downloaded_videos:
         return None

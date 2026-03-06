@@ -70,3 +70,30 @@ async def test_save_message_response_data_replaces_unpaired_surrogates(
     assert "\ufffd" in thought_process
 
     await db.aclose()
+
+
+@pytest.mark.asyncio
+async def test_save_media_preprocessing_data_replaces_unpaired_surrogates(
+    tmp_path: pathlib.Path,
+) -> None:
+    db = AppDB(local_db_path=str(tmp_path / "test.db"))
+    await db.init()
+
+    bad_text = "audio \ud83d here"
+
+    await db.asave_message_media_preprocessing_data(
+        message_id="124",
+        media_preprocessing_results=[bad_text],
+        media_preprocessing_failed=True,
+    )
+
+    stored_results, stored_failed = await db.aget_message_media_preprocessing_data(
+        "124",
+    )
+    assert stored_results is not None
+    assert stored_failed is True
+    assert len(stored_results) == 1
+    assert not _has_surrogates(stored_results[0])
+    assert "\ufffd" in stored_results[0]
+
+    await db.aclose()

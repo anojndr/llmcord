@@ -467,14 +467,18 @@ async def apply_googlelens(context: GoogleLensContext) -> str:  # noqa: C901, PL
     return cleaned_content
 
 
-def get_allowed_attachment_types(actual_model: str) -> tuple[str, ...]:
+def get_allowed_attachment_types(
+    actual_model: str,
+    *,
+    include_audio_video_for_non_gemini: bool = False,
+) -> tuple[str, ...]:
     """Get allowed attachment MIME types for the model."""
     allowed_types: tuple[str, ...] = (
         "text",
         "image",
         "application/pdf",
     )
-    if is_gemini_model(actual_model):
+    if is_gemini_model(actual_model) or include_audio_video_for_non_gemini:
         allowed_types += ("audio", "video")
     return allowed_types
 

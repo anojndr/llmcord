@@ -11,6 +11,7 @@ from llmcord.core.config import get_config
 from llmcord.core.config.utils import normalize_api_keys
 
 logger = logging.getLogger(__name__)
+_NO_KEY_REQUIRED = "sk-no-key-required"
 
 
 def _normalize_api_keys(raw_api_keys: object) -> list[str]:
@@ -86,7 +87,77 @@ async def resolve_provider_settings(
     base_url = provider_config.get("base_url")
     api_keys = _normalize_api_keys(provider_config.get("api_key"))
     if not api_keys:
-        api_keys = ["sk-no-key-required"]
+        api_keys = [_NO_KEY_REQUIRED]
+    model_parameters = config["models"].get(provider_slash_model, None)
+    override_model = None
+    if model_parameters:
+        override_model = (
+            model_parameters.get("model")
+            or model_parameters.get("model_name")
+            or model_parameters.get("modelName")
+        )
+
+    if (
+        isinstance(override_model, str)
+        and "/" in override_model
+        and provider != "openrouter"
+    ):
+        _, override_model = override_model.split("/", 1)
+
+    actual_model = override_model or model
+    extra_headers = provider_config.get("extra_headers")
+    extra_query = provider_config.get("extra_query")
+    extra_body = (provider_config.get("extra_body") or {}) | (model_parameters or {})
+    extra_body = extra_body or None
+
+    return ProviderSettings(
+        provider=provider,
+        model=model,
+        provider_slash_model=provider_slash_model,
+        base_url=base_url,
+        api_keys=api_keys,
+        model_parameters=model_parameters,
+        extra_headers=extra_headers,
+        extra_query=extra_query,
+        extra_body=extra_body,
+        actual_model=actual_model,
+    )
+
+
+def resolve_provider_settings_for_model(
+    provider_slash_model: str,
+    *,
+    allow_missing_api_keys: bool = True,
+) -> ProviderSettings | None:
+    """Resolve provider settings for an explicit provider/model string."""
+    config = get_config()
+    parsed_provider = parse_provider_slash_model(provider_slash_model)
+    if parsed_provider is None:
+        logger.error(
+            "Invalid model format: %s. Expected 'provider/model'.",
+            provider_slash_model,
+        )
+        return None
+
+    provider, model = parsed_provider
+    providers = config.get("providers", {})
+    provider_config = providers.get(provider)
+    if provider_config is None:
+        logger.error("Provider '%s' not found in config.", provider)
+        return None
+
+    base_url = provider_config.get("base_url")
+    api_keys = _normalize_api_keys(provider_config.get("api_key"))
+    if not api_keys:
+        if not allow_missing_api_keys:
+            logger.warning(
+                "Provider '%s' has no API keys configured for model '%s'.",
+                provider,
+                provider_slash_model,
+            )
+            return None
+        api_keys = [_NO_KEY_REQUIRED]
+
     model_parameters = config["models"].get(provider_slash_model, None)
     override_model = None
     if model_parameters:

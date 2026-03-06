@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import httpx
 import pytest
 
+from llmcord.logic.messages import MessageBuildContext, build_messages
 from llmcord.logic.search_logic import SearchResolutionContext, resolve_search_metadata
+from llmcord.services.database import AppDB
 from llmcord.services.search.decider import (
     DeciderRunConfig,
     _run_decider_once,
@@ -13,7 +16,7 @@ from llmcord.services.search.decider import (
 )
 from llmcord.services.search.utils import convert_messages_to_openai_format
 
-from ._fakes import FakeMessage, FakeUser
+from ._fakes import DummyTwitterApi, FakeAttachment, FakeMessage, FakeUser
 
 EXPECTED_WEB_SEARCH_MAX_CHARS = 4000
 
@@ -290,6 +293,149 @@ async def test_web_search_decider_runs_for_google_antigravity_non_preview_model(
     )
 
     assert decider_called is True
+
+
+@pytest.mark.asyncio
+async def test_non_gemini_search_decider_receives_cached_media_preprocessing(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: httpx.AsyncClient,
+    tmp_path: pathlib.Path,
+) -> None:
+    db = AppDB(local_db_path=str(tmp_path / "decider-media-cache.db"))
+    await db.init()
+
+    attachment = FakeAttachment(
+        url="https://cdn.discordapp.com/attachments/1/2/audio.mp3",
+        content_type="audio/mpeg",
+        filename="audio.mp3",
+    )
+    response = httpx.Response(200, content=b"fake-audio")
+    cached_output = (
+        "--- Gemini preprocessing for Audio attachment 1 ---\n"
+        "Audio transcription per timestamp:\n\n"
+        "0s to 10s: cached decider transcript"
+    )
+    captured_message_content = ""
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        attachments = kwargs["attachments"]
+        if not attachments:
+            return [], [], []
+
+        assert attachments == [attachment]
+        processed = [
+            {
+                "content_type": "audio/mpeg",
+                "content": b"fake-audio",
+                "text": None,
+            },
+        ]
+        return [attachment], [response], processed
+
+    async def _fake_preprocess_media_attachments_with_gemini(**kwargs: object):
+        assert kwargs["actual_model"] == "gpt-5.4"
+        return ([cached_output], False)
+
+    async def _fail_preprocess_media_attachments_with_gemini(
+        **_kwargs: object,
+    ) -> tuple[list[str], bool]:
+        msg = "search decider test should reuse cached media preprocessing"
+        raise AssertionError(msg)
+
+    async def _fake_decide_web_search(
+        messages: list[dict[str, object]],
+        decider_config: dict,
+    ) -> dict[str, object]:
+        nonlocal captured_message_content
+        assert decider_config["provider"] == "openai"
+        assert decider_config["model"] == "gpt-4o-mini"
+        captured_message_content = str(messages[0]["content"])
+        return {"needs_search": False}
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    def _fake_is_googlelens_query(*args: object, **kwargs: object) -> bool:
+        return False
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=230,
+        content="at ai summarize this audio",
+        author=FakeUser(1234),
+        attachments=[attachment],
+    )
+
+    def _make_context() -> MessageBuildContext:
+        return MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes={},
+            actual_model="gpt-5.4",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        )
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+        _fake_preprocess_media_attachments_with_gemini,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: db)
+    monkeypatch.setattr("llmcord.logic.search_logic.get_db", lambda: db)
+    monkeypatch.setattr(
+        "llmcord.logic.search_logic.decide_web_search",
+        _fake_decide_web_search,
+    )
+
+    try:
+        await build_messages(context=_make_context())
+
+        monkeypatch.setattr(
+            "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+            _fail_preprocess_media_attachments_with_gemini,
+        )
+
+        build_result = await build_messages(context=_make_context())
+
+        await resolve_search_metadata(
+            SearchResolutionContext(
+                new_msg=msg,  # type: ignore[arg-type]
+                discord_bot=bot,  # type: ignore[arg-type]
+                msg_nodes={},
+                messages=build_result.messages,
+                user_warnings=set(),
+                tavily_api_keys=["tvly-TEST"],
+                config={
+                    "web_search_provider": "tavily",
+                    "web_search_decider_model": "openai/gpt-4o-mini",
+                    "providers": {"openai": {"api_key": ["k"]}},
+                    "models": {},
+                },
+                web_search_available=True,
+                web_search_provider="tavily",
+                actual_model="gpt-5.4",
+            ),
+            is_googlelens_query_func=_fake_is_googlelens_query,
+        )
+    finally:
+        await db.aclose()
+
+    assert "cached decider transcript" in captured_message_content
 
 
 @pytest.mark.asyncio

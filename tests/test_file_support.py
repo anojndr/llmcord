@@ -8,6 +8,11 @@ import httpx
 import pytest
 
 from llmcord.logic.messages import MessageBuildContext, build_messages
+from llmcord.services.database import AppDB
+from llmcord.services.facebook import (
+    DownloadedFacebookVideo,
+    FacebookDownloadResult,
+)
 from llmcord.services.tiktok import DownloadedTikTokVideo, TikTokDownloadResult
 
 from ._fakes import DummyTwitterApi, FakeAttachment, FakeMessage, FakeUser
@@ -158,6 +163,307 @@ async def test_pdf_text_extracted_and_appended_for_non_gemini(
 
     user_content = str(result.messages[0]["content"])
     assert "PDF TEXT CONTENT" in user_content
+
+
+@pytest.mark.asyncio
+async def test_audio_attachment_preprocessed_with_gemini_for_non_gemini_model(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    attachment = FakeAttachment(
+        url="https://cdn.discordapp.com/attachments/1/2/audio.mp3",
+        content_type="audio/mpeg",
+        filename="audio.mp3",
+    )
+    response = httpx.Response(200, content=b"fake-audio")
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        assert kwargs["attachments"] == [attachment]
+        processed = [
+            {
+                "content_type": "audio/mpeg",
+                "content": b"fake-audio",
+                "text": None,
+            },
+        ]
+        return [attachment], [response], processed
+
+    async def _fake_preprocess_media_attachments_with_gemini(**kwargs: object):
+        assert kwargs["actual_model"] == "gpt-5.4"
+        return (
+            [
+                (
+                    "--- Gemini preprocessing for Audio attachment 1 ---\n"
+                    "Audio transcription per timestamp:\n\n"
+                    "0s to 10s: hello there"
+                ),
+            ],
+            False,
+        )
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+        _fake_preprocess_media_attachments_with_gemini,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=311,
+        content="at ai summarize this audio",
+        author=FakeUser(1234),
+        attachments=[attachment],
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-5.4",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    user_content = str(result.messages[0]["content"])
+    assert "Audio transcription per timestamp" in user_content
+    assert "0s to 10s: hello there" in user_content
+    assert "⚠️ Some audio/video attachments could not be analyzed" not in (
+        result.user_warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_video_attachment_preprocessing_failure_adds_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+) -> None:
+    attachment = FakeAttachment(
+        url="https://cdn.discordapp.com/attachments/1/2/video.mp4",
+        content_type="video/mp4",
+        filename="video.mp4",
+    )
+    response = httpx.Response(200, content=b"fake-video")
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        assert kwargs["attachments"] == [attachment]
+        processed = [
+            {
+                "content_type": "video/mp4",
+                "content": b"fake-video",
+                "text": None,
+            },
+        ]
+        return [attachment], [response], processed
+
+    async def _fake_preprocess_media_attachments_with_gemini(**kwargs: object):
+        assert kwargs["actual_model"] == "gpt-5.4"
+        return (
+            [
+                (
+                    "--- Video attachment 1 ---\n"
+                    "Gemini preprocessing failed: "
+                    "no Gemini media-preprocessing model is configured"
+                ),
+            ],
+            True,
+        )
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+        _fake_preprocess_media_attachments_with_gemini,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: _FakeDB())
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=312,
+        content="at ai",
+        author=FakeUser(1234),
+        attachments=[attachment],
+    )
+
+    result = await build_messages(
+        context=MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-5.4",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        ),
+    )
+
+    user_content = str(result.messages[0]["content"])
+    assert "Gemini preprocessing failed" in user_content
+    assert "⚠️ Some audio/video attachments could not be analyzed" in (
+        result.user_warnings
+    )
+
+
+@pytest.mark.asyncio
+async def test_audio_preprocessing_cache_reused_after_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_client: Any,
+    msg_nodes: dict[int, object],
+    tmp_path: Path,
+) -> None:
+    db = AppDB(local_db_path=str(tmp_path / "media-cache.db"))
+    await db.init()
+
+    attachment = FakeAttachment(
+        url="https://cdn.discordapp.com/attachments/1/2/audio.mp3",
+        content_type="audio/mpeg",
+        filename="audio.mp3",
+    )
+    response = httpx.Response(200, content=b"fake-audio")
+    cached_output = (
+        "--- Gemini preprocessing for Audio attachment 1 ---\n"
+        "Audio transcription per timestamp:\n\n"
+        "0s to 10s: cached audio transcript"
+    )
+    download_attachment_counts: list[int] = []
+    preprocess_call_count = 0
+
+    async def _fake_download_and_process_attachments(**kwargs: object):
+        attachments = cast("list[FakeAttachment]", kwargs["attachments"])
+        download_attachment_counts.append(len(attachments))
+        if not attachments:
+            return [], [], []
+
+        assert attachments == [attachment]
+        processed = [
+            {
+                "content_type": "audio/mpeg",
+                "content": b"fake-audio",
+                "text": None,
+            },
+        ]
+        return [attachment], [response], processed
+
+    async def _fake_preprocess_media_attachments_with_gemini(**kwargs: object):
+        nonlocal preprocess_call_count
+        preprocess_call_count += 1
+        assert kwargs["actual_model"] == "gpt-5.4"
+        return ([cached_output], False)
+
+    async def _fail_preprocess_media_attachments_with_gemini(
+        **_kwargs: object,
+    ) -> tuple[list[str], bool]:
+        msg = "cached media preprocessing should be reused after restart"
+        raise AssertionError(msg)
+
+    async def _noop_set_parent_message(**kwargs: object) -> None:
+        return None
+
+    bot = _DummyBot()
+    msg = FakeMessage(
+        id=313,
+        content="at ai summarize this audio",
+        author=FakeUser(1234),
+        attachments=[attachment],
+    )
+
+    def _make_context(*, current_msg_nodes: dict[int, object]) -> MessageBuildContext:
+        return MessageBuildContext(
+            new_msg=msg,  # type: ignore[arg-type]
+            discord_bot=bot,  # type: ignore[arg-type]
+            httpx_client=httpx_client,
+            twitter_api=DummyTwitterApi(),
+            msg_nodes=current_msg_nodes,  # type: ignore[arg-type]
+            actual_model="gpt-5.4",
+            accept_usernames=False,
+            max_text=100000,
+            max_images=0,
+            max_messages=1,
+            max_tweet_replies=50,
+            enable_youtube_transcripts=True,
+            youtube_transcript_method="youtube-transcript-api",
+        )
+
+    monkeypatch.setattr(
+        "llmcord.logic.messages.download_and_process_attachments",
+        _fake_download_and_process_attachments,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+        _fake_preprocess_media_attachments_with_gemini,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages._set_parent_message",
+        _noop_set_parent_message,
+    )
+    monkeypatch.setattr("llmcord.logic.messages.get_db", lambda: db)
+
+    try:
+        first_result = await build_messages(
+            context=_make_context(current_msg_nodes=msg_nodes),
+        )
+
+        first_user_content = str(first_result.messages[0]["content"])
+        assert "cached audio transcript" in first_user_content
+        assert preprocess_call_count == 1
+
+        cached_results, cached_failed = await db.aget_message_media_preprocessing_data(
+            "313",
+        )
+        assert cached_results == [cached_output]
+        assert cached_failed is False
+
+        monkeypatch.setattr(
+            "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+            _fail_preprocess_media_attachments_with_gemini,
+        )
+
+        second_result = await build_messages(
+            context=_make_context(current_msg_nodes={}),
+        )
+
+        second_user_content = str(second_result.messages[0]["content"])
+        assert "cached audio transcript" in second_user_content
+        assert preprocess_call_count == 1
+        assert download_attachment_counts == [1, 0]
+    finally:
+        await db.aclose()
 
 
 @pytest.mark.asyncio
@@ -319,7 +625,7 @@ async def test_tiktok_query_adds_video_file_for_gemini(
 
 
 @pytest.mark.asyncio
-async def test_tiktok_download_not_used_for_non_gemini(
+async def test_tiktok_and_facebook_download_used_for_non_gemini(
     monkeypatch: pytest.MonkeyPatch,
     httpx_client: Any,
     msg_nodes: dict[int, object],
@@ -327,9 +633,48 @@ async def test_tiktok_download_not_used_for_non_gemini(
     async def _fake_download_and_process_attachments(**kwargs: object):
         return [], [], []
 
-    async def _failing_tiktok_download(**kwargs: object):
-        message = "TikTok downloader should not run for non-Gemini"
-        raise AssertionError(message)
+    async def _fake_maybe_download_tiktok_videos(**kwargs: object):
+        assert kwargs["force_download"] is True
+        return TikTokDownloadResult(
+            videos=[
+                DownloadedTikTokVideo(
+                    content=b"tiktok-mp4-bytes",
+                    content_type="video/mp4",
+                ),
+            ],
+            failed_urls=[],
+        )
+
+    async def _fake_maybe_download_facebook_videos(**kwargs: object):
+        assert kwargs["force_download"] is True
+        return FacebookDownloadResult(
+            videos=[
+                DownloadedFacebookVideo(
+                    content=b"facebook-mp4-bytes",
+                    content_type="video/mp4",
+                ),
+            ],
+            failed_urls=[],
+        )
+
+    async def _fake_preprocess_media_attachments_with_gemini(**kwargs: object):
+        processed_attachments = kwargs["processed_attachments"]
+        assert isinstance(processed_attachments, list)
+        attachment_contents = [
+            cast("dict[str, object]", attachment)["content"]
+            for attachment in processed_attachments
+        ]
+        assert attachment_contents == [b"tiktok-mp4-bytes", b"facebook-mp4-bytes"]
+        return (
+            [
+                (
+                    "--- Gemini preprocessing for Video attachment 1 ---\n"
+                    "Video transcription per timestamp:\n\n"
+                    "0s to 10s: tiktok clip"
+                ),
+            ],
+            False,
+        )
 
     async def _noop_set_parent_message(**kwargs: object) -> None:
         return None
@@ -340,7 +685,15 @@ async def test_tiktok_download_not_used_for_non_gemini(
     )
     monkeypatch.setattr(
         "llmcord.logic.messages.maybe_download_tiktok_videos_with_failures",
-        _failing_tiktok_download,
+        _fake_maybe_download_tiktok_videos,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.maybe_download_facebook_videos_with_failures",
+        _fake_maybe_download_facebook_videos,
+    )
+    monkeypatch.setattr(
+        "llmcord.logic.messages.preprocess_media_attachments_with_gemini",
+        _fake_preprocess_media_attachments_with_gemini,
     )
     monkeypatch.setattr(
         "llmcord.logic.messages._set_parent_message",
@@ -352,7 +705,9 @@ async def test_tiktok_download_not_used_for_non_gemini(
     msg = FakeMessage(
         id=34,
         content=(
-            "summarize https://www.tiktok.com/@contraryian/video/7602846033332292894"
+            "summarize "
+            "https://www.tiktok.com/@contraryian/video/7602846033332292894 "
+            "and https://www.facebook.com/share/r/18ZA4xvsak/"
         ),
         author=FakeUser(1234),
         attachments=[],
@@ -376,4 +731,6 @@ async def test_tiktok_download_not_used_for_non_gemini(
         ),
     )
 
-    assert isinstance(result.messages[0]["content"], str)
+    user_content = str(result.messages[0]["content"])
+    assert "Video transcription per timestamp" in user_content
+    assert "0s to 10s: tiktok clip" in user_content
