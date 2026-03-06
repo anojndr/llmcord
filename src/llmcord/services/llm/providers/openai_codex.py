@@ -637,7 +637,7 @@ def _extract_reasoning_effort(
 
 def _clamp_reasoning_effort(model: str, effort: str) -> str:
     model_id = model.split("/", 1)[1] if "/" in model else model
-    if model_id.startswith(("gpt-5.2", "gpt-5.3")) and effort == "minimal":
+    if model_id.startswith(("gpt-5.2", "gpt-5.3", "gpt-5.4")) and effort == "minimal":
         return "low"
     if model_id == "gpt-5.1" and effort == "xhigh":
         return "high"

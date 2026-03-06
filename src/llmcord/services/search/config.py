@@ -399,7 +399,8 @@ Objects may appear as:
 
 # Step 9 — Preserve Language
 
-Generate queries in the **same language as the user** unless translation improves search results.
+Generate queries in the **same language as the user** unless translation
+improves search results.
 
 Example:
 

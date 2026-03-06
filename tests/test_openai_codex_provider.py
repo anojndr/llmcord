@@ -187,6 +187,21 @@ def test_build_codex_request_uses_reasoning_effort_alias() -> None:
     assert reasoning_dict.get("summary") == "auto"
 
 
+def test_build_codex_request_clamps_gpt_5_4_minimal_reasoning_to_low() -> None:
+    body = _build_codex_request(
+        model="gpt-5.4",
+        messages=[{"role": "user", "content": "hello"}],
+        model_parameters={"reasoning_effort": "minimal"},
+        disable_tools=False,
+    )
+
+    reasoning = body.get("reasoning")
+    assert isinstance(reasoning, dict)
+    reasoning_dict = cast("dict[str, object]", reasoning)
+    assert reasoning_dict.get("effort") == "low"
+    assert reasoning_dict.get("summary") == "auto"
+
+
 @pytest.mark.asyncio
 async def test_stream_openai_codex_streams_sse_deltas(
     monkeypatch: pytest.MonkeyPatch,
