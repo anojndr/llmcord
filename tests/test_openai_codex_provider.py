@@ -187,6 +187,22 @@ def test_build_codex_request_uses_reasoning_effort_alias() -> None:
     assert reasoning_dict.get("summary") == "auto"
 
 
+def test_build_codex_request_uses_reasoning_effort_alias_for_gpt_5_4() -> None:
+    body = _build_codex_request(
+        model="gpt-5.4-xhigh",
+        messages=[{"role": "user", "content": "hello"}],
+        model_parameters=None,
+        disable_tools=False,
+    )
+
+    assert body["model"] == "gpt-5.4"
+    reasoning = body.get("reasoning")
+    assert isinstance(reasoning, dict)
+    reasoning_dict = cast("dict[str, object]", reasoning)
+    assert reasoning_dict.get("effort") == "xhigh"
+    assert reasoning_dict.get("summary") == "auto"
+
+
 def test_build_codex_request_clamps_gpt_5_4_minimal_reasoning_to_low() -> None:
     body = _build_codex_request(
         model="gpt-5.4",

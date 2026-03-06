@@ -2,6 +2,11 @@
 
 from typing import Any, cast
 
+from llmcord.services.llm.providers.model_aliases import (
+    GEMINI_THINKING_LEVEL_SUFFIXES,
+    extract_model_suffix_alias,
+)
+
 DEFAULT_SAFETY_SETTINGS = [
     {
         "category": "HARM_CATEGORY_HARASSMENT",
@@ -33,16 +38,7 @@ def _get_safety_settings(model_parameters: dict | None) -> object | None:
 
 
 def _extract_thinking_level_suffix(model: str) -> tuple[str, str | None]:
-    suffixes = {
-        "-minimal": "MINIMAL",
-        "-low": "LOW",
-        "-medium": "MEDIUM",
-        "-high": "HIGH",
-    }
-    for suffix, level in suffixes.items():
-        if model.endswith(suffix):
-            return model.removesuffix(suffix), level
-    return model, None
+    return extract_model_suffix_alias(model, GEMINI_THINKING_LEVEL_SUFFIXES)
 
 
 def _resolve_thinking_level(

@@ -35,3 +35,16 @@ def test_gemini_tools_disabled_with_video_file_input() -> None:
     )
 
     assert "tools" not in kwargs
+
+
+def test_gemini_reasoning_alias_strips_suffix_for_hyphenated_model() -> None:
+    kwargs = prepare_litellm_kwargs(
+        provider="gemini",
+        model="gemini-3.1-flash-lite-preview-minimal",
+        messages=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        options=LiteLLMOptions(),
+    )
+
+    assert kwargs["model"] == "gemini/gemini-3.1-flash-lite-preview"
+    assert kwargs["reasoning_effort"] == "minimal"

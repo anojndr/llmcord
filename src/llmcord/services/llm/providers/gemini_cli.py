@@ -22,6 +22,12 @@ from typing import Any, cast
 
 import httpx
 
+from llmcord.services.llm.providers.model_aliases import (
+    GEMINI_THINKING_LEVEL_SUFFIXES,
+    extract_suffix_alias,
+    strip_model_suffix_alias,
+)
+
 GOOGLE_GEMINI_CLI_PROVIDER = "google-gemini-cli"
 GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity"
 
@@ -419,15 +425,8 @@ def _extract_thinking_level(
         if isinstance(level, str) and level:
             return level.upper()
 
-    suffix_map = {
-        "-minimal": "MINIMAL",
-        "-low": "LOW",
-        "-medium": "MEDIUM",
-        "-high": "HIGH",
-    }
-    for suffix, level in suffix_map.items():
-        if model.endswith(suffix):
-            return level
+    if suffix_level := extract_suffix_alias(model, GEMINI_THINKING_LEVEL_SUFFIXES):
+        return suffix_level
 
     if "gemini-3-flash" in model:
         return "MINIMAL"
@@ -437,11 +436,7 @@ def _extract_thinking_level(
 
 
 def _strip_thinking_level_suffix(model: str) -> str:
-    suffixes = ("-minimal", "-low", "-medium", "-high")
-    for suffix in suffixes:
-        if model.endswith(suffix):
-            return model.removesuffix(suffix)
-    return model
+    return strip_model_suffix_alias(model, GEMINI_THINKING_LEVEL_SUFFIXES)
 
 
 def _build_generation_config(

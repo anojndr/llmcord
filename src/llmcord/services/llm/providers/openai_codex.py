@@ -19,6 +19,12 @@ from typing import Any, cast
 
 import httpx
 
+from llmcord.services.llm.providers.model_aliases import (
+    OPENAI_REASONING_EFFORT_SUFFIXES,
+    extract_suffix_alias,
+    strip_model_suffix_alias,
+)
+
 OPENAI_CODEX_PROVIDER = "openai-codex"
 
 OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -211,17 +217,14 @@ def _parse_authorization_input(value: str) -> tuple[str | None, str | None]:
         parsed_url = urllib.parse.urlparse(stripped)
         if parsed_url.scheme and parsed_url.netloc:
             params = urllib.parse.parse_qs(parsed_url.query)
-            code = cast("str | None", params.get("code", [None])[0])
-            state = cast("str | None", params.get("state", [None])[0])
+            code = params.get("code", [None])[0]
+            state = params.get("state", [None])[0]
             if code:
                 return code, state
 
             fragment_params = urllib.parse.parse_qs(parsed_url.fragment)
-            fragment_code = cast("str | None", fragment_params.get("code", [None])[0])
-            fragment_state = cast(
-                "str | None",
-                fragment_params.get("state", [None])[0],
-            )
+            fragment_code = fragment_params.get("code", [None])[0]
+            fragment_state = fragment_params.get("state", [None])[0]
             if fragment_code:
                 return fragment_code, fragment_state
     except ValueError:
@@ -234,8 +237,8 @@ def _parse_authorization_input(value: str) -> tuple[str | None, str | None]:
     if "code=" in stripped:
         params = urllib.parse.parse_qs(stripped)
         return (
-            cast("str | None", params.get("code", [None])[0]),
-            cast("str | None", params.get("state", [None])[0]),
+            params.get("code", [None])[0],
+            params.get("state", [None])[0],
         )
 
     return stripped, None
@@ -588,16 +591,6 @@ def _convert_messages_for_codex(
     return converted, instructions
 
 
-_REASONING_EFFORT_SUFFIXES: tuple[tuple[str, str], ...] = (
-    ("-none", "none"),
-    ("-minimal", "minimal"),
-    ("-low", "low"),
-    ("-medium", "medium"),
-    ("-high", "high"),
-    ("-xhigh", "xhigh"),
-)
-
-
 def _normalize_reasoning_effort(effort: str) -> str | None:
     allowed = {"none", "minimal", "low", "medium", "high", "xhigh"}
     normalized = effort.strip().lower()
@@ -605,17 +598,11 @@ def _normalize_reasoning_effort(effort: str) -> str | None:
 
 
 def _extract_reasoning_effort_alias(model: str) -> str | None:
-    for suffix, effort in _REASONING_EFFORT_SUFFIXES:
-        if model.endswith(suffix):
-            return effort
-    return None
+    return extract_suffix_alias(model, OPENAI_REASONING_EFFORT_SUFFIXES)
 
 
 def _strip_reasoning_effort_suffix(model: str) -> str:
-    for suffix, _effort in _REASONING_EFFORT_SUFFIXES:
-        if model.endswith(suffix):
-            return model.removesuffix(suffix)
-    return model
+    return strip_model_suffix_alias(model, OPENAI_REASONING_EFFORT_SUFFIXES)
 
 
 def _extract_reasoning_effort(

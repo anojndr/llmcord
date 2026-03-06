@@ -216,6 +216,29 @@ def test_build_cloudcode_request_strips_thinking_suffix_from_model() -> None:
     assert thinking_config_dict["thinkingLevel"] == "HIGH"
 
 
+def test_build_cloudcode_request_handles_hyphenated_model_alias() -> None:
+    request = _build_cloudcode_request(
+        provider_id=GOOGLE_GEMINI_CLI_PROVIDER,
+        model="gemini-3.1-flash-lite-preview-minimal",
+        project_id="project-123",
+        messages=[{"role": "user", "content": "hello"}],
+        model_parameters=None,
+    )
+
+    assert request["model"] == "gemini-3.1-flash-lite-preview"
+
+    payload = request["request"]
+    assert isinstance(payload, dict)
+    payload_dict = cast("dict[str, object]", payload)
+    generation_config = payload_dict["generationConfig"]
+    assert isinstance(generation_config, dict)
+    generation_config_dict = cast("dict[str, object]", generation_config)
+    thinking_config = generation_config_dict["thinkingConfig"]
+    assert isinstance(thinking_config, dict)
+    thinking_config_dict = cast("dict[str, object]", thinking_config)
+    assert thinking_config_dict["thinkingLevel"] == "MINIMAL"
+
+
 def test_build_cloudcode_request_antigravity_adds_agent_fields() -> None:
     request = _build_cloudcode_request(
         provider_id=GOOGLE_ANTIGRAVITY_PROVIDER,
