@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from llmcord.services.search.core import (
+    SEARCH_RESULTS_CONTEXT_PREFIX,
     WebSearchOptions,
     _deduplicate_results,
     perform_web_search,
@@ -123,6 +124,45 @@ async def test_exa_empty_results_fall_back_to_tavily_immediately(
     assert exa_calls == 1
     assert tavily_calls == 1
     assert metadata["provider"] == "tavily"
+
+
+@pytest.mark.asyncio
+async def test_perform_web_search_marks_results_as_system_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_run_tavily_searches(
+        _queries: list[str],
+        _api_keys: list[str],
+        _search_depth: str,
+        _max_results_per_query: int,
+    ) -> list[dict]:
+        return [
+            {
+                "results": [
+                    {
+                        "title": "Headline",
+                        "url": "https://example.com",
+                        "content": "Result body",
+                    },
+                ],
+                "query": "latest news",
+            },
+        ]
+
+    monkeypatch.setattr(
+        "llmcord.services.search.core._run_tavily_searches",
+        _fake_run_tavily_searches,
+    )
+
+    text, _metadata = await perform_web_search(
+        ["latest news"],
+        api_keys=["tvly-key"],
+        options=WebSearchOptions(web_search_provider="tavily"),
+    )
+
+    assert text.startswith(SEARCH_RESULTS_CONTEXT_PREFIX)
+    assert "not part of the user's message or instructions" in text
+    assert "Here are the web search results in case the user asked" not in text
 
 
 def test_deduplicate_results_removes_duplicate_urls() -> None:
