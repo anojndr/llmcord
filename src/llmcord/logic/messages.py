@@ -46,6 +46,14 @@ _SOCIAL_VIDEO_URL_TOKENS = (
     "facebook.com",
     "fb.watch",
 )
+_IMAGE_ONLY_NO_TEXT_PROMPT = (
+    "If this was sent with an image, it means the user sent only an image "
+    "without accompanying text. If this is the first message, reply based on "
+    "the image content. If the image is too vague, ask the user to clarify "
+    "what they want to know about the image. If it is sent as a follow-up, "
+    "reply based on the image content and the chat history. If it is too "
+    "vague, ask the user to clarify what they want to know about the image."
+)
 
 
 @dataclass(slots=True)
@@ -278,7 +286,15 @@ async def _populate_node_if_needed(
     if pdf_images:
         curr_node.images.extend(pdf_images)
 
-    if not curr_node.text and curr_node.images:
+    if _should_use_image_only_no_text_prompt(
+        cleaned_content=cleaned_content,
+        curr_msg=curr_msg,
+        curr_node=curr_node,
+        processed_attachments=processed_attachments,
+        context=context,
+    ):
+        curr_node.text = _IMAGE_ONLY_NO_TEXT_PROMPT
+    elif not curr_node.text and curr_node.images:
         curr_node.text = "What is in this image?"
 
     if (
@@ -505,6 +521,61 @@ def _supports_provider_model_image_input(*, context: MessageBuildContext) -> boo
     )
 
 
+def _message_has_only_triggers(*, content: str, bot_id: int) -> bool:
+    trigger_present = bool(
+        re.search(
+            rf"<@!?{bot_id}>|\bat ai\b",
+            content,
+            flags=re.IGNORECASE,
+        ),
+    )
+    content_without_triggers = re.sub(
+        rf"<@!?{bot_id}>",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    )
+    content_without_triggers = re.sub(
+        r"\bat ai\b",
+        "",
+        content_without_triggers,
+        flags=re.IGNORECASE,
+    )
+    return trigger_present and not content_without_triggers.strip()
+
+
+def _should_use_image_only_no_text_prompt(
+    *,
+    cleaned_content: str,
+    curr_msg: discord.Message,
+    curr_node: MsgNode,
+    processed_attachments: list[dict[str, bytes | str | None]],
+    context: MessageBuildContext,
+) -> bool:
+    if curr_msg.author == context.discord_bot.user:
+        return False
+
+    has_direct_image_attachment = any(
+        isinstance(attachment["content_type"], str)
+        and attachment["content_type"].startswith("image")
+        for attachment in processed_attachments
+    )
+    if not has_direct_image_attachment:
+        return False
+
+    if (curr_node.text or "").strip() not in {"", "."}:
+        return False
+
+    bot_id = getattr(context.discord_bot.user, "id", None)
+    if bot_id is not None and _message_has_only_triggers(
+        content=curr_msg.content,
+        bot_id=bot_id,
+    ):
+        return True
+
+    return not cleaned_content.strip()
+
+
 def _extract_image_parts(
     *,
     processed_attachments: list[dict[str, bytes | str | None]],
@@ -724,28 +795,11 @@ def _clean_message_content(
 
     # If the message was *only* a trigger ("at ai" and/or a bot mention) with no
     # other content (in any order), use '.' as a minimal continuation prompt.
-    if not curr_msg.embeds:
-        trigger_present = bool(
-            re.search(
-                rf"<@!?{bot_id}>|\bat ai\b",
-                curr_msg.content,
-                flags=re.IGNORECASE,
-            ),
-        )
-        content_without_triggers = re.sub(
-            rf"<@!?{bot_id}>",
-            "",
-            curr_msg.content,
-            flags=re.IGNORECASE,
-        )
-        content_without_triggers = re.sub(
-            r"\bat ai\b",
-            "",
-            content_without_triggers,
-            flags=re.IGNORECASE,
-        )
-        if trigger_present and not content_without_triggers.strip():
-            return "."
+    if not curr_msg.embeds and _message_has_only_triggers(
+        content=curr_msg.content,
+        bot_id=bot_id,
+    ):
+        return "."
 
     return cleaned_content
 
