@@ -66,13 +66,13 @@ class MessageBuildContext:
     twitter_api: TwitterApiProtocol
     msg_nodes: dict[int, MsgNode]
     actual_model: str
-    accept_usernames: bool
     max_text: int
     max_images: int
     max_messages: int
     max_tweet_replies: int
     enable_youtube_transcripts: bool
     youtube_transcript_method: str
+    accept_usernames: bool = False
     provider_slash_model: str | None = None
     status_callback: Callable[[str], Awaitable[None]] | None = None
 
@@ -120,12 +120,15 @@ async def build_messages(
                 )
 
             if content:
+                if curr_node.role == "user" and curr_node.user_id is not None:
+                    content = _prefix_user_identity(
+                        content=cast("str | list[dict[str, object]]", content),
+                        user_id=curr_node.user_id,
+                    )
                 message: dict[str, object] = {
                     "content": content,
                     "role": curr_node.role,
                 }
-                if context.accept_usernames and curr_node.user_id is not None:
-                    message["name"] = str(curr_node.user_id)
                 messages.append(message)
 
             _update_user_warnings(
@@ -604,6 +607,26 @@ def _extract_image_parts(
         )
 
     return image_parts, omitted_image_count
+
+
+def _prefix_user_identity(
+    *,
+    content: str | list[dict[str, object]],
+    user_id: int,
+) -> str | list[dict[str, object]]:
+    prefix = f"<@{user_id}>:"
+
+    if isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = str(part.get("text", ""))
+                part["text"] = f"{prefix} {text}" if text else prefix
+                return content
+
+        content.insert(0, {"type": "text", "text": prefix})
+        return content
+
+    return f"{prefix} {content}" if content else prefix
 
 
 def _build_content_payload(

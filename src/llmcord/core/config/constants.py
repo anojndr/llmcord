@@ -20,8 +20,6 @@ VISION_MODEL_TAGS = (
     "vl",
 )
 
-PROVIDERS_SUPPORTING_USERNAMES = ("openai", "openai-codex", "x-ai")
-
 # Discord embed colors
 EMBED_COLOR_COMPLETE = discord.Color.dark_green()
 EMBED_COLOR_INCOMPLETE = discord.Color.orange()

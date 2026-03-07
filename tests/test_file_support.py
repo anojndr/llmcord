@@ -613,7 +613,9 @@ async def test_tiktok_query_adds_video_file_for_gemini(
 
     text_part = next((p for p in parts if p.get("type") == "text"), None)
     assert text_part is not None
-    assert "summarize https://www.tiktok.com/" in str(text_part.get("text"))
+    assert str(text_part.get("text")).startswith(
+        "<@1234>: summarize https://www.tiktok.com/",
+    )
 
     file_part = next((p for p in parts if p.get("type") == "file"), None)
     assert file_part is not None

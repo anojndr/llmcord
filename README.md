@@ -218,8 +218,8 @@ uv run pytest
 
 - For improved PDF layout analysis, install
   [pymupdf-layout](https://pypi.org/project/pymupdf-layout/).
-- User identity forwarding via the `name` field is currently enabled for
-  `openai`, `openai-codex`, and `x-ai`.
+- User messages are prefixed with their Discord IDs as `<@ID>:` for every
+  model.
 - PRs are welcome.
 
 ## Star History

@@ -12,7 +12,6 @@ import httpx
 
 from llmcord.core.config import (
     EMBED_COLOR_INCOMPLETE,
-    PROVIDERS_SUPPORTING_USERNAMES,
     VISION_MODEL_TAGS,
     ensure_list,
     get_config,
@@ -48,6 +47,10 @@ from llmcord.services.search import get_current_datetime_strings
 logger = logging.getLogger(__name__)
 
 STATUS_CALLBACK_THROTTLE_SECONDS = 2.0
+_USER_IDENTITY_PROMPT = (
+    "User messages are prefixed with their Discord IDs as '<@ID>:'. "
+    "Use '<@ID>' when referring to users."
+)
 
 
 @dataclass(slots=True)
@@ -122,7 +125,6 @@ def _apply_system_prompt(
     *,
     messages: list[dict[str, object]],
     system_prompt: str | None,
-    accept_usernames: bool,
     apply_system_prompt: bool,
 ) -> None:
     if not system_prompt:
@@ -135,10 +137,8 @@ def _apply_system_prompt(
     formatted_prompt = (
         system_prompt.replace("{date}", date_str).replace("{time}", time_str).strip()
     )
-    if accept_usernames:
-        formatted_prompt += (
-            "\n\nUser's names are their Discord IDs and should be typed as '<@ID>'."
-        )
+    if _USER_IDENTITY_PROMPT not in formatted_prompt:
+        formatted_prompt += f"\n\n{_USER_IDENTITY_PROMPT}"
     messages.append({"role": "system", "content": formatted_prompt})
 
 
@@ -294,10 +294,6 @@ async def process_message(  # noqa: C901, PLR0915
             x in provider_settings.provider_slash_model.lower()
             for x in VISION_MODEL_TAGS
         )
-        accept_usernames = any(
-            provider_settings.provider_slash_model.lower().startswith(x)
-            for x in PROVIDERS_SUPPORTING_USERNAMES
-        )
 
         (
             max_text,
@@ -322,7 +318,6 @@ async def process_message(  # noqa: C901, PLR0915
                 twitter_api=twitter_api,
                 msg_nodes=msg_nodes,
                 actual_model=provider_settings.actual_model,
-                accept_usernames=accept_usernames,
                 max_text=max_text,
                 max_images=max_images,
                 max_messages=max_messages,
@@ -365,7 +360,6 @@ async def process_message(  # noqa: C901, PLR0915
         _apply_system_prompt(
             messages=messages,
             system_prompt=system_prompt,
-            accept_usernames=accept_usernames,
             apply_system_prompt=apply_system_prompt,
         )
 

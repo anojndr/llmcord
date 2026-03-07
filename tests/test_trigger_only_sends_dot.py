@@ -77,7 +77,6 @@ async def test_trigger_only_becomes_dot(
             twitter_api=DummyTwitterApi(),
             msg_nodes=msg_nodes,  # type: ignore[arg-type]
             actual_model="gpt-4o",
-            accept_usernames=False,
             max_text=100000,
             max_images=0,
             max_messages=1,
@@ -88,7 +87,7 @@ async def test_trigger_only_becomes_dot(
     )
 
     assert result.messages, "Expected at least one built message"
-    assert str(result.messages[0]["content"]) == "."
+    assert str(result.messages[0]["content"]) == "<@1234>: ."
 
 
 @pytest.mark.asyncio
@@ -146,7 +145,6 @@ async def test_trigger_only_with_attachment_becomes_dot(
             twitter_api=DummyTwitterApi(),
             msg_nodes=msg_nodes,  # type: ignore[arg-type]
             actual_model="gpt-4o",
-            accept_usernames=False,
             max_text=100000,
             max_images=0,
             max_messages=1,
@@ -157,7 +155,7 @@ async def test_trigger_only_with_attachment_becomes_dot(
     )
 
     assert result.messages, "Expected at least one built message"
-    assert str(result.messages[0]["content"]) == "."
+    assert str(result.messages[0]["content"]) == "<@1234>: ."
 
 
 @pytest.mark.asyncio
@@ -222,7 +220,6 @@ async def test_trigger_only_with_image_uses_image_only_prompt_without_vision(
             twitter_api=DummyTwitterApi(),
             msg_nodes=msg_nodes,  # type: ignore[arg-type]
             actual_model="gpt-4o",
-            accept_usernames=False,
             max_text=100000,
             max_images=0,
             max_messages=1,
@@ -233,7 +230,7 @@ async def test_trigger_only_with_image_uses_image_only_prompt_without_vision(
     )
 
     assert result.messages, "Expected at least one built message"
-    assert result.messages[0]["content"] == _IMAGE_ONLY_NO_TEXT_PROMPT
+    assert result.messages[0]["content"] == f"<@1234>: {_IMAGE_ONLY_NO_TEXT_PROMPT}"
 
 
 @pytest.mark.asyncio
@@ -287,7 +284,6 @@ async def test_trigger_only_with_image_uses_image_only_prompt_with_vision(
             twitter_api=DummyTwitterApi(),
             msg_nodes=msg_nodes,  # type: ignore[arg-type]
             actual_model="gpt-4o",
-            accept_usernames=False,
             max_text=100000,
             max_images=1,
             max_messages=1,
@@ -301,7 +297,7 @@ async def test_trigger_only_with_image_uses_image_only_prompt_with_vision(
     content_payload = cast("list[dict[str, object]]", result.messages[0]["content"])
     assert content_payload[0] == {
         "type": "text",
-        "text": _IMAGE_ONLY_NO_TEXT_PROMPT,
+        "text": f"<@1234>: {_IMAGE_ONLY_NO_TEXT_PROMPT}",
     }
     assert content_payload[1]["type"] == "image_url"
     image_url = cast("dict[str, object]", content_payload[1]["image_url"])["url"]
