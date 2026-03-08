@@ -1,7 +1,6 @@
 """Tavily search provider integration."""
 
 import asyncio
-import importlib
 import json
 import logging
 import time
@@ -305,9 +304,7 @@ def _get_tavily_client() -> httpx.AsyncClient:
 
 
 def _get_client_from_package() -> httpx.AsyncClient:
-    search_module = importlib.import_module("llmcord.services.search")
-    get_client = search_module.get_tavily_client
-    return cast("httpx.AsyncClient", get_client())
+    return _get_tavily_client()
 
 
 async def tavily_search(

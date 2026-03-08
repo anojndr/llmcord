@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import importlib
 import json
 import logging
 import time
@@ -82,8 +81,12 @@ def _get_decider_runner() -> Callable[
     [list[Any], DeciderRunConfig],
     Awaitable[tuple[dict[str, Any] | None, bool]],
 ]:
-    search_module = importlib.import_module("llmcord.services.search")
-    return search_module.run_decider_once
+    return _run_decider_once
+
+
+def preload_runtime_dependencies() -> None:
+    """Warm the search decider stack so startup imports are explicit."""
+    _get_decider_runner()
 
 
 async def _get_decider_response_text(

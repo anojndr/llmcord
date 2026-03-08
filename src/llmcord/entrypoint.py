@@ -2,13 +2,16 @@
 
 import asyncio
 import contextlib
-import importlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from llmcord import processing as processing_module
+from llmcord.discord import commands as discord_commands
+from llmcord.discord import events as discord_events
 from llmcord.globals import config, discord_bot, httpx_client, reddit_client
 from llmcord.server import start_server
 from llmcord.services.database import init_db
+from llmcord.services.search import decider as search_decider
 
 if TYPE_CHECKING:
     from aiohttp.web import AppRunner
@@ -23,6 +26,13 @@ class _EntrypointState:
 
 
 _STATE = _EntrypointState()
+
+
+def preload_runtime_dependencies() -> None:
+    """Import runtime modules eagerly so the first request does not lazy-load."""
+    _ = (discord_commands, discord_events)
+    processing_module.preload_runtime_dependencies()
+    search_decider.preload_runtime_dependencies()
 
 
 async def shutdown() -> None:
@@ -58,9 +68,7 @@ async def shutdown() -> None:
 
 async def main() -> None:
     """Initialize dependencies and start background services."""
-    # Register Discord events and slash commands
-    importlib.import_module("llmcord.discord.commands")
-    importlib.import_module("llmcord.discord.events")
+    preload_runtime_dependencies()
 
     # Initialize SQLite database
     _STATE.db_instance = await init_db()

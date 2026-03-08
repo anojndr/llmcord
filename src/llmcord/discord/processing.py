@@ -1,8 +1,9 @@
 """Discord message processing helpers."""
 
 import asyncio
-import importlib
 import logging
+from collections.abc import Awaitable, Callable
+from functools import cache
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -17,7 +18,7 @@ from llmcord.discord.error_handling import (
 )
 from llmcord.discord.ui.embed_limits import call_with_embed_limits
 from llmcord.discord.ui.utils import build_error_embed
-from llmcord.logic.pipeline import ProcessContext
+from llmcord.logic.pipeline import ProcessContext, process_message
 from llmcord.services.database import get_db
 from llmcord.utils.common import get_channel_locked_model, get_default_model
 
@@ -25,6 +26,17 @@ if TYPE_CHECKING:
     from llmcord.services.extractors import TwitterApiProtocol
 
 logger = logging.getLogger(__name__)
+
+
+@cache
+def _get_process_message() -> Callable[..., Awaitable[None]]:
+    """Return the pre-imported message processor used for inbound messages."""
+    return process_message
+
+
+def preload_runtime_dependencies() -> None:
+    """Warm the processing stack so inbound messages do not trigger imports."""
+    _get_process_message()
 
 
 async def _process_user_message(new_msg: discord.Message) -> None:
@@ -86,8 +98,7 @@ async def _process_user_message(new_msg: discord.Message) -> None:
             curr_model_lock=app_globals.curr_model_lock,
             curr_model_ref=curr_model_ref,
         )
-        processing_module = importlib.import_module("llmcord.processing")
-        await processing_module.process_message(
+        await _get_process_message()(
             new_msg=new_msg,
             context=context,
         )

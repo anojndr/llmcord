@@ -2,7 +2,6 @@
 
 import asyncio
 import html
-import importlib
 import io
 import logging
 import re
@@ -41,12 +40,12 @@ logger = logging.getLogger(__name__)
 _REVERSE_IMAGE_URL_EXTRACTION_TIMEOUT_SECONDS = 5.0
 _REVERSE_IMAGE_URL_EXTRACTION_RETRIES = 0
 
-fitz_module: Any
 try:
-    fitz_module = importlib.import_module("fitz")
+    import fitz as _fitz
 except ImportError:  # pragma: no cover - optional dependency
-    fitz_module = None
-fitz: Any = fitz_module
+    fitz: Any | None = None
+else:
+    fitz = _fitz
 
 
 def _decode_brotli_if_needed(
