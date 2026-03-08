@@ -42,6 +42,13 @@ async def health_check(_request: web.Request) -> web.Response:
     return web.Response(text="I'm alive")
 
 
+def _describe_bind_host(host: str | None) -> str:
+    """Return a human-readable host description for server startup logs."""
+    if not host:
+        return "all interfaces"
+    return host
+
+
 async def start_server() -> web.AppRunner:
     """Start a small HTTP health-check server.
 
@@ -56,4 +63,9 @@ async def start_server() -> web.AppRunner:
     host = os.environ.get("HOST", config.get("host"))
     site = web.TCPSite(runner, host, port)
     await site.start()
+    logger.info(
+        "Health-check server listening on port %s (host=%s, path=/)",
+        port,
+        _describe_bind_host(host),
+    )
     return runner

@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from llmcord.services.database.core import DatabaseCore
 from llmcord.services.database.messages import MessageDataMixin
 from llmcord.services.database.users import UserPreferencesMixin
+
+logger = logging.getLogger(__name__)
+
+
+def _resolved_db_path(local_db_path: str) -> str:
+    """Return the database path as an absolute string for startup logs."""
+    return str(Path(local_db_path).expanduser().resolve())
 
 
 class AppDB(
@@ -54,6 +64,10 @@ async def init_db(
     )
     await instance.init()
     _db_state["instance"] = instance
+    logger.info(
+        "SQLite database ready at %s (connection opened, schema initialized)",
+        _resolved_db_path(local_db_path),
+    )
     return instance
 
 

@@ -8,6 +8,8 @@ import asyncpraw
 import discord
 import httpx
 from discord.ext import commands
+from discord.voice_client import VoiceClient
+from discord.voice_client import has_nacl as discord_voice_supported
 from twscrape import API
 
 from llmcord.core.config import (
@@ -22,6 +24,21 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+class _SuppressDiscordStaticTokenLogFilter(logging.Filter):
+    """Drop low-signal discord.py startup logs that llmcord replaces."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not (
+            record.name == "discord.client"
+            and record.getMessage() == "logging in using static token"
+        )
+
+
+logging.getLogger("discord.client").addFilter(
+    _SuppressDiscordStaticTokenLogFilter(),
+)
 
 # Global state
 config = get_config()
@@ -38,6 +55,9 @@ status_message = (config.get("status_message") or "github.com/jakobdylanc/llmcor
 ]
 activity = discord.CustomActivity(name=status_message)
 command_prefix = config.get("command_prefix") or "!"
+if not discord_voice_supported:
+    VoiceClient.warn_nacl = False
+
 discord_bot = commands.Bot(
     intents=intents,
     activity=activity,

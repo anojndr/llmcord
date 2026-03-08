@@ -2,10 +2,13 @@
 
 import asyncio
 import html
+import importlib
 import io
 import logging
 import re
 from collections.abc import AsyncGenerator, AsyncIterator
+from functools import cache
+from types import ModuleType
 from typing import Any, Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -15,7 +18,6 @@ import asyncprawcore
 import brotli
 import discord
 import httpx
-import pymupdf4llm
 import trafilatura
 from asyncpraw import exceptions as asyncpraw_exceptions
 from asyncpraw import models as asyncpraw_models
@@ -46,6 +48,12 @@ except ImportError:  # pragma: no cover - optional dependency
     fitz: Any | None = None
 else:
     fitz = _fitz
+
+
+@cache
+def _get_pymupdf4llm_module() -> ModuleType:
+    """Import pymupdf4llm lazily so PDF guidance only appears when needed."""
+    return importlib.import_module("pymupdf4llm")
 
 
 def _decode_brotli_if_needed(
@@ -103,7 +111,7 @@ async def extract_pdf_text(pdf_content: bytes) -> str | None:
             return None
         try:
             _ensure_pymupdf_layout_activated()
-            md_text = pymupdf4llm.to_markdown(doc)
+            md_text = _get_pymupdf4llm_module().to_markdown(doc)
         except (RuntimeError, ValueError) as exc:
             logger.warning("Failed to extract PDF text: %s", exc)
             return None

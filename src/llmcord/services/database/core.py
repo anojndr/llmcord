@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from pathlib import Path
 from typing import TYPE_CHECKING, ParamSpec, Protocol, TypeVar, cast
 
 import aiosqlite
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Coroutine
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +57,10 @@ class DatabaseCore:
         self._init_locks: dict[int, asyncio.Lock] = {}
         self._initialized_loops: set[int] = set()
 
+    def _resolved_db_path(self) -> str:
+        """Return the database path as an absolute string for logging."""
+        return str(Path(self.local_db_path).expanduser().resolve())
+
     async def _get_connection(self) -> aiosqlite.Connection:
         """Get or create the aiosqlite connection for the current event loop."""
         loop = asyncio.get_running_loop()
@@ -77,7 +81,11 @@ class DatabaseCore:
             conn = await aiosqlite.connect(self.local_db_path)
             await conn.execute("PRAGMA foreign_keys = ON")
             self._connections[loop_id] = conn
-            logger.info("Using local SQLite database at %s", self.local_db_path)
+            logger.debug(
+                "Opened SQLite connection at %s for event loop %s",
+                self._resolved_db_path(),
+                loop_id,
+            )
             return conn
 
     async def _ensure_initialized(self) -> None:
